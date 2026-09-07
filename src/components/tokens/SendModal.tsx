@@ -1,10 +1,14 @@
 import { PublicKey } from '@solana/web3.js';
-import { AnimatePresence, motion } from 'framer-motion';
 import React, { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { hideSend } from '../../store/slices/uiSlice';
 import { fetchBalances, sendTransaction } from '../../store/slices/walletSlice';
 import { useAppDispatch, useAppSelector } from '../../store/store';
+import { PrimaryButton, SecondaryButton } from '../ui/Button';
+import { Card, CardContent } from '../ui/Card';
+import { Select, TextField } from '../ui/Input';
+import { Modal, ModalContent, ModalFooter, ModalHeader } from '../ui/Modal';
+import { AmountInput } from './AmountInput';
 
 interface SendModalProps {
   preselectedToken?: {
@@ -18,10 +22,12 @@ interface SendModalProps {
 export const SendModal: React.FC<SendModalProps> = ({ preselectedToken }) => {
   const dispatch = useAppDispatch();
   const { showSendModal } = useAppSelector(state => state.ui);
-  const { solBalance, tokens, isLoading } = useAppSelector(state => state.wallet);
+  const { solBalance, tokens } = useAppSelector(state => state.wallet);
   
+  const [step, setStep] = useState<'select' | 'amount' | 'review'>('amount');
   const [recipient, setRecipient] = useState('');
   const [amount, setAmount] = useState('');
+  const [usdMode, setUsdMode] = useState(false);
   const [selectedToken, setSelectedToken] = useState(preselectedToken || {
     symbol: 'SOL',
     balance: solBalance,
@@ -30,6 +36,7 @@ export const SendModal: React.FC<SendModalProps> = ({ preselectedToken }) => {
   const [isValidAddress, setIsValidAddress] = useState(false);
   const [addressError, setAddressError] = useState('');
   const [sending, setSending] = useState(false);
+  const [acknowledgement, setAcknowledgement] = useState(false);
 
   useEffect(() => {
     // Validate recipient address
@@ -88,6 +95,8 @@ export const SendModal: React.FC<SendModalProps> = ({ preselectedToken }) => {
     dispatch(hideSend());
     setRecipient('');
     setAmount('');
+    setStep('amount');
+    setAcknowledgement(false);
   };
 
   const handleMaxAmount = () => {
@@ -98,40 +107,26 @@ export const SendModal: React.FC<SendModalProps> = ({ preselectedToken }) => {
     setAmount(max.toString());
   };
 
-  if (!showSendModal) return null;
+  const handleNext = () => {
+    if (step === 'amount' && isValidAddress && amount && parseFloat(amount) > 0 && acknowledgement) {
+      setStep('review');
+    }
+  };
+
+  const formatAddress = (address: string) => {
+    return `${address.slice(0, 4)}...${address.slice(-4)}`;
+  };
 
   return (
-    <AnimatePresence>
-      <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.95 }}
-          className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden"
-        >
-          {/* Header */}
-          <div className="bg-gradient-to-r from-indigo-600 to-blue-600 px-6 py-4 text-white">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-semibold">Send {selectedToken.symbol}</h2>
-              <button
-                onClick={handleClose}
-                className="p-1 hover:bg-white/20 rounded-lg transition-colors"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          {/* Content */}
-          <div className="p-6 space-y-4">
+    <Modal isOpen={showSendModal} onClose={handleClose}>
+      {step === 'amount' && (
+        <>
+          <ModalHeader onClose={handleClose}>Send {selectedToken.symbol}</ModalHeader>
+          <ModalContent className="space-y-4">
             {/* Token Selection */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Token
-              </label>
-              <select
+              <label className="block text-sm text-fg-2 mb-2">Token</label>
+              <Select
                 value={selectedToken.mint || 'SOL'}
                 onChange={(e) => {
                   if (e.target.value === 'SOL') {
@@ -152,7 +147,6 @@ export const SendModal: React.FC<SendModalProps> = ({ preselectedToken }) => {
                     }
                   }
                 }}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
               >
                 <option value="SOL">SOL - {solBalance.toFixed(4)}</option>
                 {tokens.map(token => (
@@ -160,99 +154,105 @@ export const SendModal: React.FC<SendModalProps> = ({ preselectedToken }) => {
                     {token.symbol} - {(parseFloat(token.amount) / Math.pow(10, token.decimals)).toFixed(4)}
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
 
-            {/* Recipient */}
+            {/* Recipient Address */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Recipient Address
-              </label>
-              <input
-                type="text"
+              <label className="block text-sm text-fg-2 mb-2">Recipient address</label>
+              <TextField
                 value={recipient}
                 onChange={(e) => setRecipient(e.target.value)}
                 placeholder="Enter Solana address"
-                className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 ${
-                  addressError 
-                    ? 'border-red-300 focus:ring-red-500' 
-                    : 'border-gray-300 focus:ring-indigo-500'
-                }`}
+                className={addressError && recipient ? 'border-ui-danger' : ''}
               />
-              {addressError && (
-                <p className="mt-1 text-sm text-red-600">{addressError}</p>
+              {addressError && recipient && (
+                <p className="mt-1 text-sm text-ui-danger">{addressError}</p>
               )}
             </div>
 
-            {/* Amount */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Amount
+            {/* Amount Input */}
+            <AmountInput
+              value={amount}
+              onChange={setAmount}
+              balance={`${selectedToken.balance.toFixed(6)} ${selectedToken.symbol}`}
+              symbol={selectedToken.symbol}
+              onMaxClick={handleMaxAmount}
+              usdMode={usdMode}
+              onModeToggle={() => setUsdMode(!usdMode)}
+            />
+
+            {/* Acknowledgement */}
+            <div className="grid grid-cols-[1rem_1fr] gap-2 text-xs text-fg-2">
+              <input 
+                id="ack" 
+                type="checkbox" 
+                checked={acknowledgement}
+                onChange={(e) => setAcknowledgement(e.target.checked)}
+                className="mt-0.5 h-3.5 w-3.5 rounded border-ui-border bg-bg-2" 
+              />
+              <label htmlFor="ack">
+                I understand that incorrect addresses can result in loss of funds.
               </label>
-              <div className="relative">
-                <input
-                  type="number"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  placeholder="0.00"
-                  step="any"
-                  min="0"
-                  max={selectedToken.balance}
-                  className="w-full px-3 py-2 pr-16 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                />
-                <button
-                  onClick={handleMaxAmount}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 px-3 py-1 text-sm text-indigo-600 hover:text-indigo-700 font-medium"
-                >
-                  MAX
-                </button>
-              </div>
-              <p className="mt-1 text-sm text-gray-500">
-                Available: {selectedToken.balance.toFixed(6)} {selectedToken.symbol}
-              </p>
             </div>
-
-            {/* Transaction Fee Notice */}
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
-              <p className="text-sm text-amber-800">
-                Network fee: ~0.000005 SOL ($0.001)
-              </p>
+          </ModalContent>
+          <ModalFooter>
+            <div className="flex gap-3">
+              <SecondaryButton onClick={handleClose} className="flex-1">
+                Cancel
+              </SecondaryButton>
+              <PrimaryButton 
+                onClick={handleNext}
+                disabled={!isValidAddress || !amount || parseFloat(amount) <= 0 || !acknowledgement}
+                className="flex-1"
+              >
+                Continue
+              </PrimaryButton>
             </div>
-          </div>
+          </ModalFooter>
+        </>
+      )}
 
-          {/* Actions */}
-          <div className="px-6 py-4 bg-gray-50 flex justify-end space-x-3">
-            <button
-              onClick={handleClose}
-              disabled={sending}
-              className="px-4 py-2 text-gray-700 hover:text-gray-900 font-medium"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleSend}
-              disabled={!isValidAddress || !amount || parseFloat(amount) <= 0 || sending || isLoading}
-              className={`px-6 py-2 rounded-lg font-medium transition-all ${
-                !isValidAddress || !amount || parseFloat(amount) <= 0 || sending || isLoading
-                  ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                  : 'bg-indigo-600 text-white hover:bg-indigo-700'
-              }`}
-            >
-              {sending ? (
-                <span className="flex items-center">
-                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  Sending...
-                </span>
-              ) : (
-                'Send'
-              )}
-            </button>
-          </div>
-        </motion.div>
-      </div>
-    </AnimatePresence>
+      {step === 'review' && (
+        <>
+          <ModalHeader>Review Transaction</ModalHeader>
+          <ModalContent>
+            <Card>
+              <CardContent className="space-y-3">
+                <Row k="Send" v={`${amount} ${selectedToken.symbol}`} />
+                <Row k="From" v={`Main wallet`} />
+                <Row k="To" v={formatAddress(recipient)} />
+                <Row k="Network fee" v="~0.000005 SOL" />
+                <div className="pt-2 border-t border-ui-border">
+                  <Row k="Total" v={`${amount} ${selectedToken.symbol} + fees`} bold />
+                </div>
+                <p className="text-xs text-fg-3 pt-2">
+                  Once processed, transactions cannot be canceled or reversed.
+                </p>
+              </CardContent>
+            </Card>
+          </ModalContent>
+          <ModalFooter>
+            <div className="grid grid-cols-2 gap-3">
+              <SecondaryButton onClick={() => setStep('amount')}>
+                Back
+              </SecondaryButton>
+              <PrimaryButton onClick={handleSend} disabled={sending}>
+                {sending ? 'Sending...' : 'Confirm & Send'}
+              </PrimaryButton>
+            </div>
+          </ModalFooter>
+        </>
+      )}
+    </Modal>
   );
 };
+
+function Row({ k, v, bold = false }: { k: string; v: string; bold?: boolean }) {
+  return (
+    <div className={`flex items-center justify-between text-[15px] ${bold ? 'font-medium' : ''}`}>
+      <span className="text-fg-2">{k}</span>
+      <span className="text-fg-0">{v}</span>
+    </div>
+  );
+}

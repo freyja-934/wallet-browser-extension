@@ -8,6 +8,40 @@ import { WalletCreationFlow } from '../components/wallet/WalletCreationFlow';
 import { initializeWallet } from '../store/slices/walletSlice';
 import { useAppDispatch, useAppSelector } from '../store/store';
 
+const toasterConfig = {
+  position: "top-center" as const,
+  toastOptions: {
+    duration: 4000,
+    style: {
+      background: '#111214',
+      color: '#FFFFFF',
+      border: '1px solid #23262B',
+      borderRadius: '12px',
+      padding: '12px 16px',
+      fontSize: '14px',
+      boxShadow: '0 0 0 1px rgba(255,255,255,0.04), 0 8px 24px rgba(0,0,0,0.40)',
+    },
+    success: {
+      iconTheme: {
+        primary: '#2BD576',
+        secondary: '#111214',
+      },
+      style: {
+        borderLeft: '3px solid #2BD576',
+      },
+    },
+    error: {
+      iconTheme: {
+        primary: '#FF5A5A',
+        secondary: '#111214',
+      },
+      style: {
+        borderLeft: '3px solid #FF5A5A',
+      },
+    },
+  },
+};
+
 function App() {
   const dispatch = useAppDispatch();
   const { isInitialized, isLocked, accounts } = useAppSelector(state => state.wallet);
@@ -35,7 +69,7 @@ function App() {
   if (accounts.length === 0 && isLocked) {
     return (
       <>
-        <Toaster position="top-center" />
+        <Toaster {...toasterConfig} />
         <WalletCreationFlow />
       </>
     );
@@ -45,7 +79,7 @@ function App() {
   if (isLocked) {
     return (
       <>
-        <Toaster position="top-center" />
+        <Toaster {...toasterConfig} />
         <UnlockScreen />
       </>
     );
@@ -54,7 +88,7 @@ function App() {
   // Wallet is unlocked
   return (
     <>
-      <Toaster position="top-center" />
+      <Toaster {...toasterConfig} />
       <Dashboard />
     </>
   );
