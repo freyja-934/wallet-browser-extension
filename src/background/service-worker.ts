@@ -35,12 +35,6 @@ import { getConnection, sendTransfer } from './transfers';
 
 registerAutoLock();
 
-console.log('Lumen service worker initialized');
-
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.set({ network: 'mainnet-beta' });
-});
-
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   const type = request?.type as string;
   if (!type || !isExtensionMessageType(type)) {
@@ -110,7 +104,7 @@ async function handleMessage(
       const state = await getPublicState();
       if (state.isLocked) {
         await openUnlockWindow();
-        throw new Error('Wallet is locked. Unlock Lumen and try again.');
+        throw new Error('Wallet is locked. Unlock Cinder Wallet and try again.');
       }
       return { pendingId: await enqueueApproval('connect', origin) };
     }
@@ -178,7 +172,7 @@ async function fulfillApproval(request: PendingApproval): Promise<Record<string,
   const bytes = Uint8Array.from(request.transactionBytes || []);
   const signed = await signTransactionBytes(bytes);
   if (request.kind === 'signAndSendTransaction') {
-    const connection = getConnection();
+    const connection = await getConnection();
     const signature = await connection.sendRawTransaction(signed, { skipPreflight: false });
     return { signedTransaction: [...signed], signature };
   }
@@ -199,7 +193,7 @@ async function signTransactionBytes(bytes: Uint8Array): Promise<Uint8Array> {
 }
 
 async function previewTransaction(bytes: Uint8Array): Promise<Record<string, unknown>> {
-  const connection = getConnection();
+  const connection = await getConnection();
   const tx = deserializeTransaction(bytes);
   const instructions = getInstructions(tx).map(decodeInstruction);
   const warnings = collectWarnings(instructions);

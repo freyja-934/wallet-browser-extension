@@ -58,7 +58,7 @@ window.addEventListener('message', async (event) => {
     }) as { success?: boolean; pendingId?: string; error?: string } | undefined;
 
     if (!response) {
-      throw new Error('No response from Lumen');
+      throw new Error('No response from Cinder Wallet');
     }
     if (response.pendingId) {
       reply(event.data.id, { response: await awaitApproval(response.pendingId) });

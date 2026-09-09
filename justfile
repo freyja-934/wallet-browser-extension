@@ -44,6 +44,18 @@ e2e *ARGS:
     just ext
     pnpm exec playwright test {{ ARGS }}
 
+[doc('Mainnet zip for Chrome Web Store (no Helius key, no devnet). Does not submit.')]
+store:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export VITE_NETWORK=mainnet-beta
+    # Empty override beats Vite loading .env. `unset` lets Vite put the key back.
+    export VITE_HELIUS_API_KEY=
+    pnpm build:extension
+    rm -f cinder-wallet-store.zip
+    (cd dist && zip -r ../cinder-wallet-store.zip . -x '*.DS_Store')
+    echo "Wrote cinder-wallet-store.zip — upload in the Chrome Web Store dashboard. See docs/store/listing.md"
+
 [doc('New branch from a ticket: just branch KEY-123 short-slug')]
 branch ID SLUG:
     git switch -c "freyja-934/{{ lowercase(ID) }}-{{ SLUG }}"

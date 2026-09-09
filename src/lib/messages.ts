@@ -1,4 +1,4 @@
-export const WALLET_CHANNEL = 'lumen-wallet';
+export const WALLET_CHANNEL = 'cinder-wallet';
 
 export const DAP_MESSAGE_TYPES = [
   'WALLET_CONNECT',
@@ -61,6 +61,7 @@ export interface WalletSettings {
   theme: 'light' | 'dark' | 'system';
   hideSmallBalances: boolean;
   smallBalanceThreshold: number;
+  cluster: 'mainnet-beta' | 'devnet';
 }
 
 export type ApprovalKind = 'connect' | 'signTransaction' | 'signAndSendTransaction' | 'signMessage';
@@ -80,4 +81,5 @@ export const DEFAULT_SETTINGS: WalletSettings = {
   theme: 'system',
   hideSmallBalances: false,
   smallBalanceThreshold: 1,
+  cluster: 'mainnet-beta',
 };

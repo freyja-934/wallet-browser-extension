@@ -1,13 +1,33 @@
 const optionalHeliusKey = (import.meta.env.VITE_HELIUS_API_KEY as string | undefined) || '';
+const rawNetwork = (import.meta.env.VITE_NETWORK as string | undefined) || 'mainnet-beta';
 
 export const PUBLIC_SOLANA_RPC = 'https://api.mainnet-beta.solana.com';
 export const PUBLIC_DEVNET_RPC = 'https://api.devnet.solana.com';
 
-export function getRpcUrl(): string {
+export type Cluster = 'mainnet-beta' | 'devnet';
+
+export function getCluster(): Cluster {
+  return rawNetwork === 'devnet' ? 'devnet' : 'mainnet-beta';
+}
+
+export function labelFor(cluster: Cluster): string {
+  return cluster === 'devnet' ? 'Devnet' : 'Mainnet';
+}
+
+export function getNetworkLabel(): string {
+  return labelFor(getCluster());
+}
+
+export function rpcUrlFor(cluster: Cluster): string {
   if (optionalHeliusKey) {
-    return `https://mainnet.helius-rpc.com/?api-key=${optionalHeliusKey}`;
+    const host = cluster === 'devnet' ? 'devnet' : 'mainnet';
+    return `https://${host}.helius-rpc.com/?api-key=${optionalHeliusKey}`;
   }
-  return PUBLIC_SOLANA_RPC;
+  return cluster === 'devnet' ? PUBLIC_DEVNET_RPC : PUBLIC_SOLANA_RPC;
+}
+
+export function getRpcUrl(): string {
+  return rpcUrlFor(getCluster());
 }
 
 export function getHeliusApiKey(): string {
@@ -60,5 +80,5 @@ export const SUPPORTED_CURRENCIES = [
 ];
 
 export const DEFAULT_COMMITMENT = 'confirmed';
-export const WALLET_NAME = 'Lumen';
+export const WALLET_NAME = 'Cinder Wallet';
 export const WALLET_VERSION = '0.2.0';

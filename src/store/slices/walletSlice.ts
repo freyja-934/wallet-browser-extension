@@ -80,10 +80,14 @@ export const clearWalletData = createAsyncThunk('wallet/clearData', async () => 
 
 export const sendTransaction = createAsyncThunk(
   'wallet/sendTransaction',
-  async ({ to, amountSmallest, mint }: { to: string; amountSmallest: string; mint?: string }) => {
-    const signature = await extensionClient.sendTransfer({ to, amountSmallest, mint });
-    return { signature };
-  }
+  async ({ to, amountSmallest, mint }: { to: string; amountSmallest: string; mint?: string }, { rejectWithValue }) => {
+    try {
+      const signature = await extensionClient.sendTransfer({ to, amountSmallest, mint });
+      return { signature };
+    } catch (error) {
+      return rejectWithValue(error instanceof Error ? error.message : 'Transaction failed');
+    }
+  },
 );
 
 const walletSlice = createSlice({
@@ -147,7 +151,7 @@ const walletSlice = createSlice({
       })
       .addCase(sendTransaction.rejected, (state, action) => {
         state.isLoading = false;
-        state.error = action.error.message || 'Transaction failed';
+        state.error = typeof action.payload === 'string' ? action.payload : action.error.message || 'Transaction failed';
       });
   },
 });
@@ -185,6 +189,8 @@ export type Transaction = {
   from?: string;
   to?: string;
   amount?: string;
+  symbol?: string;
+  mint?: string;
   fee: number;
   description?: string;
 };

@@ -58,7 +58,7 @@ import { WALLET_NAME, WALLET_VERSION } from '../config/constants';
       try {
         (handler as (...a: unknown[]) => void)(...args);
       } catch (error) {
-        console.error('Lumen event handler error', error);
+        console.error('Cinder Wallet event handler error', error);
       }
     });
   }
@@ -194,5 +194,5 @@ import { WALLET_NAME, WALLET_VERSION } from '../config/constants';
 
   // Wallet Standard only — do not impersonate Phantom or write window.solana.
   registerWallet(wallet);
-  window.dispatchEvent(new CustomEvent('lumen#initialized', { detail: { name: WALLET_NAME } }));
+  window.dispatchEvent(new CustomEvent('cinder#initialized', { detail: { name: WALLET_NAME } }));
 })();

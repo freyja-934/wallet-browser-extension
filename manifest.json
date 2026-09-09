@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "Lumen",
+  "name": "Cinder Wallet",
   "version": "0.2.0",
-  "description": "A Solana wallet browser extension with Wallet Standard and transaction preview",
+  "description": "Cinder Wallet — a Solana wallet with Wallet Standard and transaction preview",
   "action": {
     "default_popup": "index.html",
-    "default_title": "Lumen",
+    "default_title": "Cinder Wallet",
     "default_icon": {
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png",
@@ -25,9 +25,11 @@
       "all_frames": false
     }
   ],
+  "homepage_url": "https://github.com/freyja-934/wallet-browser-extension",
   "permissions": [
     "storage",
-    "alarms"
+    "alarms",
+    "clipboardWrite"
   ],
   "host_permissions": [
     "https://api.mainnet-beta.solana.com/*",

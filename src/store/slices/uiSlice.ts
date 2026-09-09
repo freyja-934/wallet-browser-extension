@@ -1,25 +1,26 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
+import { getCluster, type Cluster } from '../../config/constants';
+
+export type SendAsset = {
+  mint?: string;
+  symbol: string;
+  balance: number;
+  decimals: number;
+};
 
 interface UiState {
-  // Modals
   showSeedPhraseModal: boolean;
   showSendModal: boolean;
   showReceiveModal: boolean;
   showSettingsModal: boolean;
-  showTransactionDetails: string | null; // transaction signature
-  
-  // Views
-  activeView: 'tokens' | 'nfts' | 'activity' | 'settings';
+  showTransactionDetails: string | null;
+  sendAsset: SendAsset | null;
+  activeView: 'tokens' | 'nfts' | 'activity';
   nftViewMode: 'grid' | 'list';
-  
-  // Filters
   hideSmallBalances: boolean;
+  cluster: Cluster;
   searchQuery: string;
-  
-  // Theme
   theme: 'light' | 'dark' | 'system';
-  
-  // Loading states
   isRefreshing: boolean;
   loadingMessage: string | null;
 }
@@ -30,9 +31,11 @@ const initialState: UiState = {
   showReceiveModal: false,
   showSettingsModal: false,
   showTransactionDetails: null,
+  sendAsset: null,
   activeView: 'tokens',
   nftViewMode: 'grid',
   hideSmallBalances: false,
+  cluster: getCluster(),
   searchQuery: '',
   theme: 'system',
   isRefreshing: false,
@@ -43,70 +46,63 @@ const uiSlice = createSlice({
   name: 'ui',
   initialState,
   reducers: {
-    // Modal actions
     showSeedPhrase: (state) => {
       state.showSeedPhraseModal = true;
     },
     hideSeedPhrase: (state) => {
       state.showSeedPhraseModal = false;
     },
-    
-    showSend: (state) => {
+    showSend: (state, action: PayloadAction<SendAsset | undefined>) => {
       state.showSendModal = true;
+      state.sendAsset = action.payload ?? null;
     },
     hideSend: (state) => {
       state.showSendModal = false;
+      state.sendAsset = null;
     },
-    
     showReceive: (state) => {
       state.showReceiveModal = true;
     },
     hideReceive: (state) => {
       state.showReceiveModal = false;
     },
-    
     showSettings: (state) => {
       state.showSettingsModal = true;
     },
     hideSettings: (state) => {
       state.showSettingsModal = false;
     },
-    
     showTransaction: (state, action: PayloadAction<string>) => {
       state.showTransactionDetails = action.payload;
     },
     hideTransaction: (state) => {
       state.showTransactionDetails = null;
     },
-    
-    // View actions
     setActiveView: (state, action: PayloadAction<UiState['activeView']>) => {
       state.activeView = action.payload;
+      state.showSettingsModal = false;
     },
-    
     setNftViewMode: (state, action: PayloadAction<UiState['nftViewMode']>) => {
       state.nftViewMode = action.payload;
     },
-    
-    // Filter actions
     toggleHideSmallBalances: (state) => {
       state.hideSmallBalances = !state.hideSmallBalances;
     },
-    
+    setHideSmallBalances: (state, action: PayloadAction<boolean>) => {
+      state.hideSmallBalances = action.payload;
+    },
+    setCluster: (state, action: PayloadAction<Cluster>) => {
+      state.cluster = action.payload;
+    },
     setSearchQuery: (state, action: PayloadAction<string>) => {
       state.searchQuery = action.payload;
     },
-    
-    // Theme
     setTheme: (state, action: PayloadAction<UiState['theme']>) => {
       state.theme = action.payload;
     },
-    
-    // Loading
     setRefreshing: (state, action: PayloadAction<boolean>) => {
       state.isRefreshing = action.payload;
     },
-    
     setLoadingMessage: (state, action: PayloadAction<string | null>) => {
       state.loadingMessage = action.payload;
     },
@@ -127,6 +123,8 @@ export const {
   setActiveView,
   setNftViewMode,
   toggleHideSmallBalances,
+  setHideSmallBalances,
+  setCluster,
   setSearchQuery,
   setTheme,
   setRefreshing,

@@ -51,6 +51,9 @@ Thumbs.db
 .eslintcache
 .parcel-cache
 
+# Local mint keypair (derived from the public test mnemonic)
+.local/
+
 # Agent local
 .claude/settings.local.json
 .claude/worktrees/

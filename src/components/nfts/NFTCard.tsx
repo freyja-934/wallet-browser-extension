@@ -1,50 +1,57 @@
-import { NFT } from '../../store/slices/walletSlice';
+import type { NFT } from '../../store/slices/walletSlice';
+import { Icon } from '../ui/Icon';
 
-interface NFTCardProps {
+export function NFTCard({
+  nft,
+  onClick,
+  layout = 'grid',
+}: {
   nft: NFT;
   onClick?: () => void;
-}
-
-export function NFTCard({ nft, onClick }: NFTCardProps) {
+  layout?: 'grid' | 'list';
+}) {
   const imageUrl = nft.content.links?.image || nft.content.files?.[0]?.uri;
-  
   const name = nft.content.metadata.name || 'Unnamed NFT';
-  const collection = nft.grouping?.find(g => g.group_key === 'collection')?.group_value || 'Unknown Collection';
+  const collection = nft.grouping?.find((g) => g.group_key === 'collection')?.group_value || 'Unknown collection';
   const isCompressed = nft.compression?.compressed || false;
+
+  if (layout === 'list') {
+    return (
+      <button
+        onClick={onClick}
+        className="flex w-full items-center gap-3 rounded-2xl px-2 py-2 text-left hover:bg-white/5"
+      >
+        <div className="h-12 w-12 overflow-hidden rounded-xl bg-white/5">
+          {imageUrl ? <img src={imageUrl} alt="" className="h-full w-full object-cover" /> : <div className="grid h-full place-items-center"><Icon name="nft" className="h-4 w-4 text-fg-3" /></div>}
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm text-fg-0">{name}</p>
+          <p className="truncate text-xs text-fg-2">{collection}</p>
+        </div>
+      </button>
+    );
+  }
 
   return (
     <button
       onClick={onClick}
-      className="group relative rounded-xl bg-bg-1 border border-ui-border overflow-hidden hover:border-ui-focus transition-all duration-base hover:shadow-card"
+      className="group overflow-hidden rounded-2xl border border-white/10 bg-white/5 text-left transition hover:border-brand-a/40"
     >
-      {/* Image */}
-      <div className="aspect-square bg-bg-2 relative overflow-hidden">
+      <div className="relative aspect-square bg-black/40">
         {imageUrl ? (
-          <img
-            src={imageUrl}
-            alt={name}
-            className="w-full h-full object-cover transition-transform duration-slow group-hover:scale-105"
-            onError={(e) => {
-              const target = e.target as HTMLImageElement;
-              target.style.display = 'none';
-              target.nextElementSibling?.classList.remove('hidden');
-            }}
-          />
-        ) : null}
-        <div className={`${imageUrl ? 'hidden' : ''} absolute inset-0 flex items-center justify-center`}>
-          <div className="text-4xl text-fg-3">🖼️</div>
-        </div>
+          <img src={imageUrl} alt={name} className="h-full w-full object-cover transition duration-slow group-hover:scale-105" />
+        ) : (
+          <div className="grid h-full place-items-center text-fg-3">
+            <Icon name="nft" className="h-8 w-8" />
+          </div>
+        )}
         {isCompressed && (
-          <span className="absolute top-2 right-2 text-[10px] px-1.5 py-0.5 rounded-md bg-bg-0/80 text-fg-1 backdrop-blur-sm border border-ui-border">
-            cNFT
-          </span>
+          <span className="absolute right-2 top-2 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] text-fg-1">cNFT</span>
         )}
       </div>
-      
-      {/* Info */}
-      <div className="p-3 space-y-1">
-        <h4 className="text-sm font-medium text-fg-0 truncate">{name}</h4>
-        <p className="text-xs text-fg-2 truncate">{collection}</p>
+      <div className="space-y-1 p-3">
+        <h4 className="truncate text-sm font-medium text-fg-0">{name}</h4>
+        <p className="truncate text-xs text-fg-2">{collection}</p>
       </div>
     </button>
   );
