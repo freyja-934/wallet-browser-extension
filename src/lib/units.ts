@@ -28,3 +28,8 @@ export function fromSmallestUnit(value: bigint, decimals: number): string {
 
 export const SOL_DECIMALS = 9;
 export const LAMPORTS_PER_SOL_BIGINT = 1_000_000_000n;
+
+export function formatLamports(lamports: bigint | number): string {
+  const value = typeof lamports === 'number' ? BigInt(lamports) : lamports;
+  return fromSmallestUnit(value, SOL_DECIMALS);
+}

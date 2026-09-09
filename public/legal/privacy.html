@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cinder Wallet Privacy Policy</title>
+  <style>
+    body { margin: 0; font-family: ui-sans-serif, system-ui, sans-serif; background: #010000; color: #ebeae9; }
+    main { max-width: 40rem; margin: 0 auto; padding: 48px 24px; line-height: 1.55; }
+    h1 { font-size: 28px; letter-spacing: -0.03em; }
+    h2 { font-size: 16px; margin-top: 28px; }
+    p, li { color: #c4c0bd; }
+    a { color: #d1671f; }
+  </style>
+</head>
+<body>
+  <main>
+    <p>Cinder Wallet</p>
+    <h1>Privacy Policy</h1>
+    <p>Last updated: 9 September 2026</p>
+    <p>Cinder Wallet is a browser extension. The seed phrase and private keys are encrypted on this device. We do not operate a backend that receives your seed, password, or private keys.</p>
+    <h2>What stays on your device</h2>
+    <ul>
+      <li>Encrypted vault (seed phrase) in <code>chrome.storage.local</code></li>
+      <li>Unlocked session seed material in <code>chrome.storage.session</code> until you lock or the browser closes</li>
+      <li>Settings such as auto-lock and network</li>
+    </ul>
+    <h2>What leaves the device</h2>
+    <ul>
+      <li>Public addresses and signed transactions sent to Solana RPC (public Solana endpoints or Helius if a builder configured a key)</li>
+      <li>Public mint addresses sent to CoinGecko for USD prices on mainnet only</li>
+      <li>dApp origins you approve, which see the public addresses you connect</li>
+    </ul>
+    <h2>What we do not do</h2>
+    <ul>
+      <li>We do not sell or rent personal data</li>
+      <li>We do not use your wallet data for advertising</li>
+      <li>We cannot recover a forgotten password or a lost seed phrase</li>
+    </ul>
+    <h2>Chrome Limited Use</h2>
+    <p>Data read from the browser is used only to provide wallet functionality: encrypting the vault, showing balances, and signing transactions you approve. It is not transferred to third parties except the RPC and price providers named above, and only as needed for those features.</p>
+    <h2>Contact</h2>
+    <p><a href="https://github.com/freyja-934/wallet-browser-extension/issues">GitHub issues</a></p>
+  </main>
+</body>
+</html>

@@ -1,76 +1,57 @@
 import QRCode from 'qrcode';
-import React from 'react';
+import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
+import { AddressText, Banner } from '../ui/EmptyState';
 import { PrimaryButton, SecondaryButton } from '../ui/Button';
-import { Card, CardContent } from '../ui/Card';
 
-interface ReceiveCardProps {
-  address: string;
-  tokenSymbol: string;
-}
+export function ReceiveCard({ address }: { address: string }) {
+  const [qrDataUrl, setQrDataUrl] = useState('');
 
-export function ReceiveCard({ address, tokenSymbol }: ReceiveCardProps) {
-  const [qrDataUrl, setQrDataUrl] = React.useState('');
-
-  React.useEffect(() => {
+  useEffect(() => {
     QRCode.toDataURL(address, {
       width: 200,
       margin: 2,
-      color: {
-        dark: '#111214',
-        light: '#FFFFFF'
-      }
+      color: { dark: '#010000', light: '#ebeae9' },
     }).then(setQrDataUrl);
   }, [address]);
-
-  const formatAddress = (addr: string) => {
-    return `${addr.slice(0, 4)}...${addr.slice(-4)}`;
-  };
 
   const handleCopy = async () => {
     await navigator.clipboard.writeText(address);
     toast.success('Address copied');
   };
 
-  const handleShare = () => {
-    if (navigator.share) {
-      navigator.share({
-        title: `Receive ${tokenSymbol}`,
-        text: `My ${tokenSymbol} address: ${address}`
-      });
-    }
-  };
+  const canShare = typeof navigator.share === 'function';
 
   return (
-    <Card>
-      <CardContent className="space-y-4">
-        <h3 className="text-sm text-fg-1">Receive {tokenSymbol}</h3>
-        
-        <div className="grid place-items-center py-2">
-          {qrDataUrl ? (
-            <img src={qrDataUrl} alt="QR Code" className="rounded-lg" />
-          ) : (
-            <div className="h-[200px] w-[200px] rounded-lg bg-bg-2 animate-pulse" />
-          )}
-        </div>
-        
-        <code className="block text-center text-xs text-fg-2 font-mono">
-          {formatAddress(address)}
-        </code>
-        
-        <div className="grid grid-cols-2 gap-3">
-          <SecondaryButton onClick={handleCopy} data-testid="receive-copy">
-            Copy
-          </SecondaryButton>
-          <PrimaryButton onClick={handleShare}>
+    <div className="space-y-4">
+      <div className="grid place-items-center py-2">
+        {qrDataUrl ? (
+          <img src={qrDataUrl} alt="Receive QR code" className="rounded-2xl" />
+        ) : (
+          <div className="h-[200px] w-[200px] animate-pulse rounded-2xl bg-white/5" />
+        )}
+      </div>
+
+      <div className="rounded-2xl bg-white/5 px-3 py-3 text-center">
+        <AddressText address={address} truncate={false} />
+      </div>
+
+      <div className={`grid gap-3 ${canShare ? 'grid-cols-2' : 'grid-cols-1'}`}>
+        <SecondaryButton onClick={handleCopy} data-testid="receive-copy">
+          Copy
+        </SecondaryButton>
+        {canShare && (
+          <PrimaryButton
+            onClick={() => {
+              navigator.share({ title: 'Cinder Wallet address', text: address });
+            }}
+          >
             Share
           </PrimaryButton>
-        </div>
-        
-        <p className="text-xs text-fg-3 text-center">
-          Solana network only. Sending other assets to this address can result in loss of funds.
-        </p>
-      </CardContent>
-    </Card>
+        )}
+      </div>
+
+      <Banner>Solana network only. Sending other assets to this address can result in loss of funds.</Banner>
+    </div>
   );
 }

@@ -70,40 +70,28 @@ Onboarding is a different product: `PasswordCreate`, `SeedPhraseDisplay`, `SeedP
 - Self-host fonts. Extension CSP is `script-src 'self'`; Google Fonts CDN is the wrong path.
 - Ask before `package.json` / config edits. This plan **does** need `tailwind.config.js` (and possibly `index.html` / `approve.html` for font preload). That is called out in step 1.
 
-## Design system — “Aperture”
+## Design system — “Lumen Wave”
 
-Quiet instrument, warm dark, one light. Named for a lens opening: Lumen is a point of light, not a Solana sticker.
+Futuristic dark exchange: near-black canvas, burnt-orange action, purple–orange flowing light as atmosphere. Matches the attached CoinHub-style references.
 
-**Tone.** Luxury-refined, not playful, not neon. Density is controlled (wallet popup), not sparse marketing. Motion is short and mechanical (180ms), not bounce.
-
-**Color (replace current tokens)**
+**Color**
 
 | Token | Hex | Role |
 | --- | --- | --- |
-| `bg.0` | `#0C0B0A` | Canvas (warm black) |
-| `bg.1` | `#161412` | Elevated surface |
-| `bg.2` | `#1E1C19` | Inputs, chips, inset |
-| `fg.0` | `#F4EFE6` | Primary text (warm paper) |
-| `fg.1` | `#C4BDB3` | Secondary |
-| `fg.2` | `#8A847A` | Tertiary |
-| `fg.3` | `#5C574F` | Disabled / hints |
-| `brand.a` | `#E8C07A` | Lumen gold — the one accent |
-| `brand.b` | `#F3D9A4` | Gold hover / highlight |
-| `ui.border` | `#2A2722` | Hairline |
-| `ui.focus` | `#E8C07A` | Focus ring (not cyan) |
-| `ui.success` | `#7DAB7A` | Sage, not Solana green |
-| `ui.danger` | `#E07070` | |
-| `ui.warning` | `#D4A054` | |
+| `bg.0` | `#010000` | Canvas |
+| `bg.1` | `#171413` | Elevated / glass |
+| `bg.3` | `#483c35` | Warm depth |
+| `fg.0` | `#ebeae9` | Primary text |
+| `fg.2` | `#959190` | Secondary |
+| `brand.b` | `#d1671f` | CTA fill |
+| `brand.a` | `#ff7b16` | Hot glow / hover |
+| Glow inners | `#ff7b16`, `#ed690b`, `#773506` | `.glow-square` |
 
-No purple–green–cyan gradient on buttons or logo. Primary button is solid gold on near-black text. Wordmark disc is a thin gold ring, not a filled gradient.
+**Atmosphere.** Home (tokens tab) loops `public/media/bg-video.mp4`. Unlock, welcome, loading, and the other tabs use the soft purple–orange `bg-img.jpg`. Popup is a fixed 380×640 frame (never `100vh`). `prefers-reduced-motion` always uses the still.
 
-**Type (self-hosted WOFF2 in `public/fonts/`)**
+**Type.** Self-hosted Sora + IBM Plex Mono.
 
-- **Fraunces** (optical size) — “Lumen” wordmark and the portfolio figure only.
-- **IBM Plex Sans** — UI.
-- **IBM Plex Mono** — addresses, signatures, seed words, `tabular-nums` amounts.
-
-Do not use Inter.
+**Layout.** Bottom nav (Home / NFTs / Activity). Settings from the header. Sheets from the bottom. Capsule buttons. Glass panels.
 
 **Space and radius**
 

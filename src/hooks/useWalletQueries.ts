@@ -1,11 +1,19 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { displayTokenAmount, shortMintLabel } from '../lib/parse-history';
+import { fromSmallestUnit } from '../lib/units';
 import { heliusService } from '../services/helius';
 import { walletService } from '../services/wallet';
+import { useAppSelector } from '../store/store';
 import type { NFT, Token, Transaction } from '../store/slices/walletSlice';
 
+function tokenLabel(mint?: string): string {
+  return mint ? shortMintLabel(mint) : 'token';
+}
+
 export function useBalances(address?: string) {
+  const cluster = useAppSelector((state) => state.ui.cluster);
   return useQuery({
-    queryKey: ['balances', address],
+    queryKey: ['balances', cluster, address],
     enabled: !!address,
     queryFn: async () => {
       const data = await walletService.getTokenBalances(address!);
@@ -15,8 +23,9 @@ export function useBalances(address?: string) {
 }
 
 export function useNFTs(address?: string) {
+  const cluster = useAppSelector((state) => state.ui.cluster);
   return useQuery({
-    queryKey: ['nfts', address],
+    queryKey: ['nfts', cluster, address],
     enabled: !!address,
     queryFn: async () => {
       const nftData = await heliusService.getNFTs(address!);
@@ -33,24 +42,30 @@ export function useNFTs(address?: string) {
 }
 
 export function useTransactions(address?: string) {
+  const cluster = useAppSelector((state) => state.ui.cluster);
   return useQuery({
-    queryKey: ['transactions', address],
+    queryKey: ['transactions', cluster, address],
     enabled: !!address,
     queryFn: async () => {
       const rows = await heliusService.getTransactionHistory(address!, { limit: 20 });
       return rows.map((tx): Transaction => {
-        const native = tx.nativeTransfers?.[0];
+        const native = tx.nativeTransfers?.find((row) => row.amount > 0);
         const token = tx.tokenTransfers?.[0];
+        const useNative = Boolean(native);
         return {
           signature: tx.signature,
           timestamp: tx.timestamp,
           type: tx.type,
           status: tx.status,
-          from: native?.from || token?.from,
-          to: native?.to || token?.to,
-          amount: native
-            ? (native.amount / 1e9).toString()
-            : token?.amount,
+          from: useNative ? native?.from : token?.from || native?.from,
+          to: useNative ? native?.to : token?.to || native?.to,
+          amount: useNative && native
+            ? fromSmallestUnit(BigInt(native.amount), 9)
+            : token
+              ? displayTokenAmount(token.amount, token.decimals)
+              : undefined,
+          symbol: useNative ? 'SOL' : token ? tokenLabel(token.mint) : undefined,
+          mint: useNative ? undefined : token?.mint,
           fee: tx.fee,
         };
       });
@@ -60,10 +75,10 @@ export function useTransactions(address?: string) {
 
 export function useInvalidateWalletData() {
   const client = useQueryClient();
-  return (address?: string) => {
-    void client.invalidateQueries({ queryKey: ['balances', address] });
-    void client.invalidateQueries({ queryKey: ['nfts', address] });
-    void client.invalidateQueries({ queryKey: ['transactions', address] });
+  return (_address?: string) => {
+    void client.invalidateQueries({ queryKey: ['balances'] });
+    void client.invalidateQueries({ queryKey: ['nfts'] });
+    void client.invalidateQueries({ queryKey: ['transactions'] });
   };
 }
 

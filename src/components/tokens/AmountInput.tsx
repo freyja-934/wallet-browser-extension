@@ -1,65 +1,31 @@
-import { Select } from '../ui/Input';
-
 interface AmountInputProps {
   value: string;
   onChange: (value: string) => void;
   balance: string;
   symbol: string;
   onMaxClick: () => void;
-  usdMode: boolean;
-  onModeToggle: () => void;
 }
 
-export function AmountInput({ 
-  value, 
-  onChange, 
-  balance, 
-  symbol, 
-  onMaxClick, 
-  usdMode, 
-  onModeToggle 
-}: AmountInputProps) {
+export function AmountInput({ value, onChange, balance, symbol, onMaxClick }: AmountInputProps) {
   return (
-    <div className="rounded-xl bg-bg-1 border border-ui-border p-4 space-y-3">
+    <div className="space-y-3 rounded-2xl border border-white/10 bg-white/5 p-4">
       <div className="flex items-center justify-between">
-        <div className="text-sm text-fg-2">Amount</div>
-        <div className="flex gap-1 rounded-md bg-bg-2 p-1">
-          <button 
-            onClick={() => onModeToggle()} 
-            className={`px-2 h-7 rounded-sm text-xs transition-colors ${!usdMode ? 'bg-bg-1 text-fg-0' : 'hover:bg-bg-1 text-fg-2'}`}
-          >
-            {symbol}
-          </button>
-          <button 
-            onClick={() => onModeToggle()} 
-            className={`px-2 h-7 rounded-sm text-xs transition-colors ${usdMode ? 'bg-bg-1 text-fg-0' : 'hover:bg-bg-1 text-fg-2'}`}
-          >
-            USD
-          </button>
-        </div>
+        <div className="text-xs uppercase tracking-[0.14em] text-fg-2">Amount</div>
+        <span className="text-xs text-fg-3">{symbol}</span>
       </div>
-      <div className="flex items-end gap-2">
-        <input 
-          inputMode="decimal" 
-          placeholder="0.00" 
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          className="bg-transparent outline-none text-3xl w-full text-fg-0 placeholder:text-fg-3" 
-        />
-        <div className="text-fg-2 text-sm whitespace-nowrap">{balance} available</div>
-      </div>
+      <input
+        inputMode="decimal"
+        placeholder="0.00"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full bg-transparent text-3xl tracking-tight text-fg-0 outline-none placeholder:text-fg-3"
+        data-testid="send-amount"
+      />
       <div className="flex items-center justify-between">
-        <button 
-          onClick={onMaxClick}
-          className="text-xs text-fg-1 underline underline-offset-4 hover:text-fg-0 transition-colors"
-        >
+        <button type="button" onClick={onMaxClick} className="text-xs text-brand-a hover:text-brand-b">
           Max
         </button>
-        <Select className="h-9 text-sm px-2" defaultValue="normal">
-          <option value="normal">Normal fee</option>
-          <option value="fast">Fast fee</option>
-          <option value="turbo">Turbo fee</option>
-        </Select>
+        <div className="text-xs text-fg-2">{balance} available</div>
       </div>
     </div>
   );

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fromSmallestUnit, toSmallestUnit } from './units';
+import { formatLamports, fromSmallestUnit, toSmallestUnit } from './units';
 
 describe('toSmallestUnit', () => {
   it('converts SOL amounts without float error', () => {
@@ -15,5 +15,11 @@ describe('toSmallestUnit', () => {
 describe('fromSmallestUnit', () => {
   it('round-trips', () => {
     expect(fromSmallestUnit(1_500_000_000n, 9)).toBe('1.5');
+  });
+});
+
+describe('formatLamports', () => {
+  it('formats integer lamports as SOL', () => {
+    expect(formatLamports(5000)).toBe('0.000005');
   });
 });

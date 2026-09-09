@@ -1,37 +1,69 @@
-import React from 'react';
+import type { ButtonHTMLAttributes } from 'react';
 
-export function PrimaryButton(props: React.ButtonHTMLAttributes<HTMLButtonElement>) {
-  const { className = "", ...rest } = props;
+function cx(...parts: Array<string | false | undefined>) {
+  return parts.filter(Boolean).join(' ');
+}
+
+const base =
+  'inline-flex items-center justify-center gap-2 h-11 px-4 rounded-full text-[14px] font-medium tracking-tight transition duration-base focus:outline-none focus:shadow-focus disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:scale-100';
+
+export function PrimaryButton(props: ButtonHTMLAttributes<HTMLButtonElement>) {
+  const { className = '', ...rest } = props;
   return (
     <button
       {...rest}
-      className={`h-11 w-full rounded-lg text-[15px] font-medium shadow-press transition duration-base
-                  hover:scale-[1.01] active:scale-[0.99] focus:outline-none focus:shadow-focus
-                  grad-solana text-black disabled:opacity-50 disabled:cursor-not-allowed ${className}`}
+      className={cx(
+        base,
+        'bg-brand-b text-[#010000] shadow-press hover:bg-brand-a hover:scale-[1.01] active:scale-[0.99]',
+        className,
+      )}
     />
   );
 }
 
-export function SecondaryButton(props: React.ButtonHTMLAttributes<HTMLButtonElement>) {
-  const { className = "", ...rest } = props;
+export function SecondaryButton(props: ButtonHTMLAttributes<HTMLButtonElement>) {
+  const { className = '', ...rest } = props;
   return (
     <button
       {...rest}
-      className={`h-11 w-full rounded-lg text-[15px] font-medium border border-ui-border
-                  bg-transparent hover:bg-bg-2 transition duration-base
-                  focus:outline-none focus:shadow-focus text-fg-0
-                  disabled:opacity-50 disabled:cursor-not-allowed ${className}`}
+      className={cx(
+        base,
+        'border border-white/15 bg-white/5 text-fg-0 hover:bg-white/10',
+        className,
+      )}
     />
   );
 }
 
-export function IconButton(props: React.ButtonHTMLAttributes<HTMLButtonElement>) {
-  const { className = "", ...rest } = props;
+export function GhostButton(props: ButtonHTMLAttributes<HTMLButtonElement>) {
+  const { className = '', ...rest } = props;
   return (
     <button
       {...rest}
-      className={`p-2 rounded-md hover:bg-bg-2 transition-colors duration-fast
-                  focus:outline-none focus:shadow-focus ${className}`}
+      className={cx(base, 'bg-transparent text-fg-1 hover:text-fg-0 hover:bg-white/5', className)}
+    />
+  );
+}
+
+export function DangerButton(props: ButtonHTMLAttributes<HTMLButtonElement>) {
+  const { className = '', ...rest } = props;
+  return (
+    <button
+      {...rest}
+      className={cx(base, 'bg-ui-danger/15 text-ui-danger hover:bg-ui-danger/25', className)}
+    />
+  );
+}
+
+export function IconButton(props: ButtonHTMLAttributes<HTMLButtonElement>) {
+  const { className = '', ...rest } = props;
+  return (
+    <button
+      {...rest}
+      className={cx(
+        'grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-white/5 text-fg-1 transition-colors duration-fast hover:bg-white/10 hover:text-fg-0 focus:outline-none focus:shadow-focus',
+        className,
+      )}
     />
   );
 }

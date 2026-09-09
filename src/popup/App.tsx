@@ -1,45 +1,50 @@
-import React, { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Toaster } from 'react-hot-toast';
 import { Dashboard } from '../components/Dashboard';
 import { LoadingScreen } from '../components/common/LoadingScreen';
 import { UnlockScreen } from '../components/wallet/UnlockScreen';
 import { WalletCreationFlow } from '../components/wallet/WalletCreationFlow';
+import { extensionClient } from '../messaging/client';
+import { setCluster, setHideSmallBalances } from '../store/slices/uiSlice';
 import { initializeWallet } from '../store/slices/walletSlice';
 import { useAppDispatch, useAppSelector } from '../store/store';
 
 const toasterConfig = {
-  position: "top-center" as const,
+  position: 'top-center' as const,
   toastOptions: {
     duration: 4000,
     style: {
-      background: '#111214',
-      color: '#FFFFFF',
-      border: '1px solid #23262B',
-      borderRadius: '12px',
+      background: '#171413',
+      color: '#ebeae9',
+      border: '1px solid rgba(235,234,233,0.12)',
+      borderRadius: '16px',
       padding: '12px 16px',
       fontSize: '14px',
-      boxShadow: '0 0 0 1px rgba(255,255,255,0.04), 0 8px 24px rgba(0,0,0,0.40)',
+      boxShadow: '0 8px 24px rgba(0,0,0,0.45)',
     },
     success: {
-      iconTheme: { primary: '#2BD576', secondary: '#111214' },
-      style: { borderLeft: '3px solid #2BD576' },
+      iconTheme: { primary: '#7DAB7A', secondary: '#171413' },
+      style: { borderLeft: '3px solid #7DAB7A' },
     },
     error: {
-      iconTheme: { primary: '#FF5A5A', secondary: '#111214' },
-      style: { borderLeft: '3px solid #FF5A5A' },
+      iconTheme: { primary: '#E07070', secondary: '#171413' },
+      style: { borderLeft: '3px solid #E07070' },
     },
   },
 };
 
 function App() {
   const dispatch = useAppDispatch();
-  const { isInitialized, isLocked, hasVault } = useAppSelector(state => state.wallet);
-  const [isLoading, setIsLoading] = React.useState(true);
+  const { isInitialized, isLocked, hasVault } = useAppSelector((state) => state.wallet);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     const init = async () => {
       try {
         await dispatch(initializeWallet()).unwrap();
+        const settings = await extensionClient.getSettings();
+        dispatch(setCluster(settings.cluster));
+        dispatch(setHideSmallBalances(settings.hideSmallBalances));
       } catch (error) {
         console.error('Failed to initialize wallet:', error);
       } finally {

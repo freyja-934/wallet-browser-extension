@@ -10,13 +10,45 @@ import {
   PublicKey,
   SystemProgram,
   Transaction,
-  sendAndConfirmTransaction,
 } from '@solana/web3.js';
-import { getRpcUrl } from '../config/constants';
-import { getKeypair } from './keyring';
+import { getCluster, rpcUrlFor } from '../config/constants';
+import { errorMessage } from '../lib/errors';
+import { getSettings, getKeypair } from './keyring';
 
-export function getConnection(): Connection {
-  return new Connection(getRpcUrl(), 'confirmed');
+export async function getConnection(): Promise<Connection> {
+  const settings = await getSettings();
+  return new Connection(rpcUrlFor(settings.cluster ?? getCluster()), 'confirmed');
+}
+
+async function sendLegacy(connection: Connection, tx: Transaction, signer: Awaited<ReturnType<typeof getKeypair>>): Promise<string> {
+  const latest = await connection.getLatestBlockhash('confirmed');
+  tx.recentBlockhash = latest.blockhash;
+  tx.feePayer = signer.publicKey;
+  tx.sign(signer);
+
+  let signature: string;
+  try {
+    signature = await connection.sendRawTransaction(tx.serialize(), {
+      skipPreflight: false,
+      preflightCommitment: 'confirmed',
+    });
+  } catch (error) {
+    throw new Error(errorMessage(error, 'Broadcast failed'));
+  }
+
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const status = await connection.getSignatureStatus(signature, { searchTransactionHistory: true });
+    const value = status.value;
+    if (value?.err) {
+      throw new Error(`Transaction failed on-chain: ${JSON.stringify(value.err)}`);
+    }
+    if (value?.confirmationStatus === 'confirmed' || value?.confirmationStatus === 'finalized') {
+      return signature;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+  throw new Error('Confirmation timed out. Check the explorer before retrying.');
 }
 
 export async function sendTransfer(params: {
@@ -25,18 +57,21 @@ export async function sendTransfer(params: {
   mint?: string;
 }): Promise<string> {
   const keypair = await getKeypair();
-  const connection = getConnection();
+  const connection = await getConnection();
   const amount = BigInt(params.amountSmallest);
 
   if (!params.mint) {
+    if (amount > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new Error('Amount too large');
+    }
     const tx = new Transaction().add(
       SystemProgram.transfer({
         fromPubkey: keypair.publicKey,
         toPubkey: new PublicKey(params.to),
-        lamports: amount,
-      })
+        lamports: Number(amount),
+      }),
     );
-    return sendAndConfirmTransaction(connection, tx, [keypair]);
+    return sendLegacy(connection, tx, keypair);
   }
 
   const mint = new PublicKey(params.mint);
@@ -53,8 +88,8 @@ export async function sendTransfer(params: {
         keypair.publicKey,
         toAta,
         to,
-        mint
-      )
+        mint,
+      ),
     );
   }
 
@@ -65,9 +100,9 @@ export async function sendTransfer(params: {
       keypair.publicKey,
       amount,
       [],
-      TOKEN_PROGRAM_ID
-    )
+      TOKEN_PROGRAM_ID,
+    ),
   );
 
-  return sendAndConfirmTransaction(connection, tx, [keypair]);
+  return sendLegacy(connection, tx, keypair);
 }

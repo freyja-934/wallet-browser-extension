@@ -1,9 +1,11 @@
 import type { BrowserContext, Page } from '@playwright/test';
 import { expect } from '@playwright/test';
 
+/** Public BIP39 fixture + password. See docs/test-wallet.md. */
 export const TEST_PASSWORD = 'TestWallet1!';
 export const TEST_MNEMONIC =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+export const TEST_ADDRESS = 'HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk';
 
 export async function openPopup(context: BrowserContext, extensionId: string): Promise<Page> {
   const page = await context.newPage();

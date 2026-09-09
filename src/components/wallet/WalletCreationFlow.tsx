@@ -1,74 +1,52 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import toast from 'react-hot-toast';
 import { generateSeedPhrase } from '../../lib/wallet';
 import { createWallet } from '../../store/slices/walletSlice';
 import { useAppDispatch } from '../../store/store';
+import { PopupFrame } from '../ui/Atmosphere';
 import { PrimaryButton, SecondaryButton } from '../ui/Button';
-import { Card, CardContent } from '../ui/Card';
+import { GlowMark } from '../ui/GlowMark';
 import { PasswordCreate } from './PasswordCreate';
 import { SeedPhraseDisplay } from './SeedPhraseDisplay';
 import { SeedPhraseImport } from './SeedPhraseImport';
 import { SeedPhraseVerification } from './SeedPhraseVerification';
 
-type FlowStep = 
-  | 'choice'
-  | 'generate-seed'
-  | 'verify-seed'
-  | 'import-seed'
-  | 'create-password'
-  | 'complete';
+type FlowStep = 'choice' | 'generate-seed' | 'verify-seed' | 'import-seed' | 'create-password' | 'complete';
 
-interface WalletCreationFlowProps {
-  onComplete?: () => void;
-}
-
-export const WalletCreationFlow: React.FC<WalletCreationFlowProps> = ({
-  onComplete
-}) => {
+export function WalletCreationFlow({ onComplete }: { onComplete?: () => void }) {
   const dispatch = useAppDispatch();
   const [currentStep, setCurrentStep] = useState<FlowStep>('choice');
-  const [seedPhrase, setSeedPhrase] = useState<string>('');
+  const [seedPhrase, setSeedPhrase] = useState('');
   const [isImported, setIsImported] = useState(false);
-  
+
   const handleCreateNew = () => {
     const { mnemonic } = generateSeedPhrase(12);
     setSeedPhrase(mnemonic);
     setIsImported(false);
     setCurrentStep('generate-seed');
   };
-  
+
   const handleImportExisting = () => {
     setIsImported(true);
     setCurrentStep('import-seed');
   };
-  
+
   const handleImportSeed = (importedPhrase: string) => {
     setSeedPhrase(importedPhrase);
     setCurrentStep('create-password');
   };
-  
+
   const handlePasswordCreate = async (password: string) => {
     try {
-      await dispatch(createWallet({
-        password,
-        seedPhrase,
-        imported: isImported
-      })).unwrap();
-      
-      toast.success(
-        isImported 
-          ? 'Wallet imported successfully!' 
-          : 'Wallet created successfully!'
-      );
-      
+      await dispatch(createWallet({ password, seedPhrase, imported: isImported })).unwrap();
+      toast.success(isImported ? 'Wallet imported' : 'Wallet created');
       setCurrentStep('complete');
       onComplete?.();
-    } catch (error) {
+    } catch {
       toast.error('Failed to create wallet. Please try again.');
-      console.error('Wallet creation error:', error);
     }
   };
-  
+
   const handleBack = () => {
     switch (currentStep) {
       case 'generate-seed':
@@ -83,100 +61,58 @@ export const WalletCreationFlow: React.FC<WalletCreationFlowProps> = ({
         break;
     }
   };
-  
+
   const renderStep = () => {
     switch (currentStep) {
       case 'choice':
         return (
-          <div className="animate-fadeIn">
-            <Card>
-              <CardContent className="p-8">
-                <div className="text-center mb-8">
-                  <div className="w-20 h-20 grad-solana rounded-full mx-auto mb-4 shadow-card"></div>
-                  <h1 className="text-2xl font-bold text-fg-0">Solana Wallet</h1>
-                  <p className="text-fg-2 mt-2 text-sm">
-                    Create a new wallet or import an existing one
-                  </p>
-                </div>
-                
-                <div className="space-y-4">
-                  <PrimaryButton 
-                    onClick={handleCreateNew}
-                    className="w-full"
-                    data-testid="create-new-wallet"
-                  >
-                    Create New Wallet
-                  </PrimaryButton>
-                  
-                  <SecondaryButton
-                    onClick={handleImportExisting}
-                    className="w-full"
-                    data-testid="import-existing-wallet"
-                  >
-                    Import Existing Wallet
-                  </SecondaryButton>
-                </div>
-                
-                <p className="text-xs text-fg-3 text-center mt-6">
-                  By continuing, you agree to our Terms of Service
-                </p>
-              </CardContent>
-            </Card>
+          <div className="flex h-full min-h-0 flex-col px-6 pb-8 pt-6">
+            <div className="flex flex-1 flex-col items-center justify-end pb-8 text-center">
+              <GlowMark size={96} dashed className="mx-auto" />
+              <h1 className="mt-6 text-3xl font-semibold tracking-tight">Cinder Wallet</h1>
+              <p className="mt-2 text-sm text-fg-2">A Solana wallet for the browser</p>
+              <p className="mt-3 max-w-[18rem] text-xs leading-relaxed text-fg-3">
+                You are the only one who can recover this wallet. Do not store funds you cannot afford to lose.
+              </p>
+            </div>
+            <div className="space-y-3">
+              <PrimaryButton onClick={handleCreateNew} className="w-full" data-testid="create-new-wallet">
+                Create new wallet
+              </PrimaryButton>
+              <SecondaryButton onClick={handleImportExisting} className="w-full" data-testid="import-existing-wallet">
+                Import existing wallet
+              </SecondaryButton>
+            </div>
           </div>
         );
-        
       case 'generate-seed':
         return (
-          <div className="animate-fadeIn">
-            <SeedPhraseDisplay
-              seedPhrase={seedPhrase}
-              onContinue={() => setCurrentStep('verify-seed')}
-              onBack={handleBack}
-            />
-          </div>
+          <SeedPhraseDisplay
+            seedPhrase={seedPhrase}
+            onContinue={() => setCurrentStep('verify-seed')}
+            onBack={handleBack}
+          />
         );
-        
       case 'verify-seed':
         return (
-          <div className="animate-fadeIn">
-            <SeedPhraseVerification
-              seedPhrase={seedPhrase}
-              onVerified={() => setCurrentStep('create-password')}
-              onBack={handleBack}
-            />
-          </div>
+          <SeedPhraseVerification
+            seedPhrase={seedPhrase}
+            onVerified={() => setCurrentStep('create-password')}
+            onBack={handleBack}
+          />
         );
-        
       case 'import-seed':
-        return (
-          <div className="animate-fadeIn">
-            <SeedPhraseImport
-              onImport={handleImportSeed}
-              onBack={handleBack}
-            />
-          </div>
-        );
-        
+        return <SeedPhraseImport onImport={handleImportSeed} onBack={handleBack} />;
       case 'create-password':
-        return (
-          <div className="animate-fadeIn">
-            <PasswordCreate
-              onSubmit={handlePasswordCreate}
-              onBack={handleBack}
-            />
-          </div>
-        );
-        
+        return <PasswordCreate onSubmit={handlePasswordCreate} onBack={handleBack} />;
       default:
         return null;
     }
   };
-  
+
   return (
-    <div className="popup-container bg-bg-0 flex items-center justify-center p-4">
-      <div className="w-full max-w-md">
-        {renderStep()}
-      </div>
-    </div>
+    <PopupFrame atmosphere="still" heavy={currentStep !== 'choice'} focus={currentStep === 'choice' ? 'mark' : 'stage'}>
+      {renderStep()}
+    </PopupFrame>
   );
-};
+}

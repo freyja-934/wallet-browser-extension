@@ -1,16 +1,14 @@
-import React from 'react';
+import { GlowMark } from '../ui/GlowMark';
+import { PopupFrame } from '../ui/Atmosphere';
 
-export const LoadingScreen: React.FC = () => {
+export function LoadingScreen() {
   return (
-    <div className="popup-container bg-bg-0 flex items-center justify-center">
-      <div className="text-center animate-fadeIn">
-        <div className="relative w-16 h-16 mx-auto">
-          <div className="absolute inset-0 rounded-full grad-solana animate-spin opacity-20"></div>
-          <div className="absolute inset-2 bg-bg-0 rounded-full"></div>
-          <div className="absolute inset-0 rounded-full grad-solana animate-ping"></div>
-        </div>
-        <p className="mt-6 text-fg-1 text-sm font-medium">Loading wallet...</p>
+    <PopupFrame atmosphere="still" focus="mark">
+      <div className="flex h-full min-h-0 flex-col items-center justify-center px-6">
+        <GlowMark size={88} dashed />
+        <p className="mt-8 font-sans text-2xl font-semibold tracking-tight text-fg-0">Cinder Wallet</p>
+        <p className="mt-2 text-xs uppercase tracking-[0.22em] text-fg-2">Loading wallet</p>
       </div>
-    </div>
+    </PopupFrame>
   );
-};
+}

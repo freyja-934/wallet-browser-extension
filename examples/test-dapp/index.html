@@ -2,22 +2,68 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Lumen test dApp</title>
+  <title>Cinder Wallet test dApp</title>
   <style>
-    body { font-family: ui-sans-serif, system-ui; background: #0b0b0c; color: #fff; padding: 24px; }
-    button { margin: 4px 8px 4px 0; padding: 8px 12px; border-radius: 8px; border: 0; cursor: pointer; }
-    pre { background: #16171a; padding: 12px; border-radius: 8px; overflow: auto; }
+    :root {
+      --bg: #010000;
+      --fg: #ebeae9;
+      --muted: #959190;
+      --orange: #d1671f;
+      --hot: #ff7b16;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      color: var(--fg);
+      background: #010000 url('./bg-img.jpg') center/cover no-repeat;
+    }
+    .scrim {
+      min-height: 100vh;
+      background: linear-gradient(180deg, rgba(1,0,0,.35), rgba(1,0,0,.88));
+      padding: 48px 24px;
+    }
+    h1 { font-size: 40px; letter-spacing: -0.04em; margin: 0 0 8px; }
+    p { color: var(--muted); max-width: 42rem; }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; margin: 24px 0; }
+    button {
+      height: 44px;
+      padding: 0 18px;
+      border: 0;
+      border-radius: 999px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    #connect { background: var(--orange); color: #010000; }
+    #signMessage, #signTx, #signAndSend {
+      background: rgba(235,234,233,.08);
+      color: var(--fg);
+      border: 1px solid rgba(235,234,233,.14);
+    }
+    pre {
+      background: rgba(23,20,19,.72);
+      border: 1px solid rgba(235,234,233,.12);
+      padding: 16px;
+      border-radius: 20px;
+      overflow: auto;
+      backdrop-filter: blur(16px);
+    }
   </style>
 </head>
 <body>
-  <h1>Lumen Wallet Standard test</h1>
-  <p>Serve this page with <code>just dapp</code> (http://localhost:5174), then load the Lumen extension.</p>
-  <div>
-    <button id="connect">Connect</button>
-    <button id="signMessage">Sign message</button>
-    <button id="signTx">Sign v0 transfer</button>
+  <div class="scrim">
+    <p style="letter-spacing:.2em; text-transform:uppercase; font-size:11px; color:#959190;">Cinder Wallet</p>
+    <h1>Wallet Standard test</h1>
+    <p>Serve with <code>just dapp</code> at http://localhost:5174, then load the unpacked Cinder Wallet extension.</p>
+    <div class="row">
+      <button id="connect">Connect</button>
+      <button id="signMessage">Sign message</button>
+      <button id="signTx">Sign v0 transfer</button>
+      <button id="signAndSend">Sign and send (reject in wallet)</button>
+    </div>
+    <pre id="log">waiting for wallet-standard:register-wallet…</pre>
   </div>
-  <pre id="log">waiting for wallet-standard:register-wallet…</pre>
   <script type="module" src="./main.js"></script>
 </body>
 </html>

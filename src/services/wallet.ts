@@ -1,5 +1,6 @@
 import { Connection, PublicKey } from '@solana/web3.js';
 import { getRpcUrl } from '../config/constants';
+import { runtimeCluster } from '../lib/runtime-rpc';
 import { coinGeckoService } from './coingecko';
 import { TokenBalance, heliusService } from './helius';
 
@@ -21,6 +22,13 @@ class WalletService {
     totalUsdValue: number;
   }> {
     const { nativeBalance, tokens } = await heliusService.getTokenBalances(address);
+    if ((await runtimeCluster()) === 'devnet') {
+      return {
+        solBalance: nativeBalance,
+        tokens: tokens.map((token) => ({ ...token, usdValue: 0, priceChange24h: 0 })),
+        totalUsdValue: 0,
+      };
+    }
     const solPrice = await coinGeckoService.getSolanaPrice();
     const solUsdValue = nativeBalance * solPrice.price;
     const mints = tokens.map((t) => t.mint);

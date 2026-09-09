@@ -1,6 +1,40 @@
-import { Connection, PublicKey } from '@solana/web3.js';
+import { Connection, PublicKey, type ParsedTransactionWithMeta } from '@solana/web3.js';
 import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import { getHeliusApiKey, getRpcUrl } from '../config/constants';
+import { activityFromParsedTx, normalizeHeliusTransfers } from '../lib/parse-history';
+import { runtimeCluster, runtimeRpcUrl } from '../lib/runtime-rpc';
+
+const NFT_INTERFACES = new Set([
+  'V1_NFT',
+  'LEGACY_NFT',
+  'ProgrammableNFT',
+  'MplCoreAsset',
+]);
+
+const PARSE_BATCH = 5;
+
+/** Public Solana RPC has getTransaction(jsonParsed), not getParsedTransactions. */
+async function fetchParsedTransactions(
+  connection: Connection,
+  signatures: string[],
+): Promise<Array<ParsedTransactionWithMeta | null>> {
+  const out: Array<ParsedTransactionWithMeta | null> = [];
+  for (let i = 0; i < signatures.length; i += PARSE_BATCH) {
+    const chunk = signatures.slice(i, i + PARSE_BATCH);
+    const rows = await Promise.all(
+      chunk.map((signature) =>
+        connection
+          .getParsedTransaction(signature, {
+            maxSupportedTransactionVersion: 0,
+            commitment: 'confirmed',
+          })
+          .catch(() => null),
+      ),
+    );
+    out.push(...rows);
+  }
+  return out;
+}
 
 export interface TokenBalance {
   mint: string;
@@ -90,43 +124,39 @@ class HeliusService {
     this.connection = new Connection(getRpcUrl(), 'confirmed');
   }
 
+  private async conn(): Promise<Connection> {
+    return new Connection(await runtimeRpcUrl(), 'confirmed');
+  }
+
+  private async das<T>(method: string, params: unknown): Promise<T> {
+    const response = await fetch(await runtimeRpcUrl(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 'cinder', method, params }),
+    });
+    if (!response.ok) {
+      throw new Error(`DAS ${method} failed: ${response.status}`);
+    }
+    const json = await response.json() as { result?: T; error?: { message?: string } };
+    if (json.error) {
+      throw new Error(json.error.message || `DAS ${method} failed`);
+    }
+    return json.result as T;
+  }
+
   async getTokenBalances(address: string): Promise<{
     nativeBalance: number;
     tokens: TokenBalance[];
   }> {
-    if (this.apiKey) {
-      try {
-        const url = `${this.baseUrl}/addresses/${address}/balances?api-key=${this.apiKey}`;
-        const response = await fetch(url);
-        if (response.ok) {
-          const data = await response.json();
-          return {
-            nativeBalance: data.nativeBalance / 1e9,
-            tokens: data.tokens.map((token: any) => ({
-              mint: token.mint,
-              amount: token.amount,
-              decimals: token.decimals,
-              symbol: token.symbol,
-              name: token.name,
-              logoURI: token.logoURI,
-              tokenAccount: token.tokenAccount
-            }))
-          };
-        }
-      } catch {
-        /* fall through to RPC */
-      }
-    }
-
     const pubkey = new PublicKey(address);
+    const connection = await this.conn();
     const [lamports, parsed] = await Promise.all([
-      this.connection.getBalance(pubkey),
-      this.connection.getParsedTokenAccountsByOwner(pubkey, { programId: TOKEN_PROGRAM_ID }),
+      connection.getBalance(pubkey),
+      connection.getParsedTokenAccountsByOwner(pubkey, { programId: TOKEN_PROGRAM_ID }),
     ]);
 
-    return {
-      nativeBalance: lamports / 1e9,
-      tokens: parsed.value.map((entry) => {
+    const tokens: TokenBalance[] = parsed.value
+      .map((entry) => {
         const info = entry.account.data.parsed.info;
         return {
           mint: info.mint,
@@ -134,37 +164,65 @@ class HeliusService {
           decimals: info.tokenAmount.decimals,
           tokenAccount: entry.pubkey.toBase58(),
         };
-      }),
+      })
+      .filter((token) => token.amount !== '0');
+
+    if (this.apiKey) {
+      try {
+        const das = await this.das<{ items?: Array<{
+          id: string;
+          interface?: string;
+          content?: { metadata?: { name?: string; symbol?: string }; links?: { image?: string } };
+          token_info?: { decimals?: number; balance?: number; symbol?: string };
+        }> }>('getAssetsByOwner', {
+          ownerAddress: address,
+          page: 1,
+          limit: 1000,
+          displayOptions: { showFungible: true },
+        });
+        const meta = new Map((das.items ?? [])
+          .filter((item) => item.interface === 'FungibleToken' || item.interface === 'FungibleAsset')
+          .map((item) => [item.id, item]));
+        for (const token of tokens) {
+          const item = meta.get(token.mint);
+          if (!item) continue;
+          token.name = item.content?.metadata?.name || token.name;
+          token.symbol = item.token_info?.symbol || item.content?.metadata?.symbol || token.symbol;
+          token.logoURI = item.content?.links?.image || token.logoURI;
+        }
+      } catch {
+        /* keep RPC token list */
+      }
+    }
+
+    return {
+      nativeBalance: lamports / 1e9,
+      tokens,
     };
   }
 
-  /**
-   * Get NFTs for a wallet including compressed NFTs
-   */
   async getNFTs(address: string, page: number = 1, limit: number = 100): Promise<{
     items: NFTAsset[];
     total: number;
     page: number;
     limit: number;
   }> {
-    if (!this.apiKey) {
-      return { items: [], total: 0, page, limit };
-    }
     try {
-      const url = `${this.baseUrl}/addresses/${address}/assets?api-key=${this.apiKey}&page=${page}&limit=${limit}`;
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`Helius API error: ${response.statusText}`);
-      }
-      const data = await response.json();
-      const nfts = data.items.filter((item: any) =>
-        !item.token_info || item.token_info.supply === '1'
-      );
+      const das = await this.das<{ items?: NFTAsset[]; total?: number }>('getAssetsByOwner', {
+        ownerAddress: address,
+        page,
+        limit,
+        displayOptions: { showFungible: false },
+      });
+      const items = (das.items ?? []).filter((item) => {
+        const kind = (item as NFTAsset & { interface?: string }).interface;
+        return !kind || NFT_INTERFACES.has(kind);
+      });
       return {
-        items: nfts,
-        total: data.total,
-        page: data.page,
-        limit: data.limit
+        items,
+        total: das.total ?? items.length,
+        page,
+        limit,
       };
     } catch (error) {
       console.error('Error fetching NFTs:', error);
@@ -172,9 +230,6 @@ class HeliusService {
     }
   }
 
-  /**
-   * Get transaction history with enhanced details
-   */
   async getTransactionHistory(
     address: string,
     options: {
@@ -186,44 +241,67 @@ class HeliusService {
     try {
       const { limit = 100, before, type } = options;
 
-      if (!this.apiKey) {
-        const sigs = await this.connection.getSignaturesForAddress(new PublicKey(address), { limit });
-        return sigs.map((sig) => ({
+      if (this.apiKey && (await runtimeCluster()) === 'mainnet-beta') {
+        let url = `${this.baseUrl}/addresses/${address}/transactions?api-key=${this.apiKey}&limit=${limit}`;
+        if (before) url += `&before=${before}`;
+        if (type) url += `&type=${type}`;
+        const response = await fetch(url);
+        if (response.ok) {
+          const data = await response.json();
+          return data.map((tx: any) => {
+            const transfers = normalizeHeliusTransfers(tx);
+            return {
+              signature: tx.signature,
+              timestamp: tx.timestamp * 1000,
+              type: tx.type,
+              status: tx.err ? 'failed' : 'success',
+              fee: tx.fee,
+              feePayer: tx.feePayer,
+              instructions: tx.instructions,
+              events: tx.events || [],
+              tokenTransfers: transfers.tokenTransfers,
+              nativeTransfers: transfers.nativeTransfers,
+            };
+          });
+        }
+      }
+
+      const connection = await this.conn();
+      const sigs = await connection.getSignaturesForAddress(new PublicKey(address), {
+        limit,
+        before,
+      });
+      const parsed = await fetchParsedTransactions(connection, sigs.map((sig) => sig.signature));
+      return sigs.map((sig, index) => {
+        const tx = parsed[index];
+        if (!tx) {
+          return {
+            signature: sig.signature,
+            timestamp: (sig.blockTime ?? 0) * 1000,
+            type: 'unknown',
+            status: sig.err ? 'failed' : 'success',
+            fee: 0,
+            feePayer: address,
+            instructions: [],
+            events: [],
+            nativeTransfers: [],
+            tokenTransfers: [],
+          };
+        }
+        const activity = activityFromParsedTx(tx, address);
+        return {
           signature: sig.signature,
-          timestamp: (sig.blockTime ?? 0) * 1000,
-          type: 'unknown',
-          status: sig.err ? 'failed' : 'success',
-          fee: 0,
+          timestamp: (tx.blockTime ?? sig.blockTime ?? 0) * 1000,
+          type: activity.type,
+          status: tx.meta?.err || sig.err ? 'failed' : 'success',
+          fee: tx.meta?.fee ?? 0,
           feePayer: address,
           instructions: [],
           events: [],
-          nativeTransfers: [],
-          tokenTransfers: [],
-        }));
-      }
-
-      let url = `${this.baseUrl}/addresses/${address}/transactions?api-key=${this.apiKey}&limit=${limit}`;
-      if (before) url += `&before=${before}`;
-      if (type) url += `&type=${type}`;
-
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`Helius API error: ${response.statusText}`);
-      }
-
-      const data = await response.json();
-      return data.map((tx: any) => ({
-        signature: tx.signature,
-        timestamp: tx.timestamp * 1000,
-        type: tx.type,
-        status: tx.err ? 'failed' : 'success',
-        fee: tx.fee,
-        feePayer: tx.feePayer,
-        instructions: tx.instructions,
-        events: tx.events || [],
-        tokenTransfers: tx.tokenTransfers,
-        nativeTransfers: tx.nativeTransfers
-      }));
+          nativeTransfers: activity.nativeTransfers,
+          tokenTransfers: activity.tokenTransfers,
+        };
+      });
     } catch (error) {
       console.error('Error fetching transaction history:', error);
       return [];

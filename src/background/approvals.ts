@@ -1,7 +1,7 @@
 import type { ApprovalKind, PendingApproval } from '../lib/messages';
 
-const SESSION_PENDING_KEY = 'lumen_pending';
-const SESSION_RESULT_KEY = 'lumen_approval_results';
+const SESSION_PENDING_KEY = 'cinder_pending';
+const SESSION_RESULT_KEY = 'cinder_approval_results';
 
 export type ApprovalResult =
   | { status: 'pending' }

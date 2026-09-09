@@ -1,25 +1,37 @@
-import React, { useState } from 'react';
+import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
+import { WALLET_NAME, WALLET_VERSION, type Cluster } from '../../config/constants';
+import { useInvalidateWalletData } from '../../hooks/useWalletQueries';
 import { extensionClient } from '../../messaging/client';
 import {
-    changePassword,
-    clearWalletData,
-    exportPrivateKey,
-    exportSeedPhrase,
-    initializeWallet
+  changePassword,
+  clearWalletData,
+  exportPrivateKey,
+  exportSeedPhrase,
+  initializeWallet,
 } from '../../store/slices/walletSlice';
+import { setCluster, setHideSmallBalances } from '../../store/slices/uiSlice';
 import { useAppDispatch, useAppSelector } from '../../store/store';
-import { PrimaryButton, SecondaryButton } from '../ui/Button';
+import { Banner } from '../ui/EmptyState';
+import { ConfirmDialog } from '../ui/ConfirmDialog';
+import { DangerButton, PrimaryButton, SecondaryButton } from '../ui/Button';
 import { Card, CardContent } from '../ui/Card';
-import { Select, TextField } from '../ui/Input';
+import { FieldLabel, PasswordField, Select } from '../ui/Input';
+import { Icon } from '../ui/Icon';
 import { Modal, ModalContent, ModalFooter, ModalHeader } from '../ui/Modal';
 
-export const Settings: React.FC = () => {
+export function Settings() {
   const dispatch = useAppDispatch();
-  const { accounts, activeAccountIndex } = useAppSelector(state => state.wallet);
+  const { accounts, activeAccountIndex } = useAppSelector((state) => state.wallet);
+  const hideSmallBalances = useAppSelector((state) => state.ui.hideSmallBalances);
+  const cluster = useAppSelector((state) => state.ui.cluster);
+  const address = accounts[activeAccountIndex]?.address;
+  const invalidate = useInvalidateWalletData();
   const [showSeedPhrase, setShowSeedPhrase] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [showPrivateKey, setShowPrivateKey] = useState(false);
+  const [confirmWipe, setConfirmWipe] = useState(false);
+  const [confirmCopySecret, setConfirmCopySecret] = useState<'seed' | 'key' | null>(null);
   const [password, setPassword] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -28,18 +40,20 @@ export const Settings: React.FC = () => {
   const [seedPhrase, setSeedPhrase] = useState('');
   const [privateKey, setPrivateKey] = useState('');
 
-  // Load auto-lock setting on mount
-  React.useEffect(() => {
-    extensionClient.getSettings().then((settings) => setAutoLockMinutes(settings.autoLockTimeout));
-  }, []);
+  useEffect(() => {
+    extensionClient.getSettings().then((settings) => {
+      setAutoLockMinutes(settings.autoLockTimeout);
+      dispatch(setHideSmallBalances(settings.hideSmallBalances));
+      dispatch(setCluster(settings.cluster));
+    });
+  }, [dispatch]);
 
   const handleExportSeedPhrase = async () => {
     try {
       const result = await dispatch(exportSeedPhrase(password)).unwrap();
       setSeedPhrase(result.seedPhrase);
       setPassword('');
-      toast.success('Seed phrase retrieved successfully');
-    } catch (error) {
+    } catch {
       toast.error('Invalid password');
       setPassword('');
     }
@@ -50,80 +64,74 @@ export const Settings: React.FC = () => {
       toast.error('Passwords do not match');
       return;
     }
-    
     if (newPassword.length < 8) {
       toast.error('Password must be at least 8 characters');
       return;
     }
-
     try {
-      await dispatch(changePassword({ 
-        currentPassword, 
-        newPassword 
-      })).unwrap();
-      
+      await dispatch(changePassword({ currentPassword, newPassword })).unwrap();
       setShowChangePassword(false);
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
-      toast.success('Password changed successfully');
-    } catch (error) {
+      toast.success('Password changed');
+    } catch {
       toast.error('Current password is incorrect');
     }
   };
 
   const handleExportPrivateKey = async () => {
     try {
-      const result = await dispatch(exportPrivateKey({ 
-        password, 
-        accountIndex: activeAccountIndex 
-      })).unwrap();
-      
+      const result = await dispatch(exportPrivateKey({ password, accountIndex: activeAccountIndex })).unwrap();
       setPrivateKey(result.privateKey);
       setPassword('');
-      toast.success('Private key exported successfully');
-    } catch (error) {
+    } catch {
       toast.error('Invalid password');
       setPassword('');
     }
   };
 
   const handleClearData = async () => {
-    if (window.confirm('This will remove all wallet data. Make sure you have backed up your seed phrase! Continue?')) {
-      try {
-        await dispatch(clearWalletData()).unwrap();
-        
-        // Reinitialize to go back to welcome screen
-        dispatch(initializeWallet());
-        
-        toast.success('Wallet data cleared');
-      } catch (error) {
-        toast.error('Failed to clear data');
-      }
+    try {
+      await dispatch(clearWalletData()).unwrap();
+      dispatch(initializeWallet());
+      toast.success('Wallet data cleared');
+    } catch {
+      toast.error('Failed to clear data');
     }
   };
 
   const handleAutoLockChange = async (minutes: number) => {
     setAutoLockMinutes(minutes);
     await extensionClient.updateSettings({ autoLockTimeout: minutes });
-    toast.success('Auto-lock timeout updated');
+    toast.success('Auto-lock updated');
+  };
+
+  const handleHideSmall = async (next: boolean) => {
+    dispatch(setHideSmallBalances(next));
+    await extensionClient.updateSettings({ hideSmallBalances: next });
+  };
+
+  const handleClusterChange = async (next: Cluster) => {
+    dispatch(setCluster(next));
+    await extensionClient.updateSettings({ cluster: next });
+    invalidate(address);
+    toast.success(next === 'devnet' ? 'Using Solana Devnet' : 'Using Solana Mainnet');
   };
 
   return (
-    <div className="px-4 pb-4 space-y-4">
-      {/* Security Section */}
+    <div className="space-y-4 px-4 pb-6 pt-4">
+      <h2 className="text-lg font-semibold tracking-tight">Settings</h2>
+
       <Card>
         <CardContent className="space-y-4">
-          <h3 className="text-sm font-medium text-fg-1">Security</h3>
-          
-          {/* Auto-lock */}
+          <h3 className="text-[11px] uppercase tracking-[0.16em] text-fg-2">Security</h3>
           <div>
-            <label className="block text-sm text-fg-2 mb-2">
-              Auto-lock after
-            </label>
+            <FieldLabel>Auto-lock after</FieldLabel>
             <Select
               value={autoLockMinutes}
               onChange={(e) => handleAutoLockChange(Number(e.target.value))}
+              data-testid="settings-autolock"
             >
               <option value={5}>5 minutes</option>
               <option value={15}>15 minutes</option>
@@ -132,285 +140,249 @@ export const Settings: React.FC = () => {
               <option value={0}>Never</option>
             </Select>
           </div>
-
-          {/* Change Password */}
-          <SettingRow
-            onClick={() => setShowChangePassword(true)}
-            title="Change Password"
-          />
-        </CardContent>
-      </Card>
-
-      {/* Backup Section */}
-      <Card>
-        <CardContent className="space-y-4">
-          <h3 className="text-sm font-medium text-fg-1">Backup</h3>
-          
-          <SettingRow
-            onClick={() => setShowSeedPhrase(true)}
-            title="Show Seed Phrase"
-            description="View your recovery phrase"
-          />
-
-          <SettingRow
-            onClick={() => setShowPrivateKey(true)}
-            title="Export Private Key"
-            description="For current account only"
-          />
-        </CardContent>
-      </Card>
-
-      {/* Network Section */}
-      <Card>
-        <CardContent className="space-y-4">
-          <h3 className="text-sm font-medium text-fg-1">Network</h3>
-          
           <div>
-            <label className="block text-sm text-fg-2 mb-2">
-              RPC Endpoint
-            </label>
-            <Select defaultValue="mainnet">
-              <option value="mainnet">Mainnet (Helius)</option>
+            <FieldLabel>Network</FieldLabel>
+            <Select
+              value={cluster}
+              onChange={(e) => handleClusterChange(e.target.value as Cluster)}
+              data-testid="settings-cluster"
+            >
               <option value="devnet">Devnet</option>
-              <option value="testnet">Testnet</option>
-              <option value="custom">Custom RPC</option>
+              <option value="mainnet-beta">Mainnet</option>
             </Select>
+            <p className="mt-1 text-xs text-fg-3">
+              Mainnet is for real SOL. Devnet is for testing only.
+            </p>
+          </div>
+          <label className="flex items-center justify-between gap-3 text-sm text-fg-0">
+            Hide small balances
+            <input
+              type="checkbox"
+              checked={hideSmallBalances}
+              onChange={(e) => handleHideSmall(e.target.checked)}
+              className="h-4 w-4 rounded border-white/20"
+            />
+          </label>
+          <SettingRow title="Change password" onClick={() => setShowChangePassword(true)} testId="settings-change-password" />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="space-y-4">
+          <h3 className="text-[11px] uppercase tracking-[0.16em] text-fg-2">Backup</h3>
+          <SettingRow title="Show seed phrase" description="Requires your password" onClick={() => setShowSeedPhrase(true)} testId="settings-show-seed" />
+          <SettingRow title="Export private key" description="Current account only" onClick={() => setShowPrivateKey(true)} />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="space-y-2 text-xs text-fg-2">
+          <h3 className="text-[11px] uppercase tracking-[0.16em]">About</h3>
+          <p>{WALLET_NAME} {WALLET_VERSION}</p>
+          <p>Solana wallet extension. Do not store funds you cannot afford to lose.</p>
+          <div className="flex flex-wrap gap-3 pt-1">
+            <a
+              className="text-brand-a underline-offset-2 hover:underline"
+              href={typeof chrome !== 'undefined' ? chrome.runtime.getURL('legal/privacy.html') : '/legal/privacy.html'}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Privacy
+            </a>
+            <a
+              className="text-brand-a underline-offset-2 hover:underline"
+              href={typeof chrome !== 'undefined' ? chrome.runtime.getURL('legal/terms.html') : '/legal/terms.html'}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Terms
+            </a>
+            <a
+              className="text-brand-a underline-offset-2 hover:underline"
+              href="https://github.com/freyja-934/wallet-browser-extension/issues"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Support
+            </a>
           </div>
         </CardContent>
       </Card>
 
-      {/* About Section */}
       <Card>
-        <CardContent className="space-y-4">
-          <h3 className="text-sm font-medium text-fg-1">About</h3>
-          
-          <div className="space-y-2 text-xs text-fg-2">
-            <p>Lumen 0.2.0</p>
-            <p>Solana wallet extension</p>
-            <div className="flex gap-4 pt-2">
-              <a href="#" className="text-brand-b hover:text-brand-a transition-colors">Terms</a>
-              <a href="#" className="text-brand-b hover:text-brand-a transition-colors">Privacy</a>
-              <a href="#" className="text-brand-b hover:text-brand-a transition-colors">GitHub</a>
-            </div>
-          </div>
+        <CardContent className="space-y-3">
+          <h3 className="text-[11px] uppercase tracking-[0.16em] text-ui-danger">Danger zone</h3>
+          <DangerButton onClick={() => setConfirmWipe(true)} className="w-full">
+            Clear all wallet data
+          </DangerButton>
         </CardContent>
       </Card>
 
-      {/* Danger Zone */}
-      <Card>
-        <CardContent className="space-y-4">
-          <h3 className="text-sm font-medium text-ui-danger">Danger Zone</h3>
-          
-          <button
-            onClick={handleClearData}
-            className="px-4 py-2 bg-ui-danger/10 text-ui-danger rounded-lg hover:bg-ui-danger/20 transition-colors font-medium text-sm"
-          >
-            Clear All Wallet Data
-          </button>
-        </CardContent>
-      </Card>
-
-      {/* Seed Phrase Modal */}
       <Modal isOpen={showSeedPhrase} onClose={() => { setShowSeedPhrase(false); setSeedPhrase(''); setPassword(''); }}>
         {!seedPhrase ? (
           <>
-            <ModalHeader>Enter Password to View Seed Phrase</ModalHeader>
+            <ModalHeader>Password required</ModalHeader>
             <ModalContent>
-              <TextField
-                type="password"
+              <PasswordField
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter your password"
+                placeholder="Password"
                 onKeyDown={(e) => e.key === 'Enter' && handleExportSeedPhrase()}
+                data-testid="settings-seed-password"
               />
             </ModalContent>
             <ModalFooter>
-              <div className="flex gap-3 w-full">
-                <SecondaryButton 
-                  onClick={() => { setShowSeedPhrase(false); setPassword(''); }}
-                  className="flex-1"
-                >
-                  Cancel
-                </SecondaryButton>
-                <PrimaryButton onClick={handleExportSeedPhrase} className="flex-1">
-                  Show Seed Phrase
-                </PrimaryButton>
+              <div className="flex gap-3">
+                <SecondaryButton onClick={() => { setShowSeedPhrase(false); setPassword(''); }} className="flex-1">Cancel</SecondaryButton>
+                <PrimaryButton onClick={handleExportSeedPhrase} className="flex-1" data-testid="settings-seed-submit">Show phrase</PrimaryButton>
               </div>
             </ModalFooter>
           </>
         ) : (
           <>
-            <ModalHeader>Your Seed Phrase</ModalHeader>
+            <ModalHeader>Recovery phrase</ModalHeader>
             <ModalContent className="space-y-4">
-              <div className="bg-ui-danger/10 border border-ui-danger/20 rounded-lg p-3">
-                <p className="text-sm text-ui-danger">
-                  ⚠️ Never share your seed phrase with anyone. Store it securely.
-                </p>
-              </div>
+              <Banner tone="danger">Never share these words. Anyone with them can move your funds.</Banner>
               <div className="grid grid-cols-3 gap-2">
                 {seedPhrase.split(' ').map((word, index) => (
-                  <div
-                    key={index}
-                    className="bg-bg-2 rounded-lg px-3 py-2 text-center"
-                  >
-                    <span className="text-xs text-fg-3">{index + 1}</span>
-                    <p className="font-medium text-fg-0">{word}</p>
+                  <div key={`${word}-${index}`} className="rounded-xl bg-white/5 px-2 py-2 text-center">
+                    <span className="text-[10px] text-fg-3">{index + 1}</span>
+                    <p className="font-mono text-xs" data-testid="settings-seed-word">{word}</p>
                   </div>
                 ))}
               </div>
             </ModalContent>
             <ModalFooter>
-              <div className="flex gap-3 w-full">
-                <SecondaryButton
-                  onClick={() => {
-                    navigator.clipboard.writeText(seedPhrase);
-                    toast.success('Seed phrase copied to clipboard');
-                  }}
-                  className="flex-1"
-                >
-                  Copy to Clipboard
-                </SecondaryButton>
-                <PrimaryButton
-                  onClick={() => { setShowSeedPhrase(false); setSeedPhrase(''); }}
-                  className="flex-1"
-                >
-                  Done
-                </PrimaryButton>
+              <div className="flex gap-3">
+                <SecondaryButton onClick={() => setConfirmCopySecret('seed')} className="flex-1">Copy</SecondaryButton>
+                <PrimaryButton onClick={() => { setShowSeedPhrase(false); setSeedPhrase(''); }} className="flex-1">Done</PrimaryButton>
               </div>
             </ModalFooter>
           </>
         )}
       </Modal>
 
-      {/* Change Password Modal */}
       <Modal isOpen={showChangePassword} onClose={() => { setShowChangePassword(false); setCurrentPassword(''); setNewPassword(''); setConfirmPassword(''); }}>
-        <ModalHeader>Change Password</ModalHeader>
+        <ModalHeader>Change password</ModalHeader>
         <ModalContent className="space-y-4">
           <div>
-            <label className="block text-sm text-fg-2 mb-1">Current Password</label>
-            <TextField
-              type="password"
+            <FieldLabel>Current</FieldLabel>
+            <PasswordField
               value={currentPassword}
               onChange={(e) => setCurrentPassword(e.target.value)}
+              data-testid="settings-current-password"
             />
           </div>
           <div>
-            <label className="block text-sm text-fg-2 mb-1">New Password</label>
-            <TextField
-              type="password"
+            <FieldLabel>New</FieldLabel>
+            <PasswordField
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
+              data-testid="settings-new-password"
             />
           </div>
           <div>
-            <label className="block text-sm text-fg-2 mb-1">Confirm New Password</label>
-            <TextField
-              type="password"
+            <FieldLabel>Confirm</FieldLabel>
+            <PasswordField
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
+              data-testid="settings-confirm-password"
             />
           </div>
         </ModalContent>
         <ModalFooter>
-          <div className="flex gap-3 w-full">
-            <SecondaryButton
-              onClick={() => { setShowChangePassword(false); setCurrentPassword(''); setNewPassword(''); setConfirmPassword(''); }}
-              className="flex-1"
-            >
-              Cancel
-            </SecondaryButton>
-            <PrimaryButton onClick={handleChangePassword} className="flex-1">
-              Change Password
-            </PrimaryButton>
+          <div className="flex gap-3">
+            <SecondaryButton onClick={() => setShowChangePassword(false)} className="flex-1">Cancel</SecondaryButton>
+            <PrimaryButton onClick={handleChangePassword} className="flex-1" data-testid="settings-password-save">Save</PrimaryButton>
           </div>
         </ModalFooter>
       </Modal>
 
-      {/* Private Key Modal */}
       <Modal isOpen={showPrivateKey} onClose={() => { setShowPrivateKey(false); setPrivateKey(''); setPassword(''); }}>
         {!privateKey ? (
           <>
-            <ModalHeader>Enter Password to Export Private Key</ModalHeader>
-            <ModalContent className="space-y-4">
-              <p className="text-sm text-fg-2">
-                This will export the private key for: {accounts[activeAccountIndex]?.name}
-              </p>
-              <TextField
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter your password"
-                onKeyDown={(e) => e.key === 'Enter' && handleExportPrivateKey()}
-              />
+            <ModalHeader>Password required</ModalHeader>
+            <ModalContent className="space-y-3">
+              <p className="text-sm text-fg-2">Export key for {accounts[activeAccountIndex]?.name}</p>
+              <PasswordField value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" onKeyDown={(e) => e.key === 'Enter' && handleExportPrivateKey()} />
             </ModalContent>
             <ModalFooter>
-              <div className="flex gap-3 w-full">
-                <SecondaryButton 
-                  onClick={() => { setShowPrivateKey(false); setPassword(''); }}
-                  className="flex-1"
-                >
-                  Cancel
-                </SecondaryButton>
-                <PrimaryButton onClick={handleExportPrivateKey} className="flex-1">
-                  Export Private Key
-                </PrimaryButton>
+              <div className="flex gap-3">
+                <SecondaryButton onClick={() => { setShowPrivateKey(false); setPassword(''); }} className="flex-1">Cancel</SecondaryButton>
+                <PrimaryButton onClick={handleExportPrivateKey} className="flex-1">Export</PrimaryButton>
               </div>
             </ModalFooter>
           </>
         ) : (
           <>
-            <ModalHeader>Private Key for {accounts[activeAccountIndex]?.name}</ModalHeader>
+            <ModalHeader>Private key</ModalHeader>
             <ModalContent className="space-y-4">
-              <div className="bg-ui-danger/10 border border-ui-danger/20 rounded-lg p-3">
-                <p className="text-sm text-ui-danger">
-                  ⚠️ Never share your private key. Anyone with this key can access your funds.
-                </p>
-              </div>
-              <div className="bg-bg-2 rounded-lg p-3 break-all">
-                <p className="font-mono text-sm text-fg-0">{privateKey}</p>
-              </div>
+              <Banner tone="danger">Anyone with this key can spend from this account.</Banner>
+              <p className="break-all rounded-2xl bg-white/5 p-3 font-mono text-xs">{privateKey}</p>
             </ModalContent>
             <ModalFooter>
-              <div className="flex gap-3 w-full">
-                <SecondaryButton
-                  onClick={() => {
-                    navigator.clipboard.writeText(privateKey);
-                    toast.success('Private key copied to clipboard');
-                  }}
-                  className="flex-1"
-                >
-                  Copy to Clipboard
-                </SecondaryButton>
-                <PrimaryButton
-                  onClick={() => { setShowPrivateKey(false); setPrivateKey(''); }}
-                  className="flex-1"
-                >
-                  Done
-                </PrimaryButton>
+              <div className="flex gap-3">
+                <SecondaryButton onClick={() => setConfirmCopySecret('key')} className="flex-1">Copy</SecondaryButton>
+                <PrimaryButton onClick={() => { setShowPrivateKey(false); setPrivateKey(''); }} className="flex-1">Done</PrimaryButton>
               </div>
             </ModalFooter>
           </>
         )}
       </Modal>
+
+      <ConfirmDialog
+        isOpen={confirmWipe}
+        title="Clear wallet data?"
+        body="This removes the vault from this browser. Make sure you have your seed phrase first."
+        confirmLabel="Clear data"
+        danger
+        onClose={() => setConfirmWipe(false)}
+        onConfirm={() => {
+          setConfirmWipe(false);
+          void handleClearData();
+        }}
+      />
+
+      <ConfirmDialog
+        isOpen={!!confirmCopySecret}
+        title="Copy secret?"
+        body="Clipboard apps can leak this. Only copy if you understand the risk."
+        confirmLabel="Copy"
+        danger
+        onClose={() => setConfirmCopySecret(null)}
+        onConfirm={() => {
+          const value = confirmCopySecret === 'seed' ? seedPhrase : privateKey;
+          navigator.clipboard.writeText(value);
+          toast.success('Copied');
+          setConfirmCopySecret(null);
+        }}
+      />
     </div>
   );
-};
+}
 
-function SettingRow({ title, description, onClick }: { title: string; description?: string; onClick: () => void }) {
+function SettingRow({
+  title,
+  description,
+  onClick,
+  testId,
+}: {
+  title: string;
+  description?: string;
+  onClick: () => void;
+  testId?: string;
+}) {
   return (
     <button
       onClick={onClick}
-      className="w-full text-left p-3 bg-bg-2 rounded-lg hover:bg-bg-1 border border-transparent hover:border-ui-border transition-all duration-fast"
+      data-testid={testId}
+      className="flex w-full items-center justify-between rounded-2xl bg-white/5 px-3 py-3 text-left hover:bg-white/8"
     >
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="font-medium text-fg-0">{title}</p>
-          {description && <p className="text-sm text-fg-2">{description}</p>}
-        </div>
-        <svg className="w-5 h-5 text-fg-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-        </svg>
+      <div>
+        <p className="text-sm text-fg-0">{title}</p>
+        {description && <p className="text-xs text-fg-2">{description}</p>}
       </div>
+      <Icon name="chevron" className="h-4 w-4 text-fg-3" />
     </button>
   );
 }
