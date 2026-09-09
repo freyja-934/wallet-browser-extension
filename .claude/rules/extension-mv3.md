@@ -1,0 +1,11 @@
+---
+paths:
+  - "src/background/**"
+  - "src/content/**"
+  - "manifest.json"
+---
+- Never set `isPhantom` or write `window.phantom`.
+- Content-script messages must be allowlisted; require `event.source === window` in the injected script.
+- Approvals use `chrome.windows.create`. Do not call `chrome.action.openPopup()` from the service worker.
+- The service worker is the keyring. Do not keep signing keys in the popup or content script.
+- Bind connect/sign requests to the requesting origin.

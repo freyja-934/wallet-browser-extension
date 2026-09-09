@@ -1,12 +1,25 @@
-// API Configuration
-export const HELIUS_API_KEY = '0991e593-a2d1-4db3-8685-e00494fb96cd';
-export const HELIUS_RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`;
+const optionalHeliusKey = (import.meta.env.VITE_HELIUS_API_KEY as string | undefined) || '';
 
-// Network Configuration
+export const PUBLIC_SOLANA_RPC = 'https://api.mainnet-beta.solana.com';
+export const PUBLIC_DEVNET_RPC = 'https://api.devnet.solana.com';
+
+export function getRpcUrl(): string {
+  if (optionalHeliusKey) {
+    return `https://mainnet.helius-rpc.com/?api-key=${optionalHeliusKey}`;
+  }
+  return PUBLIC_SOLANA_RPC;
+}
+
+export function getHeliusApiKey(): string {
+  return optionalHeliusKey;
+}
+
+export const HELIUS_RPC_URL = getRpcUrl();
+
 export const NETWORKS = {
   'mainnet-beta': {
     name: 'Mainnet Beta',
-    endpoint: HELIUS_RPC_URL,
+    endpoint: getRpcUrl(),
     chainId: 101,
   },
   'testnet': {
@@ -16,24 +29,19 @@ export const NETWORKS = {
   },
   'devnet': {
     name: 'Devnet',
-    endpoint: 'https://api.devnet.solana.com',
+    endpoint: PUBLIC_DEVNET_RPC,
     chainId: 103,
   },
 } as const;
 
-// API Endpoints
 export const API_ENDPOINTS = {
   COINGECKO_PRICE: 'https://api.coingecko.com/api/v3/simple/price',
   COINGECKO_TOKEN_PRICE: 'https://api.coingecko.com/api/v3/simple/token_price/solana',
-  JUPITER_QUOTE: 'https://quote-api.jup.ag/v6/quote',
-  JUPITER_SWAP: 'https://quote-api.jup.ag/v6/swap',
 };
 
-// Token Constants
 export const NATIVE_SOL_MINT = '11111111111111111111111111111111';
 export const WRAPPED_SOL_MINT = 'So11111111111111111111111111111111111111112';
 
-// UI Constants
 export const AUTO_LOCK_OPTIONS = [
   { value: 5, label: '5 minutes' },
   { value: 15, label: '15 minutes' },
@@ -51,15 +59,6 @@ export const SUPPORTED_CURRENCIES = [
   { code: 'CNY', symbol: '¥', name: 'Chinese Yuan' },
 ];
 
-// Transaction Constants
 export const DEFAULT_COMMITMENT = 'confirmed';
-export const MAX_RETRIES = 3;
-export const RETRY_DELAY = 1000; // milliseconds
-
-// Storage Keys
-export const STORAGE_KEYS = {
-  VAULT: 'wallet_vault',
-  SETTINGS: 'wallet_settings',
-  CACHE: 'wallet_cache',
-  SESSION: 'wallet_session',
-};
+export const WALLET_NAME = 'Lumen';
+export const WALLET_VERSION = '0.2.0';

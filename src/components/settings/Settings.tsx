@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import toast from 'react-hot-toast';
-import { secureStorage } from '../../services/storage';
+import { extensionClient } from '../../messaging/client';
 import {
     changePassword,
     clearWalletData,
@@ -30,7 +30,7 @@ export const Settings: React.FC = () => {
 
   // Load auto-lock setting on mount
   React.useEffect(() => {
-    secureStorage.getAutoLockTimeout().then(setAutoLockMinutes);
+    extensionClient.getSettings().then((settings) => setAutoLockMinutes(settings.autoLockTimeout));
   }, []);
 
   const handleExportSeedPhrase = async () => {
@@ -105,7 +105,7 @@ export const Settings: React.FC = () => {
 
   const handleAutoLockChange = async (minutes: number) => {
     setAutoLockMinutes(minutes);
-    await secureStorage.updateSettings({ autoLockTimeout: minutes });
+    await extensionClient.updateSettings({ autoLockTimeout: minutes });
     toast.success('Auto-lock timeout updated');
   };
 
@@ -185,8 +185,8 @@ export const Settings: React.FC = () => {
           <h3 className="text-sm font-medium text-fg-1">About</h3>
           
           <div className="space-y-2 text-xs text-fg-2">
-            <p>Version: 1.0.0</p>
-            <p>Built with ❤️ for Solana</p>
+            <p>Lumen 0.2.0</p>
+            <p>Solana wallet extension</p>
             <div className="flex gap-4 pt-2">
               <a href="#" className="text-brand-b hover:text-brand-a transition-colors">Terms</a>
               <a href="#" className="text-brand-b hover:text-brand-a transition-colors">Privacy</a>

@@ -1,5 +1,6 @@
-import { Connection } from '@solana/web3.js';
-import { HELIUS_API_KEY, HELIUS_RPC_URL } from '../config/constants';
+import { Connection, PublicKey } from '@solana/web3.js';
+import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
+import { getHeliusApiKey, getRpcUrl } from '../config/constants';
 
 export interface TokenBalance {
   mint: string;
@@ -85,43 +86,56 @@ class HeliusService {
   private baseUrl: string = 'https://api.helius.xyz/v0';
 
   constructor() {
-    this.apiKey = HELIUS_API_KEY;
-    this.connection = new Connection(HELIUS_RPC_URL);
+    this.apiKey = getHeliusApiKey();
+    this.connection = new Connection(getRpcUrl(), 'confirmed');
   }
 
-  /**
-   * Get token balances for a wallet
-   */
   async getTokenBalances(address: string): Promise<{
     nativeBalance: number;
     tokens: TokenBalance[];
   }> {
-    try {
-      const url = `${this.baseUrl}/addresses/${address}/balances?api-key=${this.apiKey}`;
-      const response = await fetch(url);
-      
-      if (!response.ok) {
-        throw new Error(`Helius API error: ${response.statusText}`);
+    if (this.apiKey) {
+      try {
+        const url = `${this.baseUrl}/addresses/${address}/balances?api-key=${this.apiKey}`;
+        const response = await fetch(url);
+        if (response.ok) {
+          const data = await response.json();
+          return {
+            nativeBalance: data.nativeBalance / 1e9,
+            tokens: data.tokens.map((token: any) => ({
+              mint: token.mint,
+              amount: token.amount,
+              decimals: token.decimals,
+              symbol: token.symbol,
+              name: token.name,
+              logoURI: token.logoURI,
+              tokenAccount: token.tokenAccount
+            }))
+          };
+        }
+      } catch {
+        /* fall through to RPC */
       }
-      
-      const data = await response.json();
-      
-      return {
-        nativeBalance: data.nativeBalance / 1e9, // Convert lamports to SOL
-        tokens: data.tokens.map((token: any) => ({
-          mint: token.mint,
-          amount: token.amount,
-          decimals: token.decimals,
-          symbol: token.symbol,
-          name: token.name,
-          logoURI: token.logoURI,
-          tokenAccount: token.tokenAccount
-        }))
-      };
-    } catch (error) {
-      console.error('Error fetching token balances:', error);
-      throw error;
     }
+
+    const pubkey = new PublicKey(address);
+    const [lamports, parsed] = await Promise.all([
+      this.connection.getBalance(pubkey),
+      this.connection.getParsedTokenAccountsByOwner(pubkey, { programId: TOKEN_PROGRAM_ID }),
+    ]);
+
+    return {
+      nativeBalance: lamports / 1e9,
+      tokens: parsed.value.map((entry) => {
+        const info = entry.account.data.parsed.info;
+        return {
+          mint: info.mint,
+          amount: String(info.tokenAmount.amount),
+          decimals: info.tokenAmount.decimals,
+          tokenAccount: entry.pubkey.toBase58(),
+        };
+      }),
+    };
   }
 
   /**
@@ -133,21 +147,19 @@ class HeliusService {
     page: number;
     limit: number;
   }> {
+    if (!this.apiKey) {
+      return { items: [], total: 0, page, limit };
+    }
     try {
       const url = `${this.baseUrl}/addresses/${address}/assets?api-key=${this.apiKey}&page=${page}&limit=${limit}`;
       const response = await fetch(url);
-      
       if (!response.ok) {
         throw new Error(`Helius API error: ${response.statusText}`);
       }
-      
       const data = await response.json();
-      
-      // Filter for NFTs (not fungible tokens)
-      const nfts = data.items.filter((item: any) => 
+      const nfts = data.items.filter((item: any) =>
         !item.token_info || item.token_info.supply === '1'
       );
-      
       return {
         items: nfts,
         total: data.total,
@@ -156,7 +168,7 @@ class HeliusService {
       };
     } catch (error) {
       console.error('Error fetching NFTs:', error);
-      throw error;
+      return { items: [], total: 0, page, limit };
     }
   }
 
@@ -173,22 +185,36 @@ class HeliusService {
   ): Promise<Transaction[]> {
     try {
       const { limit = 100, before, type } = options;
-      
+
+      if (!this.apiKey) {
+        const sigs = await this.connection.getSignaturesForAddress(new PublicKey(address), { limit });
+        return sigs.map((sig) => ({
+          signature: sig.signature,
+          timestamp: (sig.blockTime ?? 0) * 1000,
+          type: 'unknown',
+          status: sig.err ? 'failed' : 'success',
+          fee: 0,
+          feePayer: address,
+          instructions: [],
+          events: [],
+          nativeTransfers: [],
+          tokenTransfers: [],
+        }));
+      }
+
       let url = `${this.baseUrl}/addresses/${address}/transactions?api-key=${this.apiKey}&limit=${limit}`;
       if (before) url += `&before=${before}`;
       if (type) url += `&type=${type}`;
-      
+
       const response = await fetch(url);
-      
       if (!response.ok) {
         throw new Error(`Helius API error: ${response.statusText}`);
       }
-      
+
       const data = await response.json();
-      
       return data.map((tx: any) => ({
         signature: tx.signature,
-        timestamp: tx.timestamp * 1000, // Convert to milliseconds
+        timestamp: tx.timestamp * 1000,
         type: tx.type,
         status: tx.err ? 'failed' : 'success',
         fee: tx.fee,
@@ -200,7 +226,7 @@ class HeliusService {
       }));
     } catch (error) {
       console.error('Error fetching transaction history:', error);
-      throw error;
+      return [];
     }
   }
 

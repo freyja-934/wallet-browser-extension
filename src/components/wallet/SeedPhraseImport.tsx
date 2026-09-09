@@ -187,6 +187,7 @@ export const SeedPhraseImport: React.FC<SeedPhraseImportProps> = ({
             autoCorrect="off"
             autoCapitalize="off"
             spellCheck="false"
+            data-testid="seed-paste"
           />
         </div>
       ) : (
@@ -292,6 +293,7 @@ export const SeedPhraseImport: React.FC<SeedPhraseImportProps> = ({
         <button
           onClick={inputMode === 'paste' ? handlePasteSubmit : handleManualSubmit}
           className="px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium transition-colors"
+          data-testid="seed-import-submit"
         >
           Import Wallet
         </button>

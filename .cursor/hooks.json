@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [{ "command": "./scripts/agent-hooks/guard-shell.sh" }],
+    "preToolUse": [{ "command": "./scripts/agent-hooks/protect-files.sh" }]
+  }
+}

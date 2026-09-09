@@ -1,0 +1,51 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(just *)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(gh pr view*)",
+      "Bash(gh pr diff*)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)"
+    ]
+  },
+  "sandbox": {
+    "enabled": false,
+    "network": {
+      "allowedDomains": [
+        "registry.npmjs.org",
+        "registry.npmjs.com",
+        "github.com",
+        "api.github.com"
+      ]
+    }
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/scripts/agent-hooks/guard-shell.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/scripts/agent-hooks/protect-files.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

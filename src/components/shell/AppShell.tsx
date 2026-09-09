@@ -18,7 +18,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="flex items-center gap-3">
             <div className="h-7 w-7 rounded-full grad-solana shadow-press" />
             <div>
-              <span className="text-sm font-medium text-fg-0">Solana Wallet</span>
+              <span className="text-sm font-medium text-fg-0">Lumen</span>
               {activeAccount && (
                 <p className="text-[11px] text-fg-2">
                   {activeAccount.address.slice(0, 4)}...{activeAccount.address.slice(-4)}

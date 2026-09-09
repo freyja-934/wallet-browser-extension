@@ -1,5 +1,6 @@
 import QRCode from 'qrcode';
 import React from 'react';
+import toast from 'react-hot-toast';
 import { PrimaryButton, SecondaryButton } from '../ui/Button';
 import { Card, CardContent } from '../ui/Card';
 
@@ -26,9 +27,9 @@ export function ReceiveCard({ address, tokenSymbol }: ReceiveCardProps) {
     return `${addr.slice(0, 4)}...${addr.slice(-4)}`;
   };
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(address);
-    // TODO: Show toast
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(address);
+    toast.success('Address copied');
   };
 
   const handleShare = () => {
@@ -58,7 +59,7 @@ export function ReceiveCard({ address, tokenSymbol }: ReceiveCardProps) {
         </code>
         
         <div className="grid grid-cols-2 gap-3">
-          <SecondaryButton onClick={handleCopy}>
+          <SecondaryButton onClick={handleCopy} data-testid="receive-copy">
             Copy
           </SecondaryButton>
           <PrimaryButton onClick={handleShare}>

@@ -1,140 +1,69 @@
-# 🌟 Solana Wallet Browser Extension
+# Lumen
 
-A feature-complete Solana wallet browser extension with multi-chain architecture. Built with TypeScript, React, and Web3.js.
+A Solana Chrome extension (Manifest V3) with an encrypted keyring in the service worker, [Wallet Standard](https://github.com/wallet-standard/wallet-standard) injection, versioned-transaction signing, and simulation-based transaction preview.
 
-## ✨ Features
+This is a portfolio implementation — not Phantom, and it does not impersonate Phantom.
 
-### ✅ Implemented (Phases 1-3 + Settings)
-- 🔐 **Secure Wallet Management**: BIP39/BIP44 seed phrases, PBKDF2 encryption
-- 💰 **Token Management**: Real-time balances, USD pricing, send/receive
-- 🎨 **NFT Support**: Full NFT & cNFT display with collections
-- 📊 **Transaction History**: Enhanced transaction parsing
-- 🌐 **dApp Integration**: Phantom-compatible provider
-- 🔒 **Security**: Auto-lock, encrypted storage, session management
-- ⚙️ **Settings**: Password change, seed export, private key export, auto-lock timer
+## Architecture
 
-### 🚧 Coming Soon (Phase 4)
-- 🥩 Native SOL staking
-- 🔄 Token swaps via Jupiter
-- 🔐 Hardware wallet support
-- ⚡ Performance optimizations
-
-## 🚀 Quick Start
-
-### Installation
-```bash
-# The extension is already built and ready in the dist folder!
-
-# To load in Chrome:
-1. Open chrome://extensions/
-2. Enable "Developer mode"
-3. Click "Load unpacked"
-4. Select the `dist` folder
-5. Pin the extension to your toolbar
+```
+Page (Wallet Standard) → content script (allowlisted) → service worker keyring
+Popup / approval window → chrome.runtime.sendMessage → same keyring
+Vault: PBKDF2 + AES-GCM in chrome.storage.local
+Session: chrome.storage.session (cleared when the browser closes)
 ```
 
-### First Use
-1. Click extension icon
-2. Create new wallet or import existing
-3. Secure with strong password
-4. Start using your wallet!
+The popup never holds a `Keypair`. Approvals open `approve.html` via `chrome.windows.create`.
 
-See [QUICK_START.md](./QUICK_START.md) for detailed instructions.
+## Load unpacked
 
-## 📁 Documentation
-
-- **[Quick Start Guide](./QUICK_START.md)** - Get up and running fast
-- **[Implementation Summary](./IMPLEMENTATION_SUMMARY.md)** - What's been built
-- **[Implementation Plan](./implementation-plan.md)** - Original roadmap
-- **[Technical Guide](./technical-guide.md)** - Architecture details
-- **[API Reference](./api-reference.md)** - Helius & CoinGecko APIs
-
-## 🛠️ Development
-
-### Prerequisites
-- Node.js 18+
-- pnpm package manager
-- Chrome browser
-
-### Setup
 ```bash
-# Install dependencies
 pnpm install
-
-# Build extension
-pnpm build:extension
-
-# Development mode
-pnpm dev
+just ext    # or: pnpm build:extension
 ```
 
-### Project Structure
+1. Open `chrome://extensions`
+2. Enable Developer mode
+3. Load unpacked → select `dist/`
+4. Run `just dapp` and open http://localhost:5174 (file:// will not inject the provider)
+5. Connect → Sign message → Sign v0 transfer (approval window + simulation preview)
+
+Optional: set `VITE_HELIUS_API_KEY` in a local `.env` for richer NFT/history APIs. Public Solana RPC is the default. Never commit an API key.
+
+## What this demonstrates
+
+- MV3 service worker lifecycle and auto-lock (`chrome.alarms`)
+- BIP39 → BIP44 `m/44'/501'/n'/0'` derivation (`mnemonicToSeed`, not `Buffer.from(mnemonic)`)
+- Wallet Standard: `standard:connect`, `solana:signTransaction`, `solana:signAndSendTransaction`, `solana:signMessage`
+- Legacy + v0 transactions
+- Simulation preview (program names, `setAuthority` / approve warnings, unknown programs)
+- TanStack React Query for balances / NFTs / history
+
+## Commands
+
+```bash
+just setup      # pnpm install
+just check      # tsc + lint + vitest run
+just ext        # build loadable extension
+just dapp       # http://localhost:5174 test dApp
+just e2e        # Playwright: import, unlock, dApp, receive toast
 ```
-wallet-browser-extension/
-├── dist/               # Built extension (ready to use!)
-├── src/
-│   ├── background/     # Service worker
-│   ├── content/        # Content scripts
-│   ├── popup/          # Extension UI
-│   ├── components/     # React components
-│   ├── services/       # API services
-│   ├── store/          # Redux state
-│   └── lib/            # Core utilities
-└── manifest.json       # Extension manifest
-```
 
-## 🔧 Configuration
+## Extension e2e
 
-The wallet uses Helius RPC for reliability:
-```typescript
-const HELIUS_API_KEY = '0991e593-a2d1-4db3-8685-e00494fb96cd';
-```
+- `just e2e` loads Lumen into Playwright's bundled Chromium (`channel: 'chromium'`), not branded Google Chrome 152 (which removed `--load-extension`).
+- First time: `pnpm exec playwright install chromium`
+- Manual Load unpacked in Chrome remains a fallback.
 
-## 🎯 Key Features
+## Chrome click-through (after Load unpacked)
 
-### Token Management
-- View SOL and SPL token balances
-- Real-time USD values via CoinGecko
-- Send tokens with validation
-- Transaction history
+1. Create a wallet, close the popup, reopen — you should see Unlock, not Create
+2. Unlock, then `just dapp` → http://localhost:5174
+3. Connect (approval window) → Sign message → Sign v0 transfer (simulation preview)
+4. In the popup, Receive → Copy should toast “Address copied”
 
-### NFT Gallery
-- Grid and list views
-- Collection grouping
-- Compressed NFT support
-- Detailed metadata display
+## Security notes
 
-### Security
-- PBKDF2 + AES-256-GCM encryption
-- Auto-lock after inactivity
-- Secure session management
-- No keys leave the device
-
-### dApp Integration
-- Phantom-compatible API
-- `window.solana` provider
-- Transaction signing
-- Account management
-
-## 📊 Stats
-
-- **Bundle Size**: ~975KB (optimization planned)
-- **Load Time**: < 2 seconds
-- **APIs**: Helius, CoinGecko, Solana RPC
-- **Compatibility**: Chrome/Brave/Edge
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create your feature branch
-3. Commit your changes
-4. Push to the branch
-5. Open a pull request
-
-## 📝 License
-
-MIT License
-
----
-
-Built with ❤️ by the Solana community
+- Do not use this with mainnet funds you cannot lose
+- Rotate any previously committed RPC keys
+- The old `window.phantom` / `isPhantom` provider has been removed

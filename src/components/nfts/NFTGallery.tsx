@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import toast from 'react-hot-toast';
 import { setNftViewMode, setRefreshing } from '../../store/slices/uiSlice';
-import { fetchNFTs, NFT } from '../../store/slices/walletSlice';
+import { useNFTs } from '../../hooks/useWalletQueries';
+import { NFT } from '../../store/slices/walletSlice';
 import { useAppDispatch, useAppSelector } from '../../store/store';
 import { PrimaryButton, SecondaryButton } from '../ui/Button';
 import { Card, CardContent, CardHeader } from '../ui/Card';
@@ -11,22 +12,22 @@ import { NFTCard } from './NFTCard';
 
 export const NFTGallery: React.FC = () => {
   const dispatch = useAppDispatch();
-  const { nfts, nftCollections, isLoading } = useAppSelector(state => state.wallet);
+  const { accounts, activeAccountIndex } = useAppSelector(state => state.wallet);
+  const address = accounts[activeAccountIndex]?.address;
+  const { data, isLoading, refetch } = useNFTs(address);
+  const nfts = React.useMemo(() => data?.nfts ?? [], [data]);
+  const nftCollections = React.useMemo(() => data?.nftCollections ?? {}, [data]);
   const { nftViewMode, isRefreshing } = useAppSelector(state => state.ui);
   const [selectedCollection, setSelectedCollection] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedNFT, setSelectedNFT] = useState<NFT | null>(null);
 
-  useEffect(() => {
-    dispatch(fetchNFTs());
-  }, [dispatch]);
-
   const handleRefresh = async () => {
     dispatch(setRefreshing(true));
     try {
-      await dispatch(fetchNFTs()).unwrap();
+      await refetch();
       toast.success('NFTs refreshed!');
-    } catch (error) {
+    } catch {
       toast.error('Failed to refresh NFTs');
     } finally {
       dispatch(setRefreshing(false));

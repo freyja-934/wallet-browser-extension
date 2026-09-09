@@ -1,167 +1,228 @@
 /// <reference types="chrome" />
 
-// Service worker for handling extension background tasks
-console.log('Solana Wallet service worker initialized');
+import './buffer-polyfill';
+import {
+  Transaction,
+  VersionedTransaction,
+} from '@solana/web3.js';
+import { isExtensionMessageType, type PendingApproval } from '../lib/messages';
+import { deserializeTransaction, getInstructions, decodeInstruction, collectWarnings } from '../lib/tx-preview';
+import {
+  changePassword,
+  clearWallet,
+  createWallet,
+  exportPrivateKey,
+  exportSeed,
+  getPublicState,
+  getSettings,
+  lock,
+  registerAutoLock,
+  signMessage,
+  switchAccount,
+  unlock,
+  updateSettings,
+  getKeypair,
+} from './keyring';
+import {
+  enqueueApproval,
+  getApprovalResult,
+  getPending,
+  openUnlockWindow,
+  rejectApproval,
+  resolveApproval,
+} from './approvals';
+import { getConnection, sendTransfer } from './transfers';
 
-// Track active tabs and connections
-const activeTabs = new Set<number>();
-const portConnections = new Map<string, chrome.runtime.Port>();
+registerAutoLock();
 
-// Listen for extension installation
-chrome.runtime.onInstalled.addListener((details) => {
-  console.log('Extension installed:', details);
-  
-  // Set default storage values
-  chrome.storage.local.set({
-    isInitialized: false,
-    network: 'mainnet-beta',
-  });
+console.log('Lumen service worker initialized');
+
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.storage.local.set({ network: 'mainnet-beta' });
 });
 
-// Handle messages from content scripts and popup
-chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
-  console.log('Background received message:', request.type);
-  
-  // Handle async responses
-  (async () => {
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  const type = request?.type as string;
+  if (!type || !isExtensionMessageType(type)) {
+    sendResponse({ success: false, error: 'Unknown message type' });
+    return false;
+  }
+
+  const origin = request.origin || sender.origin || sender.url || '';
+
+  void (async () => {
     try {
-      switch (request.type) {
-        case 'WALLET_CONNECT':
-          // Handle wallet connection request from dApp
-          const connected = await handleWalletConnect(request.origin);
-          sendResponse({ success: true, connected });
-          break;
-          
-        case 'SIGN_TRANSACTION':
-          // Handle transaction signing request
-          const signature = await handleSignTransaction(request.transaction);
-          sendResponse({ success: true, signature });
-          break;
-          
-        case 'GET_ACCOUNTS':
-          // Get current accounts
-          const accounts = await getAccounts();
-          sendResponse({ success: true, accounts });
-          break;
-          
-        default:
-          sendResponse({ success: false, error: 'Unknown message type' });
-      }
+      const result = await handleMessage(type, request, origin);
+      sendResponse({ success: true, ...result });
     } catch (error) {
-      console.error('Background script error:', error);
-      sendResponse({ 
-        success: false, 
-        error: error instanceof Error ? error.message : 'Unknown error' 
+      sendResponse({
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
       });
     }
   })();
-  
-  // Return true to indicate async response
+
   return true;
 });
 
-// Handle port connections for persistent communication
-chrome.runtime.onConnect.addListener((port) => {
-  console.log('Port connected:', port.name);
-  
-  const tabId = port.sender?.tab?.id;
-  if (!tabId) return;
-  
-  portConnections.set(`${tabId}-${port.name}`, port);
-  
-  port.onMessage.addListener((msg) => {
-    console.log('Port message:', msg);
-    // Handle persistent connection messages
-  });
-  
-  port.onDisconnect.addListener(() => {
-    console.log('Port disconnected:', port.name);
-    portConnections.delete(`${tabId}-${port.name}`);
-  });
-});
-
-// Handle tab updates
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status === 'complete' && tab.url) {
-    // Check if this is a dApp that might need wallet injection
-    if (shouldInjectWallet(tab.url)) {
-      activeTabs.add(tabId);
+async function handleMessage(
+  type: string,
+  request: Record<string, unknown>,
+  origin: string
+): Promise<Record<string, unknown>> {
+  switch (type) {
+    case 'GET_STATE':
+      return { state: await getPublicState() };
+    case 'GET_SETTINGS':
+      return { settings: await getSettings() };
+    case 'UPDATE_SETTINGS':
+      return { settings: await updateSettings((request.settings ?? {}) as object) };
+    case 'CREATE_WALLET':
+      return {
+        state: await createWallet(
+          String(request.password),
+          request.seedPhrase ? String(request.seedPhrase) : undefined
+        ),
+      };
+    case 'UNLOCK':
+      return { state: await unlock(String(request.password)) };
+    case 'LOCK':
+      return { state: await lock() };
+    case 'CLEAR_WALLET':
+      return { state: await clearWallet() };
+    case 'SWITCH_ACCOUNT':
+      return { state: await switchAccount(Number(request.index)) };
+    case 'CHANGE_PASSWORD':
+      await changePassword(String(request.currentPassword), String(request.newPassword));
+      return {};
+    case 'EXPORT_SEED':
+      return { seedPhrase: await exportSeed(String(request.password)) };
+    case 'EXPORT_PRIVATE_KEY':
+      return {
+        privateKey: await exportPrivateKey(String(request.password), Number(request.accountIndex ?? 0)),
+      };
+    case 'GET_ACCOUNTS': {
+      const state = await getPublicState();
+      if (state.isLocked) return { accounts: [] };
+      return { accounts: state.accounts.map((account) => account.address) };
     }
-  }
-});
-
-// Handle tab removal
-chrome.tabs.onRemoved.addListener((tabId) => {
-  activeTabs.delete(tabId);
-  // Clean up any connections for this tab
-  for (const [key, port] of portConnections.entries()) {
-    if (key.startsWith(`${tabId}-`)) {
-      port.disconnect();
-      portConnections.delete(key);
+    case 'WALLET_CONNECT': {
+      const state = await getPublicState();
+      if (state.isLocked) {
+        await openUnlockWindow();
+        throw new Error('Wallet is locked. Unlock Lumen and try again.');
+      }
+      return { pendingId: await enqueueApproval('connect', origin) };
     }
+    case 'WALLET_DISCONNECT':
+      return { disconnected: true };
+    case 'SIGN_MESSAGE': {
+      const message = Uint8Array.from(request.message as number[]);
+      return {
+        pendingId: await enqueueApproval('signMessage', origin, { messageBytes: [...message] }),
+      };
+    }
+    case 'SIGN_TRANSACTION':
+    case 'SIGN_AND_SEND_TRANSACTION': {
+      const bytes = Uint8Array.from(request.transaction as number[]);
+      const kind = type === 'SIGN_AND_SEND_TRANSACTION' ? 'signAndSendTransaction' : 'signTransaction';
+      return {
+        pendingId: await enqueueApproval(kind, origin, { transactionBytes: [...bytes] }),
+      };
+    }
+    case 'PREVIEW_TRANSACTION': {
+      const bytes = Uint8Array.from(request.transaction as number[]);
+      return previewTransaction(bytes);
+    }
+    case 'GET_PENDING_REQUEST': {
+      const pending = await getPending(String(request.id));
+      return { request: pending };
+    }
+    case 'POLL_APPROVAL':
+      return getApprovalResult(String(request.id));
+    case 'APPROVE_REQUEST': {
+      const pending = await getPending(String(request.id));
+      if (!pending) throw new Error('Approval expired — unlock and retry the dApp request');
+      await resolveApproval(pending.id, await fulfillApproval(pending));
+      return {};
+    }
+    case 'REJECT_REQUEST':
+      await rejectApproval(String(request.id), String(request.reason || 'User rejected'));
+      return {};
+    case 'SEND_TRANSFER': {
+      const signature = await sendTransfer({
+        to: String(request.to),
+        amountSmallest: String(request.amountSmallest),
+        mint: request.mint ? String(request.mint) : undefined,
+      });
+      return { signature };
+    }
+    default:
+      throw new Error('Unknown message type');
   }
-});
-
-// Helper functions
-async function handleWalletConnect(_origin: string): Promise<boolean> {
-  // Check if wallet is unlocked
-  const { isLocked } = await chrome.storage.local.get('isLocked');
-  
-  if (isLocked) {
-    // Open popup for user to unlock
-    chrome.action.openPopup();
-    return false;
-  }
-  
-  // TODO: Show connection approval dialog
-  return true;
 }
 
-async function handleSignTransaction(_transaction: any): Promise<string> {
-  // TODO: Implement transaction signing
-  // This will communicate with the popup for user approval
-  return 'mock-signature';
-}
-
-async function getAccounts(): Promise<string[]> {
-  const { accounts, isLocked } = await chrome.storage.local.get(['accounts', 'isLocked']);
-  
-  if (isLocked || !accounts) {
-    return [];
+async function fulfillApproval(request: PendingApproval): Promise<Record<string, unknown>> {
+  if (request.kind === 'connect') {
+    const next = await getPublicState();
+    return {
+      connected: true,
+      accounts: next.accounts.map((account) => account.address),
+      publicKey: next.accounts[next.activeAccountIndex]?.address,
+    };
   }
-  
-  return accounts.map((acc: any) => acc.address);
+  if (request.kind === 'signMessage') {
+    const signature = await signMessage(Uint8Array.from(request.messageBytes || []));
+    return { signature: [...signature] };
+  }
+  const bytes = Uint8Array.from(request.transactionBytes || []);
+  const signed = await signTransactionBytes(bytes);
+  if (request.kind === 'signAndSendTransaction') {
+    const connection = getConnection();
+    const signature = await connection.sendRawTransaction(signed, { skipPreflight: false });
+    return { signedTransaction: [...signed], signature };
+  }
+  return { signedTransaction: [...signed] };
 }
 
-function shouldInjectWallet(url: string): boolean {
-  // List of known dApp domains or patterns
-  const dAppPatterns = [
-    'localhost',
-    '127.0.0.1',
-    'solana',
-    'dex',
-    'defi',
-    'nft',
-    // Add more patterns as needed
-  ];
-  
+async function signTransactionBytes(bytes: Uint8Array): Promise<Uint8Array> {
+  const keypair = await getKeypair();
   try {
-    const urlObj = new URL(url);
-    return dAppPatterns.some(pattern => 
-      urlObj.hostname.includes(pattern) || 
-      urlObj.href.includes(pattern)
-    );
+    const tx = VersionedTransaction.deserialize(bytes);
+    tx.sign([keypair]);
+    return tx.serialize();
   } catch {
-    return false;
+    const tx = Transaction.from(bytes);
+    tx.partialSign(keypair);
+    return tx.serialize();
   }
 }
 
-// Listen for extension icon clicks
-chrome.action.onClicked.addListener((_tab) => {
-  // This won't fire if we have a default_popup set
-  // But useful for programmatic popup opening
-  console.log('Extension icon clicked');
-});
+async function previewTransaction(bytes: Uint8Array): Promise<Record<string, unknown>> {
+  const connection = getConnection();
+  const tx = deserializeTransaction(bytes);
+  const instructions = getInstructions(tx).map(decodeInstruction);
+  const warnings = collectWarnings(instructions);
 
-// Export for use in other background modules
-export { activeTabs, portConnections };
+  try {
+    const simulation = tx instanceof VersionedTransaction
+      ? await connection.simulateTransaction(tx, { sigVerify: false, innerInstructions: true })
+      : await connection.simulateTransaction(tx);
+    const err = simulation.value.err;
+    return {
+      success: !err,
+      error: err ? JSON.stringify(err) : undefined,
+      logs: simulation.value.logs ?? [],
+      unitsConsumed: simulation.value.unitsConsumed,
+      instructions,
+      warnings,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Simulation failed',
+      instructions,
+      warnings,
+    };
+  }
+}

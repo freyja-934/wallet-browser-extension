@@ -59,6 +59,7 @@ export const UnlockScreen: React.FC = () => {
                     autoFocus
                     disabled={isLoading}
                     className="pr-12"
+                    data-testid="unlock-password"
                   />
                   <button
                     type="button"
@@ -90,6 +91,7 @@ export const UnlockScreen: React.FC = () => {
                 type="submit"
                 disabled={isLoading || !password}
                 className="w-full"
+                data-testid="unlock-submit"
               >
                 {isLoading ? (
                   <span className="flex items-center justify-center">

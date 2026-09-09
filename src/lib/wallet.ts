@@ -1,19 +1,10 @@
-import { Keypair, PublicKey } from '@solana/web3.js';
+import { Keypair } from '@solana/web3.js';
 import * as bip39 from 'bip39';
 import { Buffer } from 'buffer';
-import { derivePath } from 'ed25519-hd-key';
+import type { WalletAccountInfo } from './messages';
 
-// BIP44 constants for Solana
 const SOLANA_COIN_TYPE = 501;
 const PURPOSE = 44;
-
-export interface WalletAccount {
-  address: string;
-  publicKey: PublicKey;
-  name: string;
-  derivationPath: string;
-  index: number;
-}
 
 export interface SeedPhraseInfo {
   mnemonic: string;
@@ -22,141 +13,139 @@ export interface SeedPhraseInfo {
   wordCount: number;
 }
 
-/**
- * Generates a new seed phrase with specified word count
- */
+/** BIP39 seed via WebCrypto so the MV3 service worker never hits Node `pbkdf2` / `stream`. */
+export async function mnemonicToSeedBuffer(mnemonic: string, passphrase = ''): Promise<Buffer> {
+  const enc = new TextEncoder();
+  const password = enc.encode(mnemonic.normalize('NFKD'));
+  const salt = enc.encode(`mnemonic${passphrase.normalize('NFKD')}`);
+  const key = await crypto.subtle.importKey('raw', password, 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt, iterations: 2048, hash: 'SHA-512' },
+    key,
+    512
+  );
+  return Buffer.from(bits);
+}
+
 export function generateSeedPhrase(wordCount: 12 | 24 = 12): SeedPhraseInfo {
   const strength = wordCount === 12 ? 128 : 256;
   const mnemonic = bip39.generateMnemonic(strength);
-  const seed = bip39.mnemonicToSeedSync(mnemonic);
-  
+
   return {
     mnemonic,
-    seed,
+    seed: Buffer.alloc(0),
     isValid: true,
     wordCount
   };
 }
 
-/**
- * Validates a seed phrase
- */
 export function validateSeedPhrase(mnemonic: string): SeedPhraseInfo {
   const isValid = bip39.validateMnemonic(mnemonic);
   const words = mnemonic.trim().split(/\s+/);
   const wordCount = words.length as 12 | 24;
-  
-  if (!isValid) {
-    return {
-      mnemonic,
-      seed: Buffer.alloc(0),
-      isValid: false,
-      wordCount
-    };
-  }
-  
-  const seed = bip39.mnemonicToSeedSync(mnemonic);
-  
+
   return {
     mnemonic,
-    seed,
-    isValid: true,
+    seed: Buffer.alloc(0),
+    isValid,
     wordCount
   };
 }
 
+const HARDENED = 0x80000000;
+
+async function hmacSha512(key: Uint8Array, data: Uint8Array): Promise<Uint8Array> {
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw',
+    new Uint8Array(key),
+    { name: 'HMAC', hash: 'SHA-512' },
+    false,
+    ['sign']
+  );
+  return new Uint8Array(await crypto.subtle.sign('HMAC', cryptoKey, new Uint8Array(data)));
+}
+
+async function slip10Derive(seed: Buffer, path: string): Promise<Uint8Array> {
+  const segments = path
+    .replace(/^m\//, '')
+    .split('/')
+    .map((part) => {
+      const hardened = part.endsWith("'");
+      const index = parseInt(hardened ? part.slice(0, -1) : part, 10);
+      return (hardened ? index + HARDENED : index) >>> 0;
+    });
+
+  let I = await hmacSha512(new TextEncoder().encode('ed25519 seed'), new Uint8Array(seed));
+  let key = I.slice(0, 32);
+  let chainCode = I.slice(32);
+
+  for (const index of segments) {
+    const data = new Uint8Array(1 + 32 + 4);
+    data.set(key, 1);
+    data[33] = (index >>> 24) & 0xff;
+    data[34] = (index >>> 16) & 0xff;
+    data[35] = (index >>> 8) & 0xff;
+    data[36] = index & 0xff;
+    I = await hmacSha512(chainCode, data);
+    key = I.slice(0, 32);
+    chainCode = I.slice(32);
+  }
+
+  return key;
+}
+
 /**
- * Derives a keypair from seed using BIP44 path
- * Path format: m/44'/501'/account'/change'
+ * Derives a keypair from a BIP39 seed (64 bytes), not from the mnemonic string.
+ * Path: m/44'/501'/account'/change'
  */
-export function deriveKeypairFromSeed(
+export async function deriveKeypairFromSeed(
   seed: Buffer,
   accountIndex: number = 0,
   change: number = 0
-): { keypair: Keypair; derivationPath: string } {
+): Promise<{ keypair: Keypair; derivationPath: string }> {
   const derivationPath = `m/${PURPOSE}'/${SOLANA_COIN_TYPE}'/${accountIndex}'/${change}'`;
-  
-  // Derive the seed for this path
-  const derivedSeed = derivePath(derivationPath, seed.toString('hex')).key;
+  const derivedSeed = await slip10Derive(seed, derivationPath);
   const keypair = Keypair.fromSeed(derivedSeed);
-  
+
   return {
     keypair,
     derivationPath
   };
 }
 
-/**
- * Generates multiple accounts from a seed phrase
- */
-export function generateAccountsFromSeed(
+export async function generateAccountsFromSeed(
   seed: Buffer,
   count: number = 1,
   startIndex: number = 0
-): WalletAccount[] {
-  const accounts: WalletAccount[] = [];
-  
+): Promise<WalletAccountInfo[]> {
+  const accounts: WalletAccountInfo[] = [];
+
   for (let i = 0; i < count; i++) {
     const accountIndex = startIndex + i;
-    const { keypair, derivationPath } = deriveKeypairFromSeed(seed, accountIndex);
-    
+    const { keypair, derivationPath } = await deriveKeypairFromSeed(seed, accountIndex);
+
     accounts.push({
       address: keypair.publicKey.toBase58(),
-      publicKey: keypair.publicKey,
       name: `Account ${accountIndex + 1}`,
       derivationPath,
       index: accountIndex
     });
   }
-  
+
   return accounts;
 }
 
-/**
- * Creates a keypair from a private key (for importing)
- */
-export function keypairFromPrivateKey(privateKey: string | Uint8Array): Keypair {
-  if (typeof privateKey === 'string') {
-    // Handle comma-separated format
-    if (privateKey.includes(',')) {
-      const bytes = privateKey.split(',').map(s => parseInt(s.trim(), 10));
-      return Keypair.fromSecretKey(new Uint8Array(bytes));
-    }
-    
-    // Handle base58 format
-    try {
-      const decoded = Buffer.from(privateKey, 'base64');
-      return Keypair.fromSecretKey(new Uint8Array(decoded));
-    } catch {
-      // Try hex format
-      const decoded = Buffer.from(privateKey, 'hex');
-      return Keypair.fromSecretKey(new Uint8Array(decoded));
-    }
-  }
-  
-  return Keypair.fromSecretKey(privateKey);
-}
-
-/**
- * Gets the word list for seed phrase generation
- */
 export function getWordList(): string[] {
   return bip39.wordlists.english;
 }
 
-/**
- * Checks if a word is valid in the BIP39 word list
- */
 export function isValidWord(word: string): boolean {
   return bip39.wordlists.english.includes(word.toLowerCase());
 }
 
-/**
- * Gets word suggestions for autocomplete
- */
 export function getWordSuggestions(prefix: string, limit: number = 5): string[] {
   if (!prefix) return [];
-  
+
   const lowerPrefix = prefix.toLowerCase();
   return bip39.wordlists.english
     .filter(word => word.startsWith(lowerPrefix))

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useBalances } from '../../hooks/useWalletQueries';
 import { hideReceive } from '../../store/slices/uiSlice';
 import { useAppDispatch, useAppSelector } from '../../store/store';
 import { Select } from '../ui/Input';
@@ -8,8 +9,10 @@ import { ReceiveCard } from './ReceiveCard';
 export const ReceiveModal: React.FC = () => {
   const dispatch = useAppDispatch();
   const { showReceiveModal } = useAppSelector(state => state.ui);
-  const { accounts, activeAccountIndex, tokens } = useAppSelector(state => state.wallet);
+  const { accounts, activeAccountIndex } = useAppSelector(state => state.wallet);
   const activeAccount = accounts[activeAccountIndex];
+  const { data } = useBalances(activeAccount?.address);
+  const tokens = data?.tokens ?? [];
   
   const [selectedToken, setSelectedToken] = useState('SOL');
 

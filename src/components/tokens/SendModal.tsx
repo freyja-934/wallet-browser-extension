@@ -1,8 +1,10 @@
 import { PublicKey } from '@solana/web3.js';
 import React, { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
+import { useBalances, useInvalidateWalletData } from '../../hooks/useWalletQueries';
+import { toSmallestUnit } from '../../lib/units';
 import { hideSend } from '../../store/slices/uiSlice';
-import { fetchBalances, sendTransaction } from '../../store/slices/walletSlice';
+import { sendTransaction } from '../../store/slices/walletSlice';
 import { useAppDispatch, useAppSelector } from '../../store/store';
 import { PrimaryButton, SecondaryButton } from '../ui/Button';
 import { Card, CardContent } from '../ui/Card';
@@ -22,7 +24,13 @@ interface SendModalProps {
 export const SendModal: React.FC<SendModalProps> = ({ preselectedToken }) => {
   const dispatch = useAppDispatch();
   const { showSendModal } = useAppSelector(state => state.ui);
-  const { solBalance, tokens } = useAppSelector(state => state.wallet);
+  const { accounts, activeAccountIndex } = useAppSelector(state => state.wallet);
+  const address = accounts[activeAccountIndex]?.address;
+  const { data } = useBalances(address);
+  const invalidate = useInvalidateWalletData();
+  const solBalance = data?.solBalance ?? 0;
+  const tokens = data?.tokens ?? [];
+  const [feeLamports] = useState(5000);
   
   const [step, setStep] = useState<'select' | 'amount' | 'review'>('amount');
   const [recipient, setRecipient] = useState('');
@@ -70,16 +78,15 @@ export const SendModal: React.FC<SendModalProps> = ({ preselectedToken }) => {
     setSending(true);
     
     try {
+      const amountSmallest = toSmallestUnit(amount, selectedToken.decimals).toString();
       const result = await dispatch(sendTransaction({
         to: recipient,
-        amount: amountNum,
+        amountSmallest,
         mint: selectedToken.mint
       })).unwrap();
       
       toast.success(`Transaction sent! Signature: ${result.signature.slice(0, 8)}...`);
-      
-      // Refresh balances
-      dispatch(fetchBalances());
+      invalidate(address);
       
       // Close modal
       handleClose();
@@ -222,7 +229,7 @@ export const SendModal: React.FC<SendModalProps> = ({ preselectedToken }) => {
                 <Row k="Send" v={`${amount} ${selectedToken.symbol}`} />
                 <Row k="From" v={`Main wallet`} />
                 <Row k="To" v={formatAddress(recipient)} />
-                <Row k="Network fee" v="~0.000005 SOL" />
+                <Row k="Network fee" v={`${(feeLamports / 1e9).toFixed(6)} SOL`} />
                 <div className="pt-2 border-t border-ui-border">
                   <Row k="Total" v={`${amount} ${selectedToken.symbol} + fees`} bold />
                 </div>

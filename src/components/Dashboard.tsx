@@ -24,7 +24,7 @@ export const Dashboard: React.FC = () => {
           
           {/* Quick Actions */}
           <div className="grid grid-cols-2 gap-3 mt-4">
-            <SecondaryButton onClick={() => dispatch(showReceive())}>
+            <SecondaryButton onClick={() => dispatch(showReceive())} data-testid="open-receive">
               <span className="flex items-center justify-center gap-2">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />

@@ -2,7 +2,6 @@ import React, { useEffect } from 'react';
 import { Toaster } from 'react-hot-toast';
 import { Dashboard } from '../components/Dashboard';
 import { LoadingScreen } from '../components/common/LoadingScreen';
-
 import { UnlockScreen } from '../components/wallet/UnlockScreen';
 import { WalletCreationFlow } from '../components/wallet/WalletCreationFlow';
 import { initializeWallet } from '../store/slices/walletSlice';
@@ -22,31 +21,21 @@ const toasterConfig = {
       boxShadow: '0 0 0 1px rgba(255,255,255,0.04), 0 8px 24px rgba(0,0,0,0.40)',
     },
     success: {
-      iconTheme: {
-        primary: '#2BD576',
-        secondary: '#111214',
-      },
-      style: {
-        borderLeft: '3px solid #2BD576',
-      },
+      iconTheme: { primary: '#2BD576', secondary: '#111214' },
+      style: { borderLeft: '3px solid #2BD576' },
     },
     error: {
-      iconTheme: {
-        primary: '#FF5A5A',
-        secondary: '#111214',
-      },
-      style: {
-        borderLeft: '3px solid #FF5A5A',
-      },
+      iconTheme: { primary: '#FF5A5A', secondary: '#111214' },
+      style: { borderLeft: '3px solid #FF5A5A' },
     },
   },
 };
 
 function App() {
   const dispatch = useAppDispatch();
-  const { isInitialized, isLocked, accounts } = useAppSelector(state => state.wallet);
+  const { isInitialized, isLocked, hasVault } = useAppSelector(state => state.wallet);
   const [isLoading, setIsLoading] = React.useState(true);
-  
+
   useEffect(() => {
     const init = async () => {
       try {
@@ -57,16 +46,14 @@ function App() {
         setIsLoading(false);
       }
     };
-    
     init();
   }, [dispatch]);
-  
+
   if (!isInitialized || isLoading) {
     return <LoadingScreen />;
   }
-  
-  // No wallet exists yet
-  if (accounts.length === 0 && isLocked) {
+
+  if (!hasVault) {
     return (
       <>
         <Toaster {...toasterConfig} />
@@ -74,8 +61,7 @@ function App() {
       </>
     );
   }
-  
-  // Wallet exists but is locked
+
   if (isLocked) {
     return (
       <>
@@ -84,8 +70,7 @@ function App() {
       </>
     );
   }
-  
-  // Wallet is unlocked
+
   return (
     <>
       <Toaster {...toasterConfig} />

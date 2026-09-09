@@ -1,216 +1,198 @@
-// This script is injected into the page context to provide window.solana
+import { SOLANA_MAINNET_CHAIN } from '@solana/wallet-standard-chains';
+import {
+  SolanaSignAndSendTransaction,
+  SolanaSignMessage,
+  SolanaSignTransaction,
+  type SolanaSignAndSendTransactionFeature,
+  type SolanaSignMessageFeature,
+  type SolanaSignTransactionFeature,
+} from '@solana/wallet-standard-features';
+import type { Wallet, WalletAccount, WalletVersion } from '@wallet-standard/base';
+import {
+  StandardConnect,
+  StandardDisconnect,
+  StandardEvents,
+  type StandardConnectFeature,
+  type StandardDisconnectFeature,
+  type StandardEventsFeature,
+  type StandardEventsListeners,
+} from '@wallet-standard/features';
+import { registerWallet } from '@wallet-standard/wallet';
+import { WALLET_CHANNEL } from '../lib/messages';
+import { WALLET_NAME, WALLET_VERSION } from '../config/constants';
+
 (() => {
-  console.log('Solana Wallet provider injected');
-  
-  // Message ID counter
   let messageId = 0;
-  
-  // Pending requests
-  const pendingRequests = new Map<number, {
-    resolve: (value: any) => void;
-    reject: (error: any) => void;
-  }>();
-  
-  // Provider state
-  let isConnected = false;
-  let publicKey: string | null = null;
-  
-  // Event emitter
-  class EventEmitter {
-    private events: Map<string, Set<Function>> = new Map();
-    
-    on(event: string, handler: Function): void {
-      if (!this.events.has(event)) {
-        this.events.set(event, new Set());
-      }
-      this.events.get(event)!.add(handler);
-    }
-    
-    off(event: string, handler: Function): void {
-      this.events.get(event)?.delete(handler);
-    }
-    
-    emit(event: string, ...args: any[]): void {
-      this.events.get(event)?.forEach(handler => {
-        try {
-          handler(...args);
-        } catch (error) {
-          console.error('Event handler error:', error);
+  const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+  const listeners: { [K in keyof StandardEventsListeners]?: Set<StandardEventsListeners[K]> } = {};
+
+  window.addEventListener('message', (event) => {
+    if (event.source !== window) return;
+    if (event.data?.channel !== WALLET_CHANNEL) return;
+    if (event.data.id === undefined || !pending.has(event.data.id)) return;
+    // Outbound requests include `type`; only inbound replies have response/error.
+    if (event.data.type) return;
+    if (event.data.response === undefined && event.data.error === undefined) return;
+    const entry = pending.get(event.data.id)!;
+    pending.delete(event.data.id);
+    if (event.data.error) entry.reject(new Error(event.data.error));
+    else entry.resolve(event.data.response);
+  });
+
+  function send(type: string, payload: Record<string, unknown> = {}): Promise<any> {
+    return new Promise((resolve, reject) => {
+      const id = messageId++;
+      pending.set(id, { resolve, reject });
+      window.postMessage({ channel: WALLET_CHANNEL, id, type, payload }, window.location.origin);
+      setTimeout(() => {
+        if (pending.has(id)) {
+          pending.delete(id);
+          reject(new Error('Request timeout'));
         }
-      });
-    }
+      }, 120000);
+    });
   }
-  
-  // Solana provider implementation
-  class SolanaProvider extends EventEmitter {
-    isPhantom = true; // Compatibility flag
-    isSolana = true;
-    
-    constructor() {
-      super();
-      this.setupMessageListener();
-    }
-    
-    private setupMessageListener(): void {
-      window.addEventListener('message', (event) => {
-        if (event.data?.channel !== 'solana-wallet') return;
-        
-        // Handle responses to requests
-        if (event.data.id !== undefined && pendingRequests.has(event.data.id)) {
-          const { resolve, reject } = pendingRequests.get(event.data.id)!;
-          pendingRequests.delete(event.data.id);
-          
-          if (event.data.error) {
-            reject(new Error(event.data.error));
-          } else {
-            resolve(event.data.response);
-          }
-        }
-        
-        // Handle events
-        if (event.data.type === 'accountsChanged') {
-          this.handleAccountsChanged(event.data.accounts);
-        }
-      });
-    }
-    
-    private sendMessage(type: string, payload: any = {}): Promise<any> {
-      return new Promise((resolve, reject) => {
-        const id = messageId++;
-        pendingRequests.set(id, { resolve, reject });
-        
-        window.postMessage({
-          channel: 'solana-wallet',
-          id,
-          type,
-          payload
-        }, '*');
-        
-        // Timeout after 30 seconds
-        setTimeout(() => {
-          if (pendingRequests.has(id)) {
-            pendingRequests.delete(id);
-            reject(new Error('Request timeout'));
-          }
-        }, 30000);
-      });
-    }
-    
-    private handleAccountsChanged(accounts: string[]): void {
-      if (accounts.length > 0) {
-        publicKey = accounts[0];
-        isConnected = true;
-      } else {
-        publicKey = null;
-        isConnected = false;
-      }
-      
-      this.emit('accountChanged', publicKey ? { publicKey } : null);
-    }
-    
-    // Public methods
-    async connect(): Promise<{ publicKey: string }> {
+
+  function emit<E extends keyof StandardEventsListeners>(event: E, ...args: Parameters<StandardEventsListeners[E]>) {
+    listeners[event]?.forEach((handler) => {
       try {
-        const response = await this.sendMessage('WALLET_CONNECT');
-        
-        if (response.success && response.connected) {
-          const accountsResponse = await this.sendMessage('GET_ACCOUNTS');
-          if (accountsResponse.success && accountsResponse.accounts.length > 0) {
-            publicKey = accountsResponse.accounts[0];
-            isConnected = true;
-            this.emit('connect', { publicKey });
-            return { publicKey: publicKey! };
-          }
-        }
-        
-        throw new Error('Failed to connect wallet');
+        (handler as (...a: unknown[]) => void)(...args);
       } catch (error) {
-        this.emit('disconnect');
-        throw error;
+        console.error('Lumen event handler error', error);
       }
-    }
-    
-    async disconnect(): Promise<void> {
-      publicKey = null;
-      isConnected = false;
-      this.emit('disconnect');
-    }
-    
-    async signTransaction(transaction: any): Promise<any> {
-      if (!isConnected) {
-        throw new Error('Wallet not connected');
-      }
-      
-      const response = await this.sendMessage('SIGN_TRANSACTION', {
-        transaction: transaction.serialize({ requireAllSignatures: false })
-      });
-      
-      if (response.success) {
-        return response.signature;
-      }
-      
-      throw new Error('Failed to sign transaction');
-    }
-    
-    async signAllTransactions(transactions: any[]): Promise<any[]> {
-      return Promise.all(transactions.map(tx => this.signTransaction(tx)));
-    }
-    
-    async signMessage(message: Uint8Array): Promise<{ signature: Uint8Array }> {
-      if (!isConnected) {
-        throw new Error('Wallet not connected');
-      }
-      
-      const response = await this.sendMessage('SIGN_MESSAGE', {
-        message: Array.from(message)
-      });
-      
-      if (response.success) {
-        return { signature: new Uint8Array(response.signature) };
-      }
-      
-      throw new Error('Failed to sign message');
-    }
-    
-    // Getters
-    get connected(): boolean {
-      return isConnected;
-    }
-    
-    get publicKey(): any {
-      if (!publicKey) return null;
-      
-      // Return a PublicKey-like object for compatibility
-      return {
-        toString: () => publicKey,
-        toBase58: () => publicKey,
-        toBuffer: () => {
-          // Convert base58 to buffer (simplified)
-          return new Uint8Array(32); // Placeholder
+    });
+  }
+
+  function bytesToAccount(address: string): WalletAccount {
+    return {
+      address,
+      publicKey: decodeAddress(address),
+      chains: [SOLANA_MAINNET_CHAIN],
+      features: [
+        SolanaSignTransaction,
+        SolanaSignAndSendTransaction,
+        SolanaSignMessage,
+      ],
+    };
+  }
+
+  function decodeAddress(address: string): Uint8Array {
+    try {
+      const alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+      const bytes = [0];
+      for (const char of address) {
+        const value = alphabet.indexOf(char);
+        if (value < 0) throw new Error('bad address');
+        let carry = value;
+        for (let i = 0; i < bytes.length; i++) {
+          const x = bytes[i] * 58 + carry;
+          bytes[i] = x & 0xff;
+          carry = x >> 8;
         }
-      };
+        while (carry) {
+          bytes.push(carry & 0xff);
+          carry >>= 8;
+        }
+      }
+      for (const char of address) {
+        if (char !== '1') break;
+        bytes.push(0);
+      }
+      return Uint8Array.from(bytes.reverse());
+    } catch {
+      return new Uint8Array(32);
     }
   }
-  
-  // Create and inject the provider
-  const provider = new SolanaProvider();
-  
-  // Define on window
-  Object.defineProperty(window, 'solana', {
-    value: provider,
-    writable: false,
-    configurable: false
-  });
-  
-  // Also define on window for compatibility
-  Object.defineProperty(window, 'phantom', {
-    value: { solana: provider },
-    writable: false,
-    configurable: false
-  });
-  
-  // Dispatch event to notify dApps
-  setTimeout(() => {
-    window.dispatchEvent(new Event('solana#initialized'));
-  }, 0);
+
+  let accounts: WalletAccount[] = [];
+
+  const wallet: Wallet = {
+    version: WALLET_VERSION as WalletVersion,
+    name: WALLET_NAME,
+    icon: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwJSIgc3RvcC1jb2xvcj0iIzk5NDVWRiIvPjxzdG9wIG9mZnNldD0iNTAlIiBzdG9wLWNvbG9yPSIjMTRGMTk1Ii8+PHN0b3Agb2Zmc2V0PSIxMDAlIiBzdG9wLWNvbG9yPSIjMDBDMkZGIi8+PC9saW5lYXJHcmFkaWVudD48L2RlZnM+PGNpcmNsZSBjeD0iMTYiIGN5PSIxNiIgcj0iMTYiIGZpbGw9InVybCgjZykiLz48L3N2Zz4=',
+    chains: [SOLANA_MAINNET_CHAIN],
+    get accounts() {
+      return accounts;
+    },
+    features: {
+      [StandardConnect]: {
+        version: '1.0.0',
+        connect: async () => {
+          const response = await send('WALLET_CONNECT');
+          if (!response?.success) throw new Error(response?.error || 'Connect failed');
+          const addresses: string[] = response.accounts ?? [];
+          accounts = addresses.map(bytesToAccount);
+          emit('change', { accounts });
+          return { accounts };
+        },
+      } satisfies StandardConnectFeature[typeof StandardConnect],
+      [StandardDisconnect]: {
+        version: '1.0.0',
+        disconnect: async () => {
+          await send('WALLET_DISCONNECT');
+          accounts = [];
+          emit('change', { accounts });
+        },
+      } satisfies StandardDisconnectFeature[typeof StandardDisconnect],
+      [StandardEvents]: {
+        version: '1.0.0',
+        on: (event, listener) => {
+          (listeners[event] ??= new Set()).add(listener);
+          return () => listeners[event]?.delete(listener);
+        },
+      } satisfies StandardEventsFeature[typeof StandardEvents],
+      [SolanaSignTransaction]: {
+        version: '1.0.0',
+        supportedTransactionVersions: ['legacy', 0],
+        signTransaction: async (...inputs) => {
+          const outputs = [];
+          for (const input of inputs) {
+            const bytes = input.transaction instanceof Uint8Array
+              ? input.transaction
+              : new Uint8Array(input.transaction as ArrayBuffer);
+            const response = await send('SIGN_TRANSACTION', { transaction: [...bytes] });
+            if (!response?.signedTransaction) throw new Error(response?.error || 'Sign failed');
+            outputs.push({ signedTransaction: Uint8Array.from(response.signedTransaction) });
+          }
+          return outputs;
+        },
+      } satisfies SolanaSignTransactionFeature[typeof SolanaSignTransaction],
+      [SolanaSignAndSendTransaction]: {
+        version: '1.0.0',
+        supportedTransactionVersions: ['legacy', 0],
+        signAndSendTransaction: async (...inputs) => {
+          const outputs = [];
+          for (const input of inputs) {
+            const bytes = input.transaction instanceof Uint8Array
+              ? input.transaction
+              : new Uint8Array(input.transaction as ArrayBuffer);
+            const response = await send('SIGN_AND_SEND_TRANSACTION', { transaction: [...bytes] });
+            if (!response?.signature) throw new Error(response?.error || 'Send failed');
+            outputs.push({ signature: Uint8Array.from(response.signature) });
+          }
+          return outputs;
+        },
+      } satisfies SolanaSignAndSendTransactionFeature[typeof SolanaSignAndSendTransaction],
+      [SolanaSignMessage]: {
+        version: '1.0.0',
+        signMessage: async (...inputs) => {
+          const outputs = [];
+          for (const input of inputs) {
+            const message = input.message instanceof Uint8Array ? input.message : new Uint8Array(input.message);
+            const response = await send('SIGN_MESSAGE', { message: [...message] });
+            if (!response?.signature) throw new Error(response?.error || 'Sign failed');
+            outputs.push({
+              signedMessage: message,
+              signature: Uint8Array.from(response.signature),
+            });
+          }
+          return outputs;
+        },
+      } satisfies SolanaSignMessageFeature[typeof SolanaSignMessage],
+    },
+  };
+
+  // Wallet Standard only — do not impersonate Phantom or write window.solana.
+  registerWallet(wallet);
+  window.dispatchEvent(new CustomEvent('lumen#initialized', { detail: { name: WALLET_NAME } }));
 })();

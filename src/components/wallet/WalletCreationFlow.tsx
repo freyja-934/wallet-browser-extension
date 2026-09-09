@@ -103,6 +103,7 @@ export const WalletCreationFlow: React.FC<WalletCreationFlowProps> = ({
                   <PrimaryButton 
                     onClick={handleCreateNew}
                     className="w-full"
+                    data-testid="create-new-wallet"
                   >
                     Create New Wallet
                   </PrimaryButton>
@@ -110,6 +111,7 @@ export const WalletCreationFlow: React.FC<WalletCreationFlowProps> = ({
                   <SecondaryButton
                     onClick={handleImportExisting}
                     className="w-full"
+                    data-testid="import-existing-wallet"
                   >
                     Import Existing Wallet
                   </SecondaryButton>

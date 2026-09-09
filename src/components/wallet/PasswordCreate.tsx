@@ -91,6 +91,7 @@ export const PasswordCreate: React.FC<PasswordCreateProps> = ({
               className="w-full px-4 py-3 pr-12 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
               placeholder="Enter a strong password"
               autoComplete="new-password"
+              data-testid="password-input"
             />
             <button
               type="button"
@@ -158,6 +159,7 @@ export const PasswordCreate: React.FC<PasswordCreateProps> = ({
               className="w-full px-4 py-3 pr-12 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
               placeholder="Confirm your password"
               autoComplete="new-password"
+              data-testid="password-confirm"
             />
             <button
               type="button"
@@ -230,6 +232,7 @@ export const PasswordCreate: React.FC<PasswordCreateProps> = ({
                 : 'bg-gray-300 text-gray-500 cursor-not-allowed'
               }
             `}
+            data-testid="password-submit"
           >
             Create Wallet
           </button>

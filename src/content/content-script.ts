@@ -1,77 +1,73 @@
 /// <reference types="chrome" />
 
-// Content script that runs in the context of web pages
-console.log('Solana Wallet content script loaded');
+import { isDappMessageType, WALLET_CHANNEL } from '../lib/messages';
 
-// Inject the provider script into the page
 const script = document.createElement('script');
 script.src = chrome.runtime.getURL('src/content/injected.js');
 script.onload = () => script.remove();
 (document.head || document.documentElement).appendChild(script);
 
-// Set up message relay between page and extension
+function keepAlive(): void {
+  const port = chrome.runtime.connect({ name: 'lumen-keepalive' });
+  port.onDisconnect.addListener(() => keepAlive());
+}
+keepAlive();
+
+function reply(
+  id: number,
+  payload: { response?: unknown; error?: string }
+): void {
+  window.postMessage({ channel: WALLET_CHANNEL, id, ...payload }, window.location.origin);
+}
+
+async function awaitApproval(pendingId: string): Promise<Record<string, unknown>> {
+  for (let i = 0; i < 600; i += 1) {
+    const poll = await chrome.runtime.sendMessage({ type: 'POLL_APPROVAL', id: pendingId }) as {
+      success?: boolean;
+      status?: string;
+      value?: Record<string, unknown>;
+      error?: string;
+    };
+    if (poll?.status === 'approved') {
+      return { success: true, ...(poll.value ?? {}) };
+    }
+    if (poll?.status === 'rejected') {
+      throw new Error(poll.error || 'User rejected');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error('Request timeout');
+}
+
 window.addEventListener('message', async (event) => {
-  // Only accept messages from the same window
   if (event.source !== window) return;
-  
-  // Check if it's a wallet message
-  if (event.data?.channel !== 'solana-wallet') return;
-  
-  console.log('Content script received message:', event.data);
-  
+  if (event.data?.channel !== WALLET_CHANNEL) return;
+  if (typeof event.data.id !== 'number') return;
+  // Ignore our own response/error posts so we don't echo "Unknown message type".
+  if (event.data.response !== undefined || event.data.error !== undefined) return;
+  if (!isDappMessageType(event.data.type)) {
+    reply(event.data.id, { error: 'Unknown message type' });
+    return;
+  }
+
   try {
-    // Forward to background script
     const response = await chrome.runtime.sendMessage({
       type: event.data.type,
       ...event.data.payload,
-      origin: window.location.origin
-    });
-    
-    // Send response back to page
-    window.postMessage({
-      channel: 'solana-wallet',
-      id: event.data.id,
-      response
-    }, '*');
+      origin: window.location.origin,
+    }) as { success?: boolean; pendingId?: string; error?: string } | undefined;
+
+    if (!response) {
+      throw new Error('No response from Lumen');
+    }
+    if (response.pendingId) {
+      reply(event.data.id, { response: await awaitApproval(response.pendingId) });
+      return;
+    }
+    reply(event.data.id, { response });
   } catch (error) {
-    console.error('Content script error:', error);
-    window.postMessage({
-      channel: 'solana-wallet',
-      id: event.data.id,
-      error: error instanceof Error ? error.message : 'Unknown error'
-    }, '*');
+    reply(event.data.id, {
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
   }
-});
-
-// Listen for account changes from background
-chrome.runtime.onMessage.addListener((request, _sender, _sendResponse) => {
-  if (request.type === 'ACCOUNTS_CHANGED') {
-    // Notify the page of account changes
-    window.postMessage({
-      channel: 'solana-wallet',
-      type: 'accountsChanged',
-      accounts: request.accounts
-    }, '*');
-  }
-});
-
-// Establish persistent connection with background
-const port = chrome.runtime.connect({ name: 'content-script' });
-
-port.onMessage.addListener((msg) => {
-  console.log('Port message from background:', msg);
-  
-  // Forward events to the page
-  if (msg.type === 'event') {
-    window.postMessage({
-      channel: 'solana-wallet',
-      type: msg.eventType,
-      data: msg.data
-    }, '*');
-  }
-});
-
-// Clean up on disconnect
-port.onDisconnect.addListener(() => {
-  console.log('Disconnected from background');
 });

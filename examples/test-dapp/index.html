@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Lumen test dApp</title>
+  <style>
+    body { font-family: ui-sans-serif, system-ui; background: #0b0b0c; color: #fff; padding: 24px; }
+    button { margin: 4px 8px 4px 0; padding: 8px 12px; border-radius: 8px; border: 0; cursor: pointer; }
+    pre { background: #16171a; padding: 12px; border-radius: 8px; overflow: auto; }
+  </style>
+</head>
+<body>
+  <h1>Lumen Wallet Standard test</h1>
+  <p>Serve this page with <code>just dapp</code> (http://localhost:5174), then load the Lumen extension.</p>
+  <div>
+    <button id="connect">Connect</button>
+    <button id="signMessage">Sign message</button>
+    <button id="signTx">Sign v0 transfer</button>
+  </div>
+  <pre id="log">waiting for wallet-standard:register-wallet…</pre>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

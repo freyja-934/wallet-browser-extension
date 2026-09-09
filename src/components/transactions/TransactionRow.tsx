@@ -11,7 +11,7 @@ export function TransactionRow({ transaction, address, onClick }: TransactionRow
   const amount = typeof transaction.amount === 'number' ? transaction.amount : parseFloat(transaction.amount || '0');
   
   const formatTime = (timestamp: number) => {
-    const date = new Date(timestamp * 1000);
+    const date = new Date(timestamp);
     const now = new Date();
     const diff = now.getTime() - date.getTime();
     const hours = diff / (1000 * 60 * 60);

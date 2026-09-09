@@ -1,0 +1,6 @@
+---
+globs:
+  - src/popup/**
+  - src/components/**
+---
+See `.claude/rules/popup-ui.md`.
