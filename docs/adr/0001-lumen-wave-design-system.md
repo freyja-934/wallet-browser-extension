@@ -1,8 +1,10 @@
 # ADR 0001 — Lumen Wave design system
 
+The product shipped as **Cinder Wallet**. “Lumen Wave” is the name of this visual decision, not the brand.
+
 ## Context
 
-The popup mixed a Solana-gradient dark theme with leftover light/indigo onboarding. Lumen needs one visual language that fits a 380×640 Chrome extension and matches the orange–purple flowing-light references.
+The popup mixed a Solana-gradient dark theme with leftover light/indigo onboarding. The wallet needs one visual language that fits a 380×600 Chrome extension and matches the orange–purple flowing-light references.
 
 ## Options considered
 
@@ -19,7 +21,7 @@ Ship a **Lumen Wave** system:
 - Action/glow: `#d1671f`, `#ff7b16`, `#ed690b`, `#773506`
 - Type: self-hosted Sora (UI) + IBM Plex Mono (addresses)
 - Home (tokens) loops `public/media/bg-video.mp4` (H.264 from the 0909 wave, muted). Unlock, welcome, loading, NFTs, activity, settings, and approval use the static `bg-img.jpg` (soft purple–orange wash). GIF is not used — it bands the fiber lines. HEVC source is re-encoded because Chrome `<video>` does not reliably play HEVC. `prefers-reduced-motion` also uses the still.
-- Popup is pinned to 380×640 (`html`/`body`/`#root` and `.popup-container`). Do not use `100vh` — Chrome treats that as the browser window and the popup scrollbar clips the bottom nav.
+- Popup is pinned to 380×600 (`html`/`body`/`#root` and `.popup-container`). Chrome action popups max out at 600px tall — 640 forced a page scrollbar that clipped the bottom nav and CTAs. Do not use `100vh` — Chrome treats that as the browser window.
 - `.glow-square` uses the specified inset orange glow (scaled; 340px is the authored size)
 - Bottom navigation; settings from the header; sheets instead of centered modals
 - No new UI kit dependency. Fonts and media are packaged (extension CSP forbids font CDNs)

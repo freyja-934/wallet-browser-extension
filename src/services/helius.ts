@@ -2,7 +2,8 @@ import { Connection, PublicKey, type ParsedTransactionWithMeta } from '@solana/w
 import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import { getHeliusApiKey, getRpcUrl } from '../config/constants';
 import { activityFromParsedTx, normalizeHeliusTransfers } from '../lib/parse-history';
-import { runtimeCluster, runtimeRpcUrl } from '../lib/runtime-rpc';
+import { rpcJson, withRotatedConnection } from '../lib/rpc-rotate';
+import { runtimeCluster } from '../lib/runtime-rpc';
 
 const NFT_INTERFACES = new Set([
   'V1_NFT',
@@ -124,24 +125,8 @@ class HeliusService {
     this.connection = new Connection(getRpcUrl(), 'confirmed');
   }
 
-  private async conn(): Promise<Connection> {
-    return new Connection(await runtimeRpcUrl(), 'confirmed');
-  }
-
   private async das<T>(method: string, params: unknown): Promise<T> {
-    const response = await fetch(await runtimeRpcUrl(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 'cinder', method, params }),
-    });
-    if (!response.ok) {
-      throw new Error(`DAS ${method} failed: ${response.status}`);
-    }
-    const json = await response.json() as { result?: T; error?: { message?: string } };
-    if (json.error) {
-      throw new Error(json.error.message || `DAS ${method} failed`);
-    }
-    return json.result as T;
+    return rpcJson<T>(await runtimeCluster(), method, params, { das: true });
   }
 
   async getTokenBalances(address: string): Promise<{
@@ -149,11 +134,13 @@ class HeliusService {
     tokens: TokenBalance[];
   }> {
     const pubkey = new PublicKey(address);
-    const connection = await this.conn();
-    const [lamports, parsed] = await Promise.all([
-      connection.getBalance(pubkey),
-      connection.getParsedTokenAccountsByOwner(pubkey, { programId: TOKEN_PROGRAM_ID }),
-    ]);
+    const cluster = await runtimeCluster();
+    const [lamports, parsed] = await withRotatedConnection(cluster, async (connection) =>
+      Promise.all([
+        connection.getBalance(pubkey),
+        connection.getParsedTokenAccountsByOwner(pubkey, { programId: TOKEN_PROGRAM_ID }),
+      ]),
+    );
 
     const tokens: TokenBalance[] = parsed.value
       .map((entry) => {
@@ -207,6 +194,9 @@ class HeliusService {
     page: number;
     limit: number;
   }> {
+    if (!this.apiKey) {
+      return { items: [], total: 0, page, limit };
+    }
     try {
       const das = await this.das<{ items?: NFTAsset[]; total?: number }>('getAssetsByOwner', {
         ownerAddress: address,
@@ -224,8 +214,8 @@ class HeliusService {
         page,
         limit,
       };
-    } catch (error) {
-      console.error('Error fetching NFTs:', error);
+    } catch {
+      // Public RPC has no DAS. Do not console.error — Chrome lists that as an extension error.
       return { items: [], total: 0, page, limit };
     }
   }
@@ -266,12 +256,15 @@ class HeliusService {
         }
       }
 
-      const connection = await this.conn();
-      const sigs = await connection.getSignaturesForAddress(new PublicKey(address), {
-        limit,
-        before,
+      const cluster = await runtimeCluster();
+      const { sigs, parsed } = await withRotatedConnection(cluster, async (connection) => {
+        const sigs = await connection.getSignaturesForAddress(new PublicKey(address), {
+          limit,
+          before,
+        });
+        const parsed = await fetchParsedTransactions(connection, sigs.map((sig) => sig.signature));
+        return { sigs, parsed };
       });
-      const parsed = await fetchParsedTransactions(connection, sigs.map((sig) => sig.signature));
       return sigs.map((sig, index) => {
         const tx = parsed[index];
         if (!tx) {
@@ -302,8 +295,7 @@ class HeliusService {
           tokenTransfers: activity.tokenTransfers,
         };
       });
-    } catch (error) {
-      console.error('Error fetching transaction history:', error);
+    } catch {
       return [];
     }
   }
@@ -318,19 +310,12 @@ class HeliusService {
     leaf: string;
     treeId: string;
   }> {
-    try {
-      const url = `${this.baseUrl}/assets/${assetId}/proof?api-key=${this.apiKey}`;
-      const response = await fetch(url);
-      
-      if (!response.ok) {
-        throw new Error(`Helius API error: ${response.statusText}`);
-      }
-      
-      return await response.json();
-    } catch (error) {
-      console.error('Error fetching asset proof:', error);
-      throw error;
+    const url = `${this.baseUrl}/assets/${assetId}/proof?api-key=${this.apiKey}`;
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Helius API error: ${response.status} ${response.statusText}`.trim());
     }
+    return await response.json();
   }
 
   /**

@@ -20,7 +20,7 @@ export function Dashboard() {
       {showSettingsModal ? (
         <Settings />
       ) : (
-        <div className="animate-fadeIn">
+        <div className="h-full min-h-0 animate-fadeIn">
           {activeView === 'tokens' && (
             <div className="px-4 pt-5">
               <BalanceCard />

@@ -28,7 +28,17 @@ Use Mainnet only with funds you can afford to lose. Devnet is for testing.
 
 ## Screenshots
 
-Need at least one 1280×800 or 640×400 PNG of the real popup (Unlock, Home, approval). Capture after Load unpacked on a production zip (`just store`). Icons 16/32/48/128 are already in `public/icons/`.
+Upload from `docs/store/screenshots/` (real popup, 1280×800, full bleed). Store allows 5:
+
+1. `01-unlock-1280x800.png`
+2. `02-home-1280x800.png`
+3. `03-nfts-1280x800.png`
+4. `04-activity-1280x800.png`
+5. `05-approve-1280x800.png`
+
+Also required: `promo-small-440x280.png`. Optional: `promo-marquee-1400x560.png`. Icon: `public/icons/icon-128.png`.
+
+Spares if you want to swap one in: `extra-receive-1280x800.png`, `extra-send-review-1280x800.png`. These shots are from the loaded unpacked build (devnet test wallet), not `just store`. `raw/` is local working crops and is gitignored.
 
 ## Privacy practices (dashboard)
 

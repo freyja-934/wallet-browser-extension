@@ -11,13 +11,14 @@ import {
   SystemProgram,
   Transaction,
 } from '@solana/web3.js';
-import { getCluster, rpcUrlFor } from '../config/constants';
+import { getCluster } from '../config/constants';
 import { errorMessage } from '../lib/errors';
+import { readyConnection } from '../lib/rpc-rotate';
 import { getSettings, getKeypair } from './keyring';
 
 export async function getConnection(): Promise<Connection> {
   const settings = await getSettings();
-  return new Connection(rpcUrlFor(settings.cluster ?? getCluster()), 'confirmed');
+  return readyConnection(settings.cluster ?? getCluster());
 }
 
 async function sendLegacy(connection: Connection, tx: Transaction, signer: Awaited<ReturnType<typeof getKeypair>>): Promise<string> {

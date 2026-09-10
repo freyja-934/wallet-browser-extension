@@ -9,13 +9,14 @@ const field =
   'w-full h-11 rounded-full bg-white/5 border border-white/12 px-4 text-[15px] text-fg-0 placeholder:text-fg-3 focus:outline-none focus:shadow-focus transition duration-fast disabled:opacity-50 disabled:cursor-not-allowed';
 
 export const TextField = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
-  function TextField({ className = '', ...rest }, ref) {
-    return <input ref={ref} {...rest} className={cx(field, className)} />;
+  function TextField({ className = '', name = 'query', ...rest }, ref) {
+    return <input ref={ref} name={name} {...rest} className={cx(field, className)} />;
   },
 );
 
 export function PasswordField({
   className = '',
+  name = 'password',
   ...rest
 }: InputHTMLAttributes<HTMLInputElement>) {
   const [visible, setVisible] = useState(false);
@@ -23,6 +24,7 @@ export function PasswordField({
     <div className="relative">
       <input
         {...rest}
+        name={name}
         type={visible ? 'text' : 'password'}
         className={cx(field, 'pr-12', className)}
       />
@@ -61,8 +63,12 @@ export function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
   );
 }
 
-export function FieldLabel({ children }: { children: ReactNode }) {
-  return <label className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-fg-2">{children}</label>;
+export function FieldLabel({ children, htmlFor }: { children: ReactNode; htmlFor?: string }) {
+  return (
+    <label htmlFor={htmlFor} className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-fg-2">
+      {children}
+    </label>
+  );
 }
 
 export function SegmentedControl<T extends string>({

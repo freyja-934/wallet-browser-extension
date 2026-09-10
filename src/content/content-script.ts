@@ -7,9 +7,33 @@ script.src = chrome.runtime.getURL('src/content/injected.js');
 script.onload = () => script.remove();
 (document.head || document.documentElement).appendChild(script);
 
+function extensionContextValid(): boolean {
+  try {
+    return Boolean(chrome.runtime?.id);
+  } catch {
+    return false;
+  }
+}
+
 function keepAlive(): void {
-  const port = chrome.runtime.connect({ name: 'lumen-keepalive' });
-  port.onDisconnect.addListener(() => keepAlive());
+  if (!extensionContextValid()) return;
+  let port: chrome.runtime.Port;
+  try {
+    port = chrome.runtime.connect({ name: 'lumen-keepalive' });
+  } catch {
+    return;
+  }
+  // connect() can set lastError immediately when the worker is gone (Reload).
+  if (chrome.runtime.lastError) {
+    if (!extensionContextValid()) return;
+    setTimeout(keepAlive, 1000);
+    return;
+  }
+  port.onDisconnect.addListener(() => {
+    void chrome.runtime.lastError;
+    if (!extensionContextValid()) return;
+    setTimeout(keepAlive, 1000);
+  });
 }
 keepAlive();
 

@@ -5,7 +5,20 @@ import { defineConfig } from 'vite';
 
 export default defineConfig({
   base: './',
-  plugins: [react()],
+  plugins: [
+    react(),
+    {
+      name: 'extension-strip-cors-hints',
+      transformIndexHtml: {
+        order: 'post',
+        handler(html) {
+          return html
+            .replace(/<link[^>]+rel="(?:module)?preload"[^>]*>\s*/gi, '')
+            .replace(/\s+crossorigin(?:="[^"]*")?/gi, '');
+        },
+      },
+    },
+  ],
   resolve: {
     alias: {
       '@': resolve(__dirname, './src'),
@@ -13,19 +26,18 @@ export default defineConfig({
     },
   },
   build: {
+    // chrome-extension:// preloads (and Vite modulepreload + crossorigin)
+    // log as unused "cross-origin extension resource mismatch" errors.
+    modulePreload: false,
     rollupOptions: {
       input: {
         popup: resolve(__dirname, 'index.html'),
         approve: resolve(__dirname, 'approve.html'),
         background: resolve(__dirname, 'src/background/service-worker.ts'),
-        content: resolve(__dirname, 'src/content/content-script.ts'),
-        injected: resolve(__dirname, 'src/content/injected.ts'),
       },
       output: {
         entryFileNames: (chunkInfo) => {
           if (chunkInfo.name === 'background') return 'src/background/service-worker.js';
-          if (chunkInfo.name === 'content') return 'src/content/content-script.js';
-          if (chunkInfo.name === 'injected') return 'src/content/injected.js';
           return '[name].js';
         },
         chunkFileNames: 'assets/[name]-[hash].js',

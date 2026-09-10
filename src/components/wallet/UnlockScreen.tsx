@@ -40,8 +40,10 @@ export function UnlockScreen() {
 
         <form onSubmit={handleSubmit} className="space-y-5">
           <div>
-            <FieldLabel>Password</FieldLabel>
+            <FieldLabel htmlFor="unlock-password">Password</FieldLabel>
             <PasswordField
+              id="unlock-password"
+              name="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="Enter password"

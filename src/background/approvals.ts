@@ -67,7 +67,7 @@ export async function enqueueApproval(
     url,
     type: 'popup',
     width: 400,
-    height: 680,
+    height: 720,
     focused: true,
   });
 
@@ -113,7 +113,7 @@ export async function openUnlockWindow(): Promise<void> {
     url: chrome.runtime.getURL('index.html'),
     type: 'popup',
     width: 400,
-    height: 680,
+    height: 640,
     focused: true,
   });
 }

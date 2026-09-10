@@ -29,13 +29,16 @@
 :root {
   --radius: 16px;
   --glow-src: 340px;
+  /* Chrome action popups cap at 600px. 640 forced a 40px page scroll that clipped nav and CTAs. */
+  --popup-width: 380px;
+  --popup-height: 600px;
 }
 
 html,
 body,
 #root {
-  width: 380px;
-  height: 640px;
+  width: var(--popup-width);
+  height: var(--popup-height);
   margin: 0;
   overflow: hidden;
   background: #010000;
@@ -48,10 +51,20 @@ body,
 
 .popup-container {
   position: relative;
-  width: 380px;
-  height: 640px;
+  width: var(--popup-width);
+  height: var(--popup-height);
   overflow: hidden;
   background: #010000;
+}
+
+/* Approval is a chrome.windows.create popup, not the toolbar action. Fill the
+   window so OS chrome cannot clip Reject/Approve the way a fixed 600px frame did. */
+html[data-surface='approve'],
+html[data-surface='approve'] body,
+html[data-surface='approve'] #root,
+html[data-surface='approve'] .popup-container {
+  width: 100%;
+  height: 100%;
 }
 
 .atmosphere-media {

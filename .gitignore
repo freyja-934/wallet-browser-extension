@@ -58,3 +58,6 @@ Thumbs.db
 .claude/settings.local.json
 .claude/worktrees/
 CLAUDE.local.md
+
+# Working crops for store tiles — ship only the composed 1280×800 / promo files
+docs/store/screenshots/raw/

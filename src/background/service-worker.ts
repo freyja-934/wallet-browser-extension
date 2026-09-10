@@ -35,6 +35,13 @@ import { getConnection, sendTransfer } from './transfers';
 
 registerAutoLock();
 
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== 'lumen-keepalive') return;
+  port.onDisconnect.addListener(() => {
+    void chrome.runtime.lastError;
+  });
+});
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   const type = request?.type as string;
   if (!type || !isExtensionMessageType(type)) {

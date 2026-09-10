@@ -1,4 +1,5 @@
-import { getCluster, rpcUrlFor, type Cluster } from '../config/constants';
+import { getCluster, rpcUrlsFor, type Cluster } from '../config/constants';
+import { prioritizeRpcUrls } from './rpc-rotate';
 import { extensionClient } from '../messaging/client';
 
 export async function runtimeCluster(): Promise<Cluster> {
@@ -10,6 +11,10 @@ export async function runtimeCluster(): Promise<Cluster> {
   }
 }
 
+export async function runtimeRpcUrls(): Promise<string[]> {
+  return rpcUrlsFor(await runtimeCluster());
+}
+
 export async function runtimeRpcUrl(): Promise<string> {
-  return rpcUrlFor(await runtimeCluster());
+  return prioritizeRpcUrls(await runtimeRpcUrls())[0];
 }

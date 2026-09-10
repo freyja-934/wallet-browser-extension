@@ -18,12 +18,31 @@ export function getNetworkLabel(): string {
   return labelFor(getCluster());
 }
 
-export function rpcUrlFor(cluster: Cluster): string {
-  if (optionalHeliusKey) {
-    const host = cluster === 'devnet' ? 'devnet' : 'mainnet';
-    return `https://${host}.helius-rpc.com/?api-key=${optionalHeliusKey}`;
-  }
+export function publicRpcUrlFor(cluster: Cluster): string {
   return cluster === 'devnet' ? PUBLIC_DEVNET_RPC : PUBLIC_SOLANA_RPC;
+}
+
+export function heliusRpcUrlFor(cluster: Cluster): string | undefined {
+  if (!optionalHeliusKey) return undefined;
+  const host = cluster === 'devnet' ? 'devnet' : 'mainnet';
+  return `https://${host}.helius-rpc.com/?api-key=${optionalHeliusKey}`;
+}
+
+export function isHeliusRpcUrl(url: string): boolean {
+  return url.includes('helius-rpc.com');
+}
+
+/** Helius first when a key is set, then the public Solana RPC. */
+export function rpcUrlsFor(cluster: Cluster): string[] {
+  const urls: string[] = [];
+  const helius = heliusRpcUrlFor(cluster);
+  if (helius) urls.push(helius);
+  urls.push(publicRpcUrlFor(cluster));
+  return urls;
+}
+
+export function rpcUrlFor(cluster: Cluster): string {
+  return rpcUrlsFor(cluster)[0];
 }
 
 export function getRpcUrl(): string {
