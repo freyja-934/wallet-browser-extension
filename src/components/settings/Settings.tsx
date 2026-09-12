@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import toast from 'react-hot-toast';
 import { WALLET_NAME, WALLET_VERSION, type Cluster } from '../../config/constants';
+import { useSettings, useUpdateSettings } from '../../hooks/useSettings';
 import { useInvalidateWalletData } from '../../hooks/useWalletQueries';
-import { extensionClient } from '../../messaging/client';
+import { DEFAULT_SETTINGS } from '../../lib/messages';
 import {
   changePassword,
   clearWalletData,
@@ -10,7 +11,6 @@ import {
   exportSeedPhrase,
   initializeWallet,
 } from '../../store/slices/walletSlice';
-import { setCluster, setHideSmallBalances } from '../../store/slices/uiSlice';
 import { useAppDispatch, useAppSelector } from '../../store/store';
 import { Banner } from '../ui/EmptyState';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
@@ -23,8 +23,14 @@ import { Modal, ModalContent, ModalFooter, ModalHeader } from '../ui/Modal';
 export function Settings() {
   const dispatch = useAppDispatch();
   const { accounts, activeAccountIndex } = useAppSelector((state) => state.wallet);
-  const hideSmallBalances = useAppSelector((state) => state.ui.hideSmallBalances);
-  const cluster = useAppSelector((state) => state.ui.cluster);
+  const reduxHideSmallBalances = useAppSelector((state) => state.ui.hideSmallBalances);
+  const reduxCluster = useAppSelector((state) => state.ui.cluster);
+  const { data: settings } = useSettings();
+  const updateSettings = useUpdateSettings();
+  // Redux is hydrated on popup init, so it is the fallback while the query settles.
+  const hideSmallBalances = settings?.hideSmallBalances ?? reduxHideSmallBalances;
+  const cluster = settings?.cluster ?? reduxCluster;
+  const autoLockMinutes = settings?.autoLockTimeout ?? DEFAULT_SETTINGS.autoLockTimeout;
   const address = accounts[activeAccountIndex]?.address;
   const invalidate = useInvalidateWalletData();
   const [showSeedPhrase, setShowSeedPhrase] = useState(false);
@@ -36,17 +42,8 @@ export function Settings() {
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [autoLockMinutes, setAutoLockMinutes] = useState(15);
   const [seedPhrase, setSeedPhrase] = useState('');
   const [privateKey, setPrivateKey] = useState('');
-
-  useEffect(() => {
-    extensionClient.getSettings().then((settings) => {
-      setAutoLockMinutes(settings.autoLockTimeout);
-      dispatch(setHideSmallBalances(settings.hideSmallBalances));
-      dispatch(setCluster(settings.cluster));
-    });
-  }, [dispatch]);
 
   const handleExportSeedPhrase = async () => {
     try {
@@ -102,21 +99,30 @@ export function Settings() {
   };
 
   const handleAutoLockChange = async (minutes: number) => {
-    setAutoLockMinutes(minutes);
-    await extensionClient.updateSettings({ autoLockTimeout: minutes });
-    toast.success('Auto-lock updated');
+    try {
+      await updateSettings.mutateAsync({ autoLockTimeout: minutes });
+      toast.success('Auto-lock updated');
+    } catch {
+      toast.error('Could not update auto-lock');
+    }
   };
 
   const handleHideSmall = async (next: boolean) => {
-    dispatch(setHideSmallBalances(next));
-    await extensionClient.updateSettings({ hideSmallBalances: next });
+    try {
+      await updateSettings.mutateAsync({ hideSmallBalances: next });
+    } catch {
+      toast.error('Could not update setting');
+    }
   };
 
   const handleClusterChange = async (next: Cluster) => {
-    dispatch(setCluster(next));
-    await extensionClient.updateSettings({ cluster: next });
-    invalidate(address);
-    toast.success(next === 'devnet' ? 'Using Solana Devnet' : 'Using Solana Mainnet');
+    try {
+      await updateSettings.mutateAsync({ cluster: next });
+      invalidate(address);
+      toast.success(next === 'devnet' ? 'Using Solana Devnet' : 'Using Solana Mainnet');
+    } catch {
+      toast.error('Could not switch network');
+    }
   };
 
   return (

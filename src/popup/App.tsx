@@ -1,9 +1,11 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { Toaster } from 'react-hot-toast';
 import { Dashboard } from '../components/Dashboard';
 import { LoadingScreen } from '../components/common/LoadingScreen';
 import { UnlockScreen } from '../components/wallet/UnlockScreen';
 import { WalletCreationFlow } from '../components/wallet/WalletCreationFlow';
+import { SETTINGS_QUERY_KEY } from '../hooks/useSettings';
 import { extensionClient } from '../messaging/client';
 import { setCluster, setHideSmallBalances } from '../store/slices/uiSlice';
 import { initializeWallet } from '../store/slices/walletSlice';
@@ -35,6 +37,7 @@ const toasterConfig = {
 
 function App() {
   const dispatch = useAppDispatch();
+  const queryClient = useQueryClient();
   const { isInitialized, isLocked, hasVault } = useAppSelector((state) => state.wallet);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -43,6 +46,9 @@ function App() {
       try {
         await dispatch(initializeWallet()).unwrap();
         const settings = await extensionClient.getSettings();
+        // Seed the React Query cache so useSettings() does not refetch, and keep
+        // the Redux mirror for the consumers that still read it (SHIP-8a).
+        queryClient.setQueryData(SETTINGS_QUERY_KEY, settings);
         dispatch(setCluster(settings.cluster));
         dispatch(setHideSmallBalances(settings.hideSmallBalances));
       } catch (error) {
@@ -52,7 +58,7 @@ function App() {
       }
     };
     init();
-  }, [dispatch]);
+  }, [dispatch, queryClient]);
 
   if (!isInitialized || isLoading) {
     return <LoadingScreen />;
