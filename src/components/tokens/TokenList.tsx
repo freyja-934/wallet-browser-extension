@@ -1,4 +1,3 @@
-import { WRAPPED_SOL_MINT } from '../../config/constants';
 import { useBalances } from '../../hooks/useWalletQueries';
 import { setRefreshing, showSend } from '../../store/slices/uiSlice';
 import { useAppDispatch, useAppSelector } from '../../store/store';
@@ -11,7 +10,7 @@ import { useState } from 'react';
 export function TokenList() {
   const dispatch = useAppDispatch();
   const { accounts, activeAccountIndex } = useAppSelector((state) => state.wallet);
-  const { hideSmallBalances, isRefreshing } = useAppSelector((state) => state.ui);
+  const { isRefreshing } = useAppSelector((state) => state.ui);
   const address = accounts[activeAccountIndex]?.address;
   const { data, isLoading, refetch } = useBalances(address);
   const solBalance = data?.solBalance ?? 0;
@@ -29,12 +28,9 @@ export function TokenList() {
       token.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       token.symbol?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       token.mint.toLowerCase().includes(searchQuery.toLowerCase());
-    const meetsBalanceThreshold = !hideSmallBalances || (token.usdValue && token.usdValue > 1);
-    return matchesSearch && meetsBalanceThreshold;
+    // Prices arrive in a separate query (SHIP-4 step 2); the small-balance filter returns with them.
+    return matchesSearch;
   });
-
-  const solToken = tokens.find((t) => t.mint === WRAPPED_SOL_MINT);
-  const solUsdValue = (data?.totalUsdValue ?? 0) - tokens.reduce((sum, t) => sum + (t.usdValue || 0), 0);
 
   if (isLoading && tokens.length === 0) {
     return (
@@ -76,8 +72,7 @@ export function TokenList() {
           icon={<div className="h-5 w-5 rounded-[32%] bg-brand-b shadow-glow" />}
           name="Solana"
           subtitle={`${solBalance.toFixed(4)} SOL`}
-          value={`$${Math.max(solUsdValue, 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-          delta={solToken?.priceChange24h ? `${solToken.priceChange24h >= 0 ? '+' : ''}${solToken.priceChange24h.toFixed(2)}%` : undefined}
+          value="—"
           onClick={() =>
             dispatch(showSend({ symbol: 'SOL', balance: solBalance, decimals: 9 }))
           }
@@ -98,8 +93,7 @@ export function TokenList() {
               }
               name={token.symbol || 'Unknown'}
               subtitle={`${balance.toFixed(4)} ${token.symbol || ''}`}
-              value={`$${(token.usdValue || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-              delta={token.priceChange24h ? `${token.priceChange24h >= 0 ? '+' : ''}${token.priceChange24h.toFixed(2)}%` : undefined}
+              value="—"
               onClick={() =>
                 dispatch(
                   showSend({

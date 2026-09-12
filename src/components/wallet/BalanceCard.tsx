@@ -7,7 +7,6 @@ export function BalanceCard() {
   const address = accounts[activeAccountIndex]?.address;
   const { data, isLoading } = useBalances(address);
 
-  const totalUsdValue = data?.totalUsdValue ?? 0;
   const solBalance = data?.solBalance ?? 0;
 
   return (
@@ -18,9 +17,7 @@ export function BalanceCard() {
         <span className="ml-1.5 text-lg font-medium text-fg-2">SOL</span>
       </p>
       <p className="mt-3 text-sm text-fg-2">
-        {cluster === 'devnet'
-          ? 'Devnet · USD prices are hidden'
-          : `$${totalUsdValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+        {cluster === 'devnet' ? 'Devnet · USD prices are hidden' : '—'}
       </p>
     </div>
   );
