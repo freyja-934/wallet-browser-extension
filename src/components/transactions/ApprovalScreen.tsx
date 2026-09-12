@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { PendingApproval } from '../../lib/messages';
+import type { PreviewResult } from '../../lib/preview';
 import { extensionClient } from '../../messaging/client';
 import { PopupFrame } from '../ui/Atmosphere';
 import { Banner } from '../ui/EmptyState';
@@ -7,14 +8,7 @@ import { PrimaryButton, SecondaryButton } from '../ui/Button';
 import { Card, CardContent } from '../ui/Card';
 import { GlowMark } from '../ui/GlowMark';
 
-interface Preview {
-  success?: boolean;
-  error?: string;
-  logs?: string[];
-  unitsConsumed?: number;
-  instructions?: Array<{ label: string; programName: string; known: boolean; warning?: string }>;
-  warnings?: Array<{ level: string; message: string }>;
-}
+type Preview = PreviewResult;
 
 const KIND_LABEL: Record<string, string> = {
   connect: 'Connect',
@@ -28,6 +22,7 @@ export function ApprovalScreen() {
   const id = params.get('id') || '';
   const [request, setRequest] = useState<PendingApproval | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
+  const [previewSettled, setPreviewSettled] = useState(false);
   const [showInstructions, setShowInstructions] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -37,13 +32,29 @@ export function ApprovalScreen() {
       setError('Missing request id');
       return;
     }
-    extensionClient.getPendingRequest(id).then(async (pending) => {
-      setRequest(pending);
-      if (pending?.transactionBytes) {
-        const result = await extensionClient.previewTransaction(pending.transactionBytes);
-        setPreview(result as Preview);
+    let cancelled = false;
+    (async () => {
+      try {
+        const pending = await extensionClient.getPendingRequest(id);
+        if (cancelled) return;
+        setRequest(pending);
+        if (!pending?.transactionBytes) return;
+        try {
+          const result = await extensionClient.previewTransaction(pending.transactionBytes);
+          if (!cancelled) setPreview(result);
+        } catch (err) {
+          // Error and settle land in the same handler so Approve never enables before the banner renders.
+          if (!cancelled) setError(err instanceof Error ? err.message : 'Preview failed');
+        } finally {
+          if (!cancelled) setPreviewSettled(true);
+        }
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Request failed');
       }
-    }).catch((err) => setError(err.message));
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [id]);
 
   const approve = async () => {
@@ -73,6 +84,8 @@ export function ApprovalScreen() {
   const originHost = request?.origin ? safeHost(request.origin) : '';
   const danger = preview?.warnings?.some((warning) => warning.level === 'danger');
   const isSend = request?.kind === 'signAndSendTransaction';
+  // Never let a transaction be approved before its preview has settled.
+  const awaitingPreview = Boolean(request?.transactionBytes) && !previewSettled;
 
   return (
     <PopupFrame atmosphere="still" heavy>
@@ -159,7 +172,7 @@ export function ApprovalScreen() {
           </SecondaryButton>
           <PrimaryButton
             onClick={approve}
-            disabled={busy || !request}
+            disabled={busy || !request || awaitingPreview}
             data-testid="approval-approve"
             className={isSend && danger ? 'bg-ui-danger text-[#010000] shadow-none' : ''}
           >

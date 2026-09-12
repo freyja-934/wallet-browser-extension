@@ -103,6 +103,9 @@ test('signAndSend approve broadcasts a 0-lamport self-transfer', async ({ contex
   await approveNext(context, () => dapp.locator('#signAndSend').click(), dapp);
   await expect(dapp.locator('#log')).toContainText('"signature"', { timeout: 45_000 });
   await expect(dapp.locator('#log')).not.toContainText(/reject|denied|User rejected/i);
+  // 64 raw bytes (not the digits of a base58 string) and a signature the cluster confirms.
+  await expect(dapp.locator('#log')).toContainText('"signatureLength": 64');
+  await expect(dapp.locator('#log')).toContainText('"confirmed": true', { timeout: 60_000 });
 });
 
 async function waitForUnlock(context: BrowserContext): Promise<Page> {

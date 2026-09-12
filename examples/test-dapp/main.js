@@ -1,4 +1,5 @@
 import { Buffer } from 'buffer';
+import bs58 from 'bs58';
 import {
   Connection,
   PublicKey,
@@ -56,6 +57,21 @@ document.getElementById('signMessage').onclick = async () => {
   }
 };
 
+/** Poll getSignatureStatuses every second for up to 30 s; false on timeout. */
+async function waitForConfirmation(connection, signature) {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const { value } = await connection
+      .getSignatureStatuses([signature], { searchTransactionHistory: true })
+      .catch(() => ({ value: [null] }));
+    if (value[0]?.err) return false; // landed but failed on-chain
+    const status = value[0]?.confirmationStatus;
+    if (status === 'confirmed' || status === 'finalized') return true;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  return false;
+}
+
 async function buildSelfTransfer(account) {
   const address = account.address;
   const pubkey = new PublicKey(address);
@@ -103,7 +119,11 @@ document.getElementById('signAndSend').onclick = async () => {
       transaction: tx.serialize(),
       chain: clusterChain,
     });
-    log({ signature: [...out.signature] });
+    const signature = bs58.encode(out.signature);
+    log({ signatureLength: out.signature.length, signature, confirmed: 'pending…' });
+    const connection = new Connection(rpcUrl, 'confirmed');
+    const confirmed = await waitForConfirmation(connection, signature);
+    log({ signatureLength: out.signature.length, signature, confirmed });
   } catch (error) {
     log(error instanceof Error ? error.message : String(error));
   }

@@ -7,7 +7,7 @@ import {
   type SolanaSignMessageFeature,
   type SolanaSignTransactionFeature,
 } from '@solana/wallet-standard-features';
-import type { Wallet, WalletAccount, WalletVersion } from '@wallet-standard/base';
+import type { Wallet, WalletAccount } from '@wallet-standard/base';
 import {
   StandardConnect,
   StandardDisconnect,
@@ -19,7 +19,8 @@ import {
 } from '@wallet-standard/features';
 import { registerWallet } from '@wallet-standard/wallet';
 import { WALLET_CHANNEL } from '../lib/messages';
-import { WALLET_NAME, WALLET_VERSION } from '../config/constants';
+import { CINDER_ICON_DATA_URI } from '../config/brand';
+import { WALLET_NAME } from '../config/constants';
 
 (() => {
   let messageId = 0;
@@ -107,9 +108,10 @@ import { WALLET_NAME, WALLET_VERSION } from '../config/constants';
   let accounts: WalletAccount[] = [];
 
   const wallet: Wallet = {
-    version: WALLET_VERSION as WalletVersion,
+    // The Wallet Standard version, not the app version: the spec's WalletVersion is the literal '1.0.0'.
+    version: '1.0.0',
     name: WALLET_NAME,
-    icon: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwJSIgc3RvcC1jb2xvcj0iIzk5NDVWRiIvPjxzdG9wIG9mZnNldD0iNTAlIiBzdG9wLWNvbG9yPSIjMTRGMTk1Ii8+PHN0b3Agb2Zmc2V0PSIxMDAlIiBzdG9wLWNvbG9yPSIjMDBDMkZGIi8+PC9saW5lYXJHcmFkaWVudD48L2RlZnM+PGNpcmNsZSBjeD0iMTYiIGN5PSIxNiIgcj0iMTYiIGZpbGw9InVybCgjZykiLz48L3N2Zz4=',
+    icon: CINDER_ICON_DATA_URI,
     chains: [SOLANA_MAINNET_CHAIN],
     get accounts() {
       return accounts;

@@ -5,9 +5,10 @@ import {
   Transaction,
   VersionedTransaction,
 } from '@solana/web3.js';
+import bs58 from 'bs58';
 import { isExtensionMessageType, type PendingApproval } from '../lib/messages';
 import { isRequestAllowed } from '../lib/sender-gate';
-import { deserializeTransaction, getInstructions, decodeInstruction, collectWarnings } from '../lib/tx-preview';
+import { buildPreview } from '../lib/preview';
 import {
   changePassword,
   clearWallet,
@@ -191,7 +192,8 @@ async function fulfillApproval(request: PendingApproval): Promise<Record<string,
   if (request.kind === 'signAndSendTransaction') {
     const connection = await getConnection();
     const signature = await connection.sendRawTransaction(signed, { skipPreflight: false });
-    return { signedTransaction: [...signed], signature };
+    // Wallet Standard wants the 64 raw signature bytes; the RPC hands back base58.
+    return { signedTransaction: [...signed], signature: [...bs58.decode(signature)] };
   }
   return { signedTransaction: [...signed] };
 }
@@ -210,30 +212,13 @@ async function signTransactionBytes(bytes: Uint8Array): Promise<Uint8Array> {
 }
 
 async function previewTransaction(bytes: Uint8Array): Promise<Record<string, unknown>> {
-  const connection = await getConnection();
-  const tx = deserializeTransaction(bytes);
-  const instructions = getInstructions(tx).map(decodeInstruction);
-  const warnings = collectWarnings(instructions);
-
-  try {
+  const preview = await buildPreview(bytes, async (tx) => {
+    const connection = await getConnection();
     const simulation = tx instanceof VersionedTransaction
       ? await connection.simulateTransaction(tx, { sigVerify: false, innerInstructions: true })
       : await connection.simulateTransaction(tx);
-    const err = simulation.value.err;
-    return {
-      success: !err,
-      error: err ? JSON.stringify(err) : undefined,
-      logs: simulation.value.logs ?? [],
-      unitsConsumed: simulation.value.unitsConsumed,
-      instructions,
-      warnings,
-    };
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'Simulation failed',
-      instructions,
-      warnings,
-    };
-  }
+    return simulation.value;
+  });
+  // Nested so the preview's own `success` never collides with the message envelope.
+  return { preview };
 }
