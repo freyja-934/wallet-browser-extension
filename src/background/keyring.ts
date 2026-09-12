@@ -1,7 +1,7 @@
 import { Keypair } from '@solana/web3.js';
 import { Buffer } from 'buffer';
 import bs58 from 'bs58';
-import { getCluster } from '../config/constants';
+import { BUILD_HELIUS_API_KEY, getCluster } from '../config/constants';
 import { decrypt, encrypt, EncryptedData } from '../lib/encryption-simple';
 import {
   DEFAULT_SETTINGS,
@@ -110,21 +110,86 @@ export async function hasVault(): Promise<boolean> {
   return !!(await localGetFirst<StoredVault>(VAULT_KEYS));
 }
 
-export async function getSettings(): Promise<WalletSettings> {
-  const stored = (await localGetFirst<Partial<WalletSettings>>(SETTINGS_KEYS)) ?? {};
-  return {
-    ...DEFAULT_SETTINGS,
-    ...stored,
-    cluster: stored.cluster ?? getCluster(),
-  };
+/**
+ * Build-time Helius key (`VITE_HELIUS_API_KEY`), read at module load. A dev
+ * convenience only; the test hook below swaps it without rebuilding.
+ */
+let buildHeliusApiKey = BUILD_HELIUS_API_KEY;
+
+/** Tests only: replace the build-time key `getSettings` seeds from. */
+export function setBuildHeliusApiKeyForTests(key: string): void {
+  buildHeliusApiKey = key;
 }
 
+type StoredSettings = Partial<WalletSettings>;
+
+async function readStoredSettings(): Promise<StoredSettings> {
+  return (await localGetFirst<StoredSettings>(SETTINGS_KEYS)) ?? {};
+}
+
+/** Defaults under the stored object; the build cluster when none is stored. */
+function withDefaults(stored: StoredSettings): WalletSettings {
+  return { ...DEFAULT_SETTINGS, ...stored, cluster: stored.cluster ?? getCluster() };
+}
+
+/**
+ * Settings as the popup sees them. The build-time key fills `heliusApiKey` only
+ * when the stored object has no such property at all: a stored `''` is the user
+ * having cleared it, and an empty optional field is reported as absent.
+ */
+export async function getSettings(): Promise<WalletSettings> {
+  const stored = await readStoredSettings();
+  const settings = withDefaults(stored);
+  if (!('heliusApiKey' in stored) && buildHeliusApiKey) settings.heliusApiKey = buildHeliusApiKey;
+  if (!settings.heliusApiKey) delete settings.heliusApiKey;
+  if (!settings.rpcUrl) {
+    delete settings.rpcUrl;
+    delete settings.rpcUrlCluster;
+  }
+  return settings;
+}
+
+/** `'  '` and `''` both clear the field; whitespace around a value is never stored. */
+function normalizeOptional(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Merge `partial` over what is actually stored, never over `getSettings()`: the
+ * build-time key it seeds must not be written back as if the user had typed it.
+ * Clearing the key stores `''` so the seed does not return; clearing the URL drops
+ * its cluster tag with it. A custom URL tagged with the other cluster stays stored
+ * across a cluster switch and is simply not used (see `rpcUrlsFor`).
+ */
 export async function updateSettings(partial: Partial<WalletSettings>): Promise<WalletSettings> {
-  const current = await getSettings();
-  const next = { ...current, ...partial };
+  const stored = await readStoredSettings();
+  const next: WalletSettings = { ...withDefaults(stored), ...partial };
+  if ('rpcUrl' in partial) {
+    const rpcUrl = normalizeOptional(partial.rpcUrl);
+    if (rpcUrl !== undefined && !isHttpsUrl(rpcUrl)) throw new Error('Invalid rpcUrl');
+    if (rpcUrl === undefined) {
+      delete next.rpcUrl;
+      delete next.rpcUrlCluster;
+    } else {
+      next.rpcUrl = rpcUrl;
+    }
+  }
+  if ('rpcUrlCluster' in partial && partial.rpcUrlCluster === undefined) delete next.rpcUrlCluster;
+  if ('heliusApiKey' in partial) {
+    next.heliusApiKey = normalizeOptional(partial.heliusApiKey) ?? '';
+  }
   await localSet(SETTINGS_KEYS[0], next);
   await scheduleAutoLock();
-  return next;
+  return getSettings();
 }
 
 export async function getPublicState(): Promise<WalletPublicState> {

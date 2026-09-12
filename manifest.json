@@ -32,12 +32,15 @@
     "clipboardWrite"
   ],
   "host_permissions": [
+    "https://solana-rpc.publicnode.com/*",
     "https://api.mainnet-beta.solana.com/*",
     "https://api.devnet.solana.com/*",
-    "https://api.testnet.solana.com/*",
     "https://*.helius-rpc.com/*",
     "https://api.helius.xyz/*",
     "https://api.coingecko.com/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*"
   ],
   "icons": {
     "16": "icons/icon-16.png",

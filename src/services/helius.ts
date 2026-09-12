@@ -1,9 +1,10 @@
-import { Connection, PublicKey, type ParsedTransactionWithMeta } from '@solana/web3.js';
+import { PublicKey, type Connection, type ParsedTransactionWithMeta } from '@solana/web3.js';
 import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
-import { getHeliusApiKey, getRpcUrl } from '../config/constants';
+import { rpcUrlsFor } from '../config/constants';
+import { errorMessage } from '../lib/errors';
 import { activityFromParsedTx, normalizeHeliusTransfers } from '../lib/parse-history';
 import { rpcJson, withRotatedConnection } from '../lib/rpc-rotate';
-import { runtimeCluster } from '../lib/runtime-rpc';
+import { runtimeRpcUrls, runtimeSettings } from '../lib/runtime-rpc';
 
 const NFT_INTERFACES = new Set([
   'V1_NFT',
@@ -45,6 +46,16 @@ export interface TokenBalance {
   name?: string;
   logoURI?: string;
   tokenAccount: string;
+}
+
+export interface TokenBalances {
+  /** SOL as a float, for the current UI. Prefer `lamports`. */
+  nativeBalance: number;
+  /** Exact balance in lamports, as a decimal string. */
+  lamports: string;
+  tokens: TokenBalance[];
+  /** Set when the token-account call failed on every endpoint; `tokens` is then empty, not zero. */
+  tokensError?: string;
 }
 
 export interface NFTAsset {
@@ -115,53 +126,62 @@ export interface NativeTransfer {
   amount: number;
 }
 
+interface DasAssetsPage<Item> {
+  items?: Item[];
+  total?: number;
+}
+
+interface DasFungibleItem {
+  id: string;
+  interface?: string;
+  content?: { metadata?: { name?: string; symbol?: string }; links?: { image?: string } };
+  token_info?: { decimals?: number; balance?: number; symbol?: string };
+}
+
+/**
+ * Chain reads for the popup. Every call resolves its endpoint list from the live
+ * settings (`runtimeRpcUrls`), so nothing here holds a `Connection` across calls.
+ */
 class HeliusService {
-  private connection: Connection;
-  private apiKey: string;
   private baseUrl: string = 'https://api.helius.xyz/v0';
 
-  constructor() {
-    this.apiKey = getHeliusApiKey();
-    this.connection = new Connection(getRpcUrl(), 'confirmed');
-  }
-
+  /** DAS is a method, not a host: try it on every URL in order. */
   private async das<T>(method: string, params: unknown): Promise<T> {
-    return rpcJson<T>(await runtimeCluster(), method, params, { das: true });
+    return rpcJson<T>(await runtimeRpcUrls(), method, params);
   }
 
-  async getTokenBalances(address: string): Promise<{
-    nativeBalance: number;
-    tokens: TokenBalance[];
-  }> {
+  async getTokenBalances(address: string): Promise<TokenBalances> {
     const pubkey = new PublicKey(address);
-    const cluster = await runtimeCluster();
-    const [lamports, parsed] = await withRotatedConnection(cluster, async (connection) =>
-      Promise.all([
-        connection.getBalance(pubkey),
+    const urls = await runtimeRpcUrls();
+
+    // Two independent rotated calls: a public endpoint that refuses
+    // getTokenAccountsByOwner must never discard the SOL balance.
+    const lamports = await withRotatedConnection(urls, (connection) => connection.getBalance(pubkey));
+
+    let tokens: TokenBalance[] = [];
+    let tokensError: string | undefined;
+    try {
+      const parsed = await withRotatedConnection(urls, (connection) =>
         connection.getParsedTokenAccountsByOwner(pubkey, { programId: TOKEN_PROGRAM_ID }),
-      ]),
-    );
+      );
+      tokens = parsed.value
+        .map((entry) => {
+          const info = entry.account.data.parsed.info;
+          return {
+            mint: info.mint,
+            amount: String(info.tokenAmount.amount),
+            decimals: info.tokenAmount.decimals,
+            tokenAccount: entry.pubkey.toBase58(),
+          };
+        })
+        .filter((token) => token.amount !== '0');
+    } catch (error) {
+      tokensError = errorMessage(error, 'Token accounts unavailable');
+    }
 
-    const tokens: TokenBalance[] = parsed.value
-      .map((entry) => {
-        const info = entry.account.data.parsed.info;
-        return {
-          mint: info.mint,
-          amount: String(info.tokenAmount.amount),
-          decimals: info.tokenAmount.decimals,
-          tokenAccount: entry.pubkey.toBase58(),
-        };
-      })
-      .filter((token) => token.amount !== '0');
-
-    if (this.apiKey) {
+    if (tokens.length > 0) {
       try {
-        const das = await this.das<{ items?: Array<{
-          id: string;
-          interface?: string;
-          content?: { metadata?: { name?: string; symbol?: string }; links?: { image?: string } };
-          token_info?: { decimals?: number; balance?: number; symbol?: string };
-        }> }>('getAssetsByOwner', {
+        const das = await this.das<DasAssetsPage<DasFungibleItem>>('getAssetsByOwner', {
           ownerAddress: address,
           page: 1,
           limit: 1000,
@@ -178,13 +198,15 @@ class HeliusService {
           token.logoURI = item.content?.links?.image || token.logoURI;
         }
       } catch {
-        /* keep RPC token list */
+        // No endpoint served DAS: the list stands without names, that is not an error.
       }
     }
 
     return {
       nativeBalance: lamports / 1e9,
+      lamports: String(lamports),
       tokens,
+      ...(tokensError !== undefined ? { tokensError } : {}),
     };
   }
 
@@ -194,11 +216,8 @@ class HeliusService {
     page: number;
     limit: number;
   }> {
-    if (!this.apiKey) {
-      return { items: [], total: 0, page, limit };
-    }
     try {
-      const das = await this.das<{ items?: NFTAsset[]; total?: number }>('getAssetsByOwner', {
+      const das = await this.das<DasAssetsPage<NFTAsset>>('getAssetsByOwner', {
         ownerAddress: address,
         page,
         limit,
@@ -215,7 +234,7 @@ class HeliusService {
         limit,
       };
     } catch {
-      // Public RPC has no DAS. Do not console.error — Chrome lists that as an extension error.
+      // No endpoint served DAS. Do not console.error — Chrome lists that as an extension error.
       return { items: [], total: 0, page, limit };
     }
   }
@@ -230,9 +249,11 @@ class HeliusService {
   ): Promise<Transaction[]> {
     try {
       const { limit = 100, before, type } = options;
+      const settings = await runtimeSettings();
+      const apiKey = settings.heliusApiKey;
 
-      if (this.apiKey && (await runtimeCluster()) === 'mainnet-beta') {
-        let url = `${this.baseUrl}/addresses/${address}/transactions?api-key=${this.apiKey}&limit=${limit}`;
+      if (apiKey && settings.cluster === 'mainnet-beta') {
+        let url = `${this.baseUrl}/addresses/${address}/transactions?api-key=${apiKey}&limit=${limit}`;
         if (before) url += `&before=${before}`;
         if (type) url += `&type=${type}`;
         const response = await fetch(url);
@@ -256,8 +277,8 @@ class HeliusService {
         }
       }
 
-      const cluster = await runtimeCluster();
-      const { sigs, parsed } = await withRotatedConnection(cluster, async (connection) => {
+      const urls = rpcUrlsFor(settings.cluster, settings);
+      const { sigs, parsed } = await withRotatedConnection(urls, async (connection) => {
         const sigs = await connection.getSignaturesForAddress(new PublicKey(address), {
           limit,
           before,
@@ -298,72 +319,6 @@ class HeliusService {
     } catch {
       return [];
     }
-  }
-
-  /**
-   * Get asset proof for compressed NFT transfers
-   */
-  async getAssetProof(assetId: string): Promise<{
-    root: string;
-    proof: string[];
-    nodeIndex: number;
-    leaf: string;
-    treeId: string;
-  }> {
-    const url = `${this.baseUrl}/assets/${assetId}/proof?api-key=${this.apiKey}`;
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`Helius API error: ${response.status} ${response.statusText}`.trim());
-    }
-    return await response.json();
-  }
-
-  /**
-   * Get RPC connection
-   */
-  getConnection(): Connection {
-    return this.connection;
-  }
-
-  /**
-   * Get current slot
-   */
-  async getCurrentSlot(): Promise<number> {
-    return this.connection.getSlot();
-  }
-
-  /**
-   * Get recent blockhash
-   */
-  async getRecentBlockhash() {
-    return this.connection.getLatestBlockhash();
-  }
-
-  /**
-   * Send transaction
-   */
-  async sendTransaction(signedTx: Buffer | Uint8Array): Promise<string> {
-    const signature = await this.connection.sendRawTransaction(signedTx, {
-      skipPreflight: false,
-      preflightCommitment: 'confirmed'
-    });
-    
-    // Wait for confirmation
-    const latestBlockhash = await this.connection.getLatestBlockhash();
-    await this.connection.confirmTransaction({
-      signature,
-      blockhash: latestBlockhash.blockhash,
-      lastValidBlockHeight: latestBlockhash.lastValidBlockHeight
-    });
-    
-    return signature;
-  }
-
-  /**
-   * Simulate transaction
-   */
-  async simulateTransaction(transaction: any) {
-    return this.connection.simulateTransaction(transaction);
   }
 }
 

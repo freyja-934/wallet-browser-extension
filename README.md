@@ -26,7 +26,7 @@ Session: chrome.storage.session (cleared when the browser closes)
 
 The toolbar popup is **380×600** (Chrome caps action popups at 600px). Approvals open `approve.html` via `chrome.windows.create`, never `chrome.action.openPopup()`.
 
-RPC: public Solana JSON-RPC by default. If you set a local `VITE_HELIUS_API_KEY`, Helius is tried first and traffic rotates to the public cluster RPC on 408 / 429 / 5xx / network errors. DAS (`getAssetsByOwner`) stays on Helius.
+RPC: the endpoint list comes from Settings, not the build. With no key, Mainnet shows and sends SOL through `https://solana-rpc.publicnode.com` (the Solana Foundation host refuses browser origins; it stays as a fallback), and Devnet uses `https://api.devnet.solana.com`. Tokens and NFTs on Mainnet need either a custom RPC URL or a Helius API key entered in Settings → RPC; both are stored in `chrome.storage.local` on this device only, and a custom host outside the manifest is granted through `optional_host_permissions` when you click Save. The order tried is custom URL, then Helius, then the public defaults. A local `VITE_HELIUS_API_KEY` only seeds the Helius field until you store your own. Rotation: HTTP 401/403 and a refused method (JSON-RPC `-32601`, `-32010`, `-32011`, or a message saying the method is unsupported or key-gated) skip to the next endpoint for that call only; 408/429/5xx, network errors, and node-health codes (`-32004`, `-32005`, `-32007`, `-32009`, `-32014`, `-32016`) rest the endpoint for 30 s; any other JSON-RPC error (invalid params, preflight failure) is returned at once, since every endpoint would say the same. Save probes a custom URL with `getHealth` and `getGenesisHash` and only uses it on the cluster it answered for. DAS (`getAssetsByOwner`) is tried on every endpoint in order; when none serves it, tokens show without names and the NFT list is empty. publicnode is a third-party service provided AS IS with unpublished limits.
 
 ## Load unpacked
 
@@ -50,7 +50,7 @@ Optional: copy `.env.example` to `.env` and set `VITE_HELIUS_API_KEY` for richer
 - Wallet Standard: `standard:connect`, `solana:signTransaction`, `solana:signAndSendTransaction`, `solana:signMessage`
 - Legacy + v0 transactions
 - Simulation preview (program names, `setAuthority` / approve warnings, unknown programs)
-- Helius-first RPC with public-RPC fallback
+- Settings-driven RPC: custom URL, optional Helius key, keyless public defaults, with per-endpoint rotation
 - TanStack React Query for balances / NFTs / history
 
 ## Commands

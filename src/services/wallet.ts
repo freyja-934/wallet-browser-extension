@@ -1,5 +1,4 @@
-import { Connection, PublicKey } from '@solana/web3.js';
-import { getRpcUrl } from '../config/constants';
+import { PublicKey } from '@solana/web3.js';
 import { runtimeCluster } from '../lib/runtime-rpc';
 import { coinGeckoService } from './coingecko';
 import { TokenBalance, heliusService } from './helius';
@@ -9,24 +8,28 @@ export interface TokenWithPrice extends TokenBalance {
   priceChange24h?: number;
 }
 
+export interface WalletBalances {
+  /** SOL as a float, for the current UI. Prefer `lamports`. */
+  solBalance: number;
+  /** Exact balance in lamports, as a decimal string. */
+  lamports: string;
+  tokens: TokenWithPrice[];
+  /** Set when the token-account call failed on every endpoint; `tokens` is then empty, not zero. */
+  tokensError?: string;
+  totalUsdValue: number;
+}
+
 class WalletService {
-  private connection: Connection;
-
-  constructor() {
-    this.connection = new Connection(getRpcUrl(), 'confirmed');
-  }
-
-  async getTokenBalances(address: string): Promise<{
-    solBalance: number;
-    tokens: TokenWithPrice[];
-    totalUsdValue: number;
-  }> {
-    const { nativeBalance, tokens } = await heliusService.getTokenBalances(address);
+  async getTokenBalances(address: string): Promise<WalletBalances> {
+    const { nativeBalance, lamports, tokens, tokensError } = await heliusService.getTokenBalances(address);
+    const passthrough = tokensError !== undefined ? { tokensError } : {};
     if ((await runtimeCluster()) === 'devnet') {
       return {
         solBalance: nativeBalance,
+        lamports,
         tokens: tokens.map((token) => ({ ...token, usdValue: 0, priceChange24h: 0 })),
         totalUsdValue: 0,
+        ...passthrough,
       };
     }
     const solPrice = await coinGeckoService.getSolanaPrice();
@@ -46,17 +49,15 @@ class WalletService {
 
     return {
       solBalance: nativeBalance,
+      lamports,
       tokens: tokensWithPrices,
       totalUsdValue: solUsdValue + tokensWithPrices.reduce((sum, token) => sum + (token.usdValue || 0), 0),
+      ...passthrough,
     };
   }
 
   async estimateFee(): Promise<number> {
     return 5000;
-  }
-
-  getConnection(): Connection {
-    return this.connection;
   }
 
   isValidAddress(address: string): boolean {

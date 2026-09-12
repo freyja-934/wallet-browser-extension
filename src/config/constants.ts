@@ -1,10 +1,27 @@
-const optionalHeliusKey = (import.meta.env.VITE_HELIUS_API_KEY as string | undefined) || '';
+import type { WalletSettings } from '../lib/messages';
+
 const rawNetwork = (import.meta.env.VITE_NETWORK as string | undefined) || 'mainnet-beta';
 
-export const PUBLIC_SOLANA_RPC = 'https://api.mainnet-beta.solana.com';
-export const PUBLIC_DEVNET_RPC = 'https://api.devnet.solana.com';
+/**
+ * Build-time Helius key (`VITE_HELIUS_API_KEY`). A dev convenience only: it seeds
+ * `settings.heliusApiKey` when the stored settings have none (see `keyring.getSettings`).
+ * The store build sets it empty, and `just store` refuses a zip that contains a key literal.
+ */
+export const BUILD_HELIUS_API_KEY = (import.meta.env.VITE_HELIUS_API_KEY as string | undefined) || '';
 
 export type Cluster = 'mainnet-beta' | 'devnet';
+
+/**
+ * Keyless mainnet defaults, in order. `api.mainnet-beta.solana.com` returns 403 to any
+ * request carrying an `Origin` header, so the extension needs publicnode first; the
+ * Solana Foundation host stays as a fallback for the day publicnode is down.
+ */
+export const PUBLIC_MAINNET_RPCS: readonly string[] = [
+  'https://solana-rpc.publicnode.com',
+  'https://api.mainnet-beta.solana.com',
+];
+
+export const PUBLIC_DEVNET_RPCS: readonly string[] = ['https://api.devnet.solana.com'];
 
 export function getCluster(): Cluster {
   return rawNetwork === 'devnet' ? 'devnet' : 'mainnet-beta';
@@ -18,60 +35,62 @@ export function getNetworkLabel(): string {
   return labelFor(getCluster());
 }
 
-export function publicRpcUrlFor(cluster: Cluster): string {
-  return cluster === 'devnet' ? PUBLIC_DEVNET_RPC : PUBLIC_SOLANA_RPC;
+export function publicRpcUrlsFor(cluster: Cluster): readonly string[] {
+  return cluster === 'devnet' ? PUBLIC_DEVNET_RPCS : PUBLIC_MAINNET_RPCS;
 }
 
-export function heliusRpcUrlFor(cluster: Cluster): string | undefined {
-  if (!optionalHeliusKey) return undefined;
+export function heliusRpcUrlFor(cluster: Cluster, key: string | undefined): string | undefined {
+  if (!key) return undefined;
   const host = cluster === 'devnet' ? 'devnet' : 'mainnet';
-  return `https://${host}.helius-rpc.com/?api-key=${optionalHeliusKey}`;
+  return `https://${host}.helius-rpc.com/?api-key=${key}`;
 }
 
-export function isHeliusRpcUrl(url: string): boolean {
-  return url.includes('helius-rpc.com');
+/** `getGenesisHash` per cluster; Settings refuses a custom URL whose hash belongs to the other one. */
+export const GENESIS_HASH: Readonly<Record<Cluster, string>> = {
+  'mainnet-beta': '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d',
+  devnet: 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG',
+};
+
+export function clusterForGenesisHash(hash: string): Cluster | undefined {
+  return (Object.keys(GENESIS_HASH) as Cluster[]).find((cluster) => GENESIS_HASH[cluster] === hash);
 }
 
-/** Helius first when a key is set, then the public Solana RPC. */
-export function rpcUrlsFor(cluster: Cluster): string[] {
+export type RpcSettings = Pick<WalletSettings, 'rpcUrl' | 'heliusApiKey' | 'rpcUrlCluster'>;
+
+/** `new URL(u).href`, so `https://host` and `https://host/` are the same endpoint; unparsable input stays as is. */
+function normalizedUrlKey(url: string): string {
+  try {
+    return new URL(url).href;
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * Endpoint list for one cluster: the user's custom URL, then Helius when a key is
+ * set, then the public defaults. A custom URL tagged with the other cluster
+ * (`rpcUrlCluster`) is left out; a legacy entry without the tag is used as before.
+ * Pure; duplicates removed by normalised URL, first occurrence wins.
+ */
+export function rpcUrlsFor(cluster: Cluster, settings: Partial<RpcSettings> = {}): string[] {
+  const customUrl =
+    settings.rpcUrlCluster && settings.rpcUrlCluster !== cluster ? undefined : settings.rpcUrl;
+  const candidates = [
+    customUrl,
+    heliusRpcUrlFor(cluster, settings.heliusApiKey),
+    ...publicRpcUrlsFor(cluster),
+  ];
+  const seen = new Set<string>();
   const urls: string[] = [];
-  const helius = heliusRpcUrlFor(cluster);
-  if (helius) urls.push(helius);
-  urls.push(publicRpcUrlFor(cluster));
+  for (const url of candidates) {
+    if (!url) continue;
+    const key = normalizedUrlKey(url);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    urls.push(url);
+  }
   return urls;
 }
-
-export function rpcUrlFor(cluster: Cluster): string {
-  return rpcUrlsFor(cluster)[0];
-}
-
-export function getRpcUrl(): string {
-  return rpcUrlFor(getCluster());
-}
-
-export function getHeliusApiKey(): string {
-  return optionalHeliusKey;
-}
-
-export const HELIUS_RPC_URL = getRpcUrl();
-
-export const NETWORKS = {
-  'mainnet-beta': {
-    name: 'Mainnet Beta',
-    endpoint: getRpcUrl(),
-    chainId: 101,
-  },
-  'testnet': {
-    name: 'Testnet',
-    endpoint: 'https://api.testnet.solana.com',
-    chainId: 102,
-  },
-  'devnet': {
-    name: 'Devnet',
-    endpoint: PUBLIC_DEVNET_RPC,
-    chainId: 103,
-  },
-} as const;
 
 export const API_ENDPOINTS = {
   COINGECKO_PRICE: 'https://api.coingecko.com/api/v3/simple/price',

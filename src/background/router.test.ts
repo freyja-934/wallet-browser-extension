@@ -205,3 +205,47 @@ describe('handleMessage', () => {
     expect(state.isLocked).toBe(true);
   });
 });
+
+describe('UPDATE_SETTINGS rpc fields', () => {
+  const update = (settings: Record<string, unknown>) =>
+    handleMessage({ type: 'UPDATE_SETTINGS', settings }, popup, BASE) as Promise<{
+      settings: { rpcUrl?: string; rpcUrlCluster?: string; heliusApiKey?: string };
+    }>;
+  const stored = () => chromeStub.storage.local.snapshot().cinder_settings as Record<string, unknown> | undefined;
+
+  it('trims the URL before storing it', async () => {
+    const { settings } = await update({ rpcUrl: '  https://rpc.example/v1  ' });
+    expect(settings.rpcUrl).toBe('https://rpc.example/v1');
+    expect(stored()?.rpcUrl).toBe('https://rpc.example/v1');
+  });
+
+  it("'' and whitespace both clear the URL", async () => {
+    await update({ rpcUrl: 'https://rpc.example', rpcUrlCluster: 'devnet' });
+    const cleared = await update({ rpcUrl: '' });
+    expect(cleared.settings.rpcUrl).toBeUndefined();
+    expect(cleared.settings.rpcUrlCluster).toBeUndefined();
+    expect(stored()).not.toHaveProperty('rpcUrl');
+    expect(stored()).not.toHaveProperty('rpcUrlCluster');
+
+    await update({ rpcUrl: 'https://rpc.example' });
+    const blank = await update({ rpcUrl: '  \t ' });
+    expect(blank.settings.rpcUrl).toBeUndefined();
+    expect(stored()).not.toHaveProperty('rpcUrl');
+  });
+
+  it('refuses an http URL before storing anything', async () => {
+    await expect(update({ rpcUrl: 'http://rpc.example' })).rejects.toThrow('Invalid settings.rpcUrl');
+    expect(stored()).toBeUndefined();
+  });
+
+  it("refuses a key containing '&' before storing anything", async () => {
+    await expect(update({ heliusApiKey: 'abc&limit=1' })).rejects.toThrow('Invalid settings.heliusApiKey');
+    expect(stored()).toBeUndefined();
+  });
+
+  it('stores the cluster the URL was probed against', async () => {
+    const { settings } = await update({ rpcUrl: 'https://rpc.example', rpcUrlCluster: 'mainnet-beta' });
+    expect(settings.rpcUrlCluster).toBe('mainnet-beta');
+    expect(stored()?.rpcUrlCluster).toBe('mainnet-beta');
+  });
+});

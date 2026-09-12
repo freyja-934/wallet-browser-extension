@@ -36,6 +36,89 @@ test('settings update auto-lock, export seed, and change password', async ({ con
   await expect(popup.getByTestId('open-receive')).toBeVisible();
 });
 
+test('custom RPC: an http URL is refused, an https one is probed, saved, shown on the pill, and cleared', async ({
+  context,
+  extensionId,
+}) => {
+  test.setTimeout(90_000);
+  const popup = await importAndUnlock(context, extensionId);
+  // With no custom URL the primary host is the public devnet host, or Helius when the
+  // dev build carries a key; either way it is a bare hostname and changes once a custom URL is set.
+  const initialHost = await popup.getByTestId('network-pill').getAttribute('title');
+  expect(initialHost).toMatch(/^[a-z0-9.-]+$/);
+  expect(initialHost).not.toBe('rpc.example');
+
+  await popup.getByTestId('open-settings').click();
+  await expect(popup.getByTestId('settings-rpc-url')).toHaveValue('');
+
+  // Rejected in the click handler, before any permission request or network call.
+  await popup.getByTestId('settings-rpc-url').fill('http://rpc.example');
+  await popup.getByTestId('settings-rpc-save').click();
+  await expect(popup.getByText('RPC URL must start with https://')).toBeVisible();
+
+  // Already in host_permissions, so chrome.permissions.request resolves without a native prompt.
+  const RPC_URL = 'https://api.devnet.solana.com';
+  const HELIUS_KEY = 'e2e-not-a-real-key';
+  await popup.getByTestId('settings-rpc-url').fill(RPC_URL);
+  await popup.getByTestId('settings-helius-key').fill(HELIUS_KEY);
+  await popup.getByTestId('settings-rpc-save').click();
+  await expect(popup.getByText('RPC settings saved')).toBeVisible({ timeout: 20_000 });
+
+  // Persisted in the worker: a fresh popup reads it back and the pill reports the custom host.
+  await popup.reload();
+  await expect(popup.getByTestId('open-settings')).toBeVisible();
+  await expect(popup.getByTestId('network-pill')).toHaveAttribute('title', new URL(RPC_URL).host);
+  await popup.getByTestId('open-settings').click();
+  await expect(popup.getByTestId('settings-rpc-url')).toHaveValue(RPC_URL);
+  await expect(popup.getByTestId('settings-helius-key')).toHaveValue(HELIUS_KEY);
+  await expect(popup.getByTestId('settings-helius-key')).toHaveAttribute('type', 'password');
+
+  await popup.getByTestId('settings-rpc-clear').click();
+  await expect(popup.getByText('RPC settings cleared')).toBeVisible();
+  await expect(popup.getByTestId('settings-rpc-url')).toHaveValue('');
+  // A cleared key stays cleared: the build-time key (if any) must not seed the field again,
+  // so with no custom URL and no key the primary is the public devnet host.
+  await expect(popup.getByTestId('settings-helius-key')).toHaveValue('');
+  await expect(popup.getByTestId('network-pill')).toHaveAttribute('title', 'api.devnet.solana.com');
+
+  // The worker agrees after a fresh read: nothing comes back on reload either.
+  await popup.reload();
+  await expect(popup.getByTestId('open-settings')).toBeVisible();
+  await expect(popup.getByTestId('network-pill')).toHaveAttribute('title', 'api.devnet.solana.com');
+  await popup.getByTestId('open-settings').click();
+  await expect(popup.getByTestId('settings-rpc-url')).toHaveValue('');
+  await expect(popup.getByTestId('settings-helius-key')).toHaveValue('');
+});
+
+test('custom RPC: a failed health probe shows the error, stores nothing, and re-enables Save', async ({
+  context,
+  extensionId,
+}) => {
+  test.setTimeout(90_000);
+  const popup = await importAndUnlock(context, extensionId);
+  const RPC_URL = 'https://api.devnet.solana.com';
+  const pattern = `${RPC_URL}/**`;
+  // The probe runs from the popup page, so a page route can make the endpoint answer 500.
+  await popup.route(pattern, (route) =>
+    route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"e2e"}' }),
+  );
+
+  await popup.getByTestId('open-settings').click();
+  await popup.getByTestId('settings-rpc-url').fill(RPC_URL);
+  await popup.getByTestId('settings-rpc-save').click();
+  await expect(popup.getByText('Endpoint answered HTTP 500')).toBeVisible({ timeout: 20_000 });
+  await expect(popup.getByTestId('settings-rpc-save')).toBeEnabled();
+  await expect(popup.getByTestId('settings-rpc-url')).toBeEnabled();
+
+  // Nothing was stored: a fresh popup reads an empty field back from the worker.
+  await popup.unroute(pattern);
+  await popup.reload();
+  await expect(popup.getByTestId('open-settings')).toBeVisible();
+  await expect(popup.getByTestId('network-pill')).not.toHaveAttribute('title', new URL(RPC_URL).host);
+  await popup.getByTestId('open-settings').click();
+  await expect(popup.getByTestId('settings-rpc-url')).toHaveValue('');
+});
+
 test('clear wallet data resets the settings cache to the worker defaults', async ({ context, extensionId }) => {
   test.setTimeout(90_000);
   const popup = await importAndUnlock(context, extensionId);
