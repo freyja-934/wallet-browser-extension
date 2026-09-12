@@ -30,6 +30,11 @@ import { WALLET_NAME } from '../config/constants';
   window.addEventListener('message', (event) => {
     if (event.source !== window) return;
     if (event.data?.channel !== WALLET_CHANNEL) return;
+    // Worker events carry `event` and no `id`; they never match a pending request.
+    if (typeof event.data.event === 'string' && event.data.id === undefined) {
+      handleWalletEvent(event.data.event, event.data.accounts, event.data.cluster);
+      return;
+    }
     if (event.data.id === undefined || !pending.has(event.data.id)) return;
     // Outbound requests include `type`; only inbound replies have response/error.
     if (event.data.type) return;
@@ -106,8 +111,34 @@ import { WALLET_NAME } from '../config/constants';
   }
 
   let accounts: WalletAccount[] = [];
+  /** The wallet's active cluster as last reported; chains stay mainnet until SHIP-6 reads this. */
+  let currentCluster: string | undefined;
 
-  const wallet: Wallet = {
+  function handleWalletEvent(name: string, nextAccounts: unknown, cluster: unknown): void {
+    if (typeof cluster === 'string') currentCluster = cluster;
+    switch (name) {
+      case 'locked':
+      case 'disconnected':
+      case 'revoked':
+      case 'cleared':
+        accounts = [];
+        emit('change', { accounts });
+        return;
+      case 'accountsChanged':
+      case 'clusterChanged': {
+        const addresses = Array.isArray(nextAccounts)
+          ? nextAccounts.filter((address): address is string => typeof address === 'string')
+          : [];
+        accounts = addresses.map(bytesToAccount);
+        emit('change', { accounts });
+        return;
+      }
+      default:
+        return;
+    }
+  }
+
+  const wallet: Wallet & { readonly cluster: string | undefined } = {
     // The Wallet Standard version, not the app version: the spec's WalletVersion is the literal '1.0.0'.
     version: '1.0.0',
     name: WALLET_NAME,
@@ -116,11 +147,14 @@ import { WALLET_NAME } from '../config/constants';
     get accounts() {
       return accounts;
     },
+    get cluster() {
+      return currentCluster;
+    },
     features: {
       [StandardConnect]: {
         version: '1.0.0',
-        connect: async () => {
-          const response = await send('WALLET_CONNECT');
+        connect: async (input) => {
+          const response = await send('WALLET_CONNECT', { silent: !!input?.silent });
           if (!response?.success) throw new Error(response?.error || 'Connect failed');
           const addresses: string[] = response.accounts ?? [];
           accounts = addresses.map(bytesToAccount);

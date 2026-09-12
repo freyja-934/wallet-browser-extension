@@ -11,6 +11,8 @@ export interface RuntimeMessage {
   origin: string;
   transaction?: number[];
   message?: number[];
+  /** `connect({ silent: true })`: never prompt; answer with what the site may already see. */
+  silent?: boolean;
 }
 
 /**
@@ -53,6 +55,7 @@ export function buildRuntimeMessage(type: unknown, payload: unknown, origin: str
       // Wallet Standard does not forbid signing an empty message.
       return { type, origin, message: validateByteArray(input.message, MAX_MESSAGE_BYTES, 'message', true) };
     case 'WALLET_CONNECT':
+      return input.silent === true ? { type, origin, silent: true } : { type, origin };
     case 'WALLET_DISCONNECT':
     case 'GET_ACCOUNTS':
       return { type, origin };

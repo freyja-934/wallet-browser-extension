@@ -31,6 +31,7 @@ import {
   rejectApproval,
   resolveApproval,
 } from './approvals';
+import { sendToConnected, sendWalletEvent, snapshot } from './events';
 import * as origins from './origins';
 import { getConnection, sendTransfer } from './transfers';
 
@@ -85,8 +86,15 @@ async function dispatch(request: WalletRequest, origin: string): Promise<WalletR
       return { state: await getPublicState() };
     case 'GET_SETTINGS':
       return { settings: await getSettings() };
-    case 'UPDATE_SETTINGS':
-      return { settings: await updateSettings(request.settings) };
+    case 'UPDATE_SETTINGS': {
+      const before = (await getSettings()).cluster;
+      const settings = await updateSettings(request.settings);
+      if (settings.cluster !== before) {
+        const { accounts } = await snapshot();
+        await sendToConnected('clusterChanged', { accounts, cluster: settings.cluster });
+      }
+      return { settings };
+    }
     case 'CREATE_WALLET':
       return { state: await createWallet(request.password, request.seedPhrase) };
     case 'UNLOCK':
@@ -95,8 +103,11 @@ async function dispatch(request: WalletRequest, origin: string): Promise<WalletR
       return { state: await lock() };
     case 'CLEAR_WALLET':
       return { state: await clearWallet() };
-    case 'SWITCH_ACCOUNT':
-      return { state: await switchAccount(request.index) };
+    case 'SWITCH_ACCOUNT': {
+      const state = await switchAccount(request.index);
+      await sendToConnected('accountsChanged', await snapshot());
+      return { state };
+    }
     case 'CHANGE_PASSWORD':
       await changePassword(request.currentPassword, request.newPassword);
       return {};
@@ -122,9 +133,12 @@ async function dispatch(request: WalletRequest, origin: string): Promise<WalletR
       }
       return { pendingId: await enqueueApproval('connect', origin) };
     }
-    case 'WALLET_DISCONNECT':
+    case 'WALLET_DISCONNECT': {
       await origins.disconnect(origin);
+      const { cluster } = await snapshot();
+      await sendWalletEvent('disconnected', { origin, accounts: [], cluster });
       return { disconnected: true };
+    }
     case 'SIGN_MESSAGE':
       await requireConnected(origin);
       return {
@@ -160,9 +174,12 @@ async function dispatch(request: WalletRequest, origin: string): Promise<WalletR
       return {};
     case 'GET_CONNECTED_SITES':
       return { sites: await origins.list() };
-    case 'REVOKE_SITE':
+    case 'REVOKE_SITE': {
       await origins.disconnect(request.origin);
+      const { cluster } = await snapshot();
+      await sendWalletEvent('revoked', { origin: request.origin, accounts: [], cluster });
       return {};
+    }
     case 'SEND_TRANSFER':
       return {
         signature: await sendTransfer({
