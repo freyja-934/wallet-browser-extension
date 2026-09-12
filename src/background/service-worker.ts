@@ -5,6 +5,7 @@ import {
   Transaction,
   VersionedTransaction,
 } from '@solana/web3.js';
+import bs58 from 'bs58';
 import { isExtensionMessageType, type PendingApproval } from '../lib/messages';
 import { isRequestAllowed } from '../lib/sender-gate';
 import { deserializeTransaction, getInstructions, decodeInstruction, collectWarnings } from '../lib/tx-preview';
@@ -191,7 +192,8 @@ async function fulfillApproval(request: PendingApproval): Promise<Record<string,
   if (request.kind === 'signAndSendTransaction') {
     const connection = await getConnection();
     const signature = await connection.sendRawTransaction(signed, { skipPreflight: false });
-    return { signedTransaction: [...signed], signature };
+    // Wallet Standard wants the 64 raw signature bytes; the RPC hands back base58.
+    return { signedTransaction: [...signed], signature: [...bs58.decode(signature)] };
   }
   return { signedTransaction: [...signed] };
 }
