@@ -129,23 +129,35 @@ function requireIntegerString(value: unknown, field: string): string {
 /** Longest Helius key we accept: a UUID is 36 characters, leave room for other formats. */
 export const MAX_HELIUS_KEY_LENGTH = 64;
 
-/** `''` clears the field; otherwise an absolute `https://` URL that `new URL` can parse. */
+/** Helius keys are UUIDs; nothing that could break out of the `?api-key=` query string gets through. */
+const HELIUS_KEY_SHAPE = new RegExp(`^[A-Za-z0-9-]{0,${MAX_HELIUS_KEY_LENGTH}}$`);
+
+/** Trimmed. `''` (so whitespace too) clears the field; otherwise an absolute `https://` URL that `new URL` can parse. */
 function requireRpcUrl(value: unknown, field: string): string {
   if (typeof value !== 'string') invalid(field);
-  if (value === '') return value;
+  const trimmed = value.trim();
+  if (trimmed === '') return trimmed;
   let parsed: URL;
   try {
-    parsed = new URL(value);
+    parsed = new URL(trimmed);
   } catch {
     invalid(field);
   }
   if (parsed.protocol !== 'https:') invalid(field);
-  return value;
+  return trimmed;
 }
 
+/** Trimmed. `''` clears the field; otherwise only `HELIUS_KEY_SHAPE`. */
 function requireHeliusApiKey(value: unknown, field: string): string {
-  if (typeof value !== 'string' || value.length > MAX_HELIUS_KEY_LENGTH) invalid(field);
-  return value;
+  if (typeof value !== 'string') invalid(field);
+  const trimmed = value.trim();
+  if (!HELIUS_KEY_SHAPE.test(trimmed)) invalid(field);
+  return trimmed;
+}
+
+function requireRpcUrlCluster(value: unknown, field: string): WalletSettings['cluster'] {
+  if (typeof value !== 'string' || !(CLUSTERS as readonly string[]).includes(value)) invalid(field);
+  return value as WalletSettings['cluster'];
 }
 
 function requireSettings(value: unknown): Partial<WalletSettings> {
@@ -184,6 +196,9 @@ function requireSettings(value: unknown): Partial<WalletSettings> {
         break;
       case 'heliusApiKey':
         out.heliusApiKey = requireHeliusApiKey(raw, field);
+        break;
+      case 'rpcUrlCluster':
+        out.rpcUrlCluster = requireRpcUrlCluster(raw, field);
         break;
       default:
         invalid('settings');

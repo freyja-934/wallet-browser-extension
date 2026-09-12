@@ -64,6 +64,12 @@ export interface WalletSettings {
   cluster: 'mainnet-beta' | 'devnet';
   /** User-supplied https JSON-RPC endpoint, tried first. Absent when unset. */
   rpcUrl?: string;
+  /**
+   * The cluster `rpcUrl` was probed against (its `getGenesisHash`). While the active
+   * cluster differs the URL is kept but not used. Absent for a URL stored before this
+   * field existed, which is used on either cluster as before.
+   */
+  rpcUrlCluster?: 'mainnet-beta' | 'devnet';
   /** User-supplied Helius key, stored on this device in plaintext. Absent when unset. */
   heliusApiKey?: string;
 }

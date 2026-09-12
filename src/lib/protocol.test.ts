@@ -219,6 +219,47 @@ describe('parseRequest', () => {
     }
   });
 
+  it('rejects a Helius key that could escape the api-key query string', () => {
+    for (const heliusApiKey of ['abc&x=1', 'abc?x', 'abc/def', 'a b', 'key#', 'k=v', 'ключ']) {
+      expect(() => parseRequest({ type: 'UPDATE_SETTINGS', settings: { heliusApiKey } })).toThrow(
+        'Invalid settings.heliusApiKey',
+      );
+    }
+  });
+
+  it('trims the rpc fields; whitespace-only clears them', () => {
+    expect(parseRequest({ type: 'UPDATE_SETTINGS', settings: { rpcUrl: '  https://rpc.example/  ' } })).toEqual({
+      type: 'UPDATE_SETTINGS',
+      settings: { rpcUrl: 'https://rpc.example/' },
+    });
+    expect(parseRequest({ type: 'UPDATE_SETTINGS', settings: { rpcUrl: '   ' } })).toEqual({
+      type: 'UPDATE_SETTINGS',
+      settings: { rpcUrl: '' },
+    });
+    expect(parseRequest({ type: 'UPDATE_SETTINGS', settings: { heliusApiKey: ' abc-123 ' } })).toEqual({
+      type: 'UPDATE_SETTINGS',
+      settings: { heliusApiKey: 'abc-123' },
+    });
+    expect(parseRequest({ type: 'UPDATE_SETTINGS', settings: { heliusApiKey: '\t\n' } })).toEqual({
+      type: 'UPDATE_SETTINGS',
+      settings: { heliusApiKey: '' },
+    });
+  });
+
+  it('accepts only a known cluster for rpcUrlCluster', () => {
+    for (const rpcUrlCluster of ['mainnet-beta', 'devnet']) {
+      expect(parseRequest({ type: 'UPDATE_SETTINGS', settings: { rpcUrlCluster } })).toEqual({
+        type: 'UPDATE_SETTINGS',
+        settings: { rpcUrlCluster },
+      });
+    }
+    for (const rpcUrlCluster of ['', 'testnet', 1, null]) {
+      expect(() => parseRequest({ type: 'UPDATE_SETTINGS', settings: { rpcUrlCluster } })).toThrow(
+        'Invalid settings.rpcUrlCluster',
+      );
+    }
+  });
+
   it('only accepts a decimal integer string for amountSmallest', () => {
     for (const amountSmallest of ['1e9', '-5', '', ' 5', 5, '0x10']) {
       expect(() => parseRequest({ type: 'SEND_TRANSFER', to: 'x', amountSmallest })).toThrow('Invalid amountSmallest');

@@ -1,6 +1,5 @@
 import { DEFAULT_SETTINGS, type WalletSettings } from '../lib/messages';
 import { getCluster, rpcUrlsFor, type Cluster } from '../config/constants';
-import { prioritizeRpcUrls } from './rpc-rotate';
 import { extensionClient } from '../messaging/client';
 
 /** Worker-owned settings as seen from the popup; build defaults when the worker is unreachable. */
@@ -20,8 +19,4 @@ export async function runtimeCluster(): Promise<Cluster> {
 export async function runtimeRpcUrls(): Promise<string[]> {
   const settings = await runtimeSettings();
   return rpcUrlsFor(settings.cluster, settings);
-}
-
-export async function runtimeRpcUrl(): Promise<string> {
-  return prioritizeRpcUrls(await runtimeRpcUrls())[0];
 }

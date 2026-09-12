@@ -45,21 +45,49 @@ export function heliusRpcUrlFor(cluster: Cluster, key: string | undefined): stri
   return `https://${host}.helius-rpc.com/?api-key=${key}`;
 }
 
-export type RpcSettings = Pick<WalletSettings, 'rpcUrl' | 'heliusApiKey'>;
+/** `getGenesisHash` per cluster; Settings refuses a custom URL whose hash belongs to the other one. */
+export const GENESIS_HASH: Readonly<Record<Cluster, string>> = {
+  'mainnet-beta': '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d',
+  devnet: 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBA',
+};
+
+export function clusterForGenesisHash(hash: string): Cluster | undefined {
+  return (Object.keys(GENESIS_HASH) as Cluster[]).find((cluster) => GENESIS_HASH[cluster] === hash);
+}
+
+export type RpcSettings = Pick<WalletSettings, 'rpcUrl' | 'heliusApiKey' | 'rpcUrlCluster'>;
+
+/** `new URL(u).href`, so `https://host` and `https://host/` are the same endpoint; unparsable input stays as is. */
+function normalizedUrlKey(url: string): string {
+  try {
+    return new URL(url).href;
+  } catch {
+    return url;
+  }
+}
 
 /**
  * Endpoint list for one cluster: the user's custom URL, then Helius when a key is
- * set, then the public defaults. Pure; duplicates removed, first occurrence wins.
+ * set, then the public defaults. A custom URL tagged with the other cluster
+ * (`rpcUrlCluster`) is left out; a legacy entry without the tag is used as before.
+ * Pure; duplicates removed by normalised URL, first occurrence wins.
  */
 export function rpcUrlsFor(cluster: Cluster, settings: Partial<RpcSettings> = {}): string[] {
+  const customUrl =
+    settings.rpcUrlCluster && settings.rpcUrlCluster !== cluster ? undefined : settings.rpcUrl;
   const candidates = [
-    settings.rpcUrl,
+    customUrl,
     heliusRpcUrlFor(cluster, settings.heliusApiKey),
     ...publicRpcUrlsFor(cluster),
   ];
+  const seen = new Set<string>();
   const urls: string[] = [];
   for (const url of candidates) {
-    if (url && !urls.includes(url)) urls.push(url);
+    if (!url) continue;
+    const key = normalizedUrlKey(url);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    urls.push(url);
   }
   return urls;
 }

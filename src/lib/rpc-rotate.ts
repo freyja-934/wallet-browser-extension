@@ -4,17 +4,46 @@ const COOLDOWN_MS = 30_000;
 const cooldownUntil = new Map<string, number>();
 
 /**
- * HTTP statuses that say "this endpoint will not serve this call" rather than
- * "this endpoint is unwell": try the next URL for this call only, no cooldown.
+ * What to do with one endpoint's error:
+ * - `skip`: this endpoint will not serve this call (auth, missing method). Try the next URL, no cooldown.
+ * - `cooldown`: this endpoint is unwell. Rest it for `COOLDOWN_MS` and try the next URL.
+ * - `throw`: the request itself is wrong, or the chain rejected it. Every endpoint would say the same;
+ *   rethrow at once, no cooldown, no rotation.
  */
+export type RpcVerdict = 'skip' | 'cooldown' | 'throw';
+
+/** HTTP statuses that say "not for you" rather than "not now". */
 export const SKIP_HTTP_STATUSES: readonly number[] = [401, 403];
 
 /**
- * JSON-RPC codes a public endpoint returns for a method it refuses to serve
- * (`-32601` method not found; `-32600` / `-32000` are what the fallback fixture
- * pins for a blocked method, see rpc-rotate.test.ts). Same rule: skip, no cooldown.
+ * JSON-RPC codes for a method the endpoint refuses or cannot serve, from
+ * web3.js's `SolanaJSONRPCErrorCode`: `-32601` method not found, `-32010`
+ * KEY_EXCLUDED_FROM_SECONDARY_INDEX, `-32011` TRANSACTION_HISTORY_NOT_AVAILABLE.
  */
-export const SKIP_RPC_CODES: readonly number[] = [-32601, -32600, -32000];
+export const SKIP_RPC_CODES: readonly number[] = [-32601, -32010, -32011];
+
+/**
+ * JSON-RPC codes about the node's own health, from `SolanaJSONRPCErrorCode`:
+ * `-32004` BLOCK_NOT_AVAILABLE, `-32005` NODE_UNHEALTHY, `-32007` SLOT_SKIPPED,
+ * `-32009` LONG_TERM_STORAGE_SLOT_SKIPPED, `-32014` BLOCK_STATUS_NOT_AVAILABLE_YET,
+ * `-32016` MIN_CONTEXT_SLOT_NOT_REACHED.
+ */
+export const COOLDOWN_RPC_CODES: readonly number[] = [-32004, -32005, -32007, -32009, -32014, -32016];
+
+/**
+ * Providers do not agree on codes for a blocked method, a missing index, or a
+ * key-gated call, so the message decides when the code does not. Matches skip.
+ */
+export const SKIP_RPC_MESSAGE =
+  /method (is )?not (found|available|supported|allowed)|not supported|disabled|forbidden|api ?key|rate limit|blocked|indexed|personal token/i;
+
+/**
+ * `Connection.getBalance` and `getLatestBlockhash` wrap the JSON-RPC error in a
+ * plain `Error` and drop its code, so the node-health texts web3.js itself uses
+ * are matched by message as well. Matches cooldown.
+ */
+export const COOLDOWN_RPC_MESSAGE =
+  /node is (unhealthy|behind)|block not available|slot (was )?skipped|minimum context slot has not been reached/i;
 
 export function resetRpcCooldowns(): void {
   cooldownUntil.clear();
@@ -40,8 +69,26 @@ function isSkipStatus(status: number): boolean {
   return SKIP_HTTP_STATUSES.includes(status);
 }
 
-function isSkipRpcCode(code: unknown): boolean {
-  return typeof code === 'number' && SKIP_RPC_CODES.includes(code);
+/** Verdict for a non-2xx HTTP response. Anything outside the two lists is the caller's problem. */
+export function classifyHttpStatus(status: number): RpcVerdict {
+  if (isSkipStatus(status)) return 'skip';
+  if (isCooldownStatus(status)) return 'cooldown';
+  return 'throw';
+}
+
+/**
+ * Verdict for a JSON-RPC error envelope. Code lists first, then the message
+ * heuristics; everything else (`-32602` invalid params, `-32002` preflight
+ * failure, `-32003` signature verification, ...) throws.
+ */
+export function classifyJsonRpcError(code: unknown, message: string): RpcVerdict {
+  if (typeof code === 'number') {
+    if (SKIP_RPC_CODES.includes(code)) return 'skip';
+    if (COOLDOWN_RPC_CODES.includes(code)) return 'cooldown';
+  }
+  if (SKIP_RPC_MESSAGE.test(message)) return 'skip';
+  if (COOLDOWN_RPC_MESSAGE.test(message)) return 'cooldown';
+  return 'throw';
 }
 
 export function makeConnection(url: string): Connection {
@@ -49,24 +96,28 @@ export function makeConnection(url: string): Connection {
   return new Connection(url, { commitment: 'confirmed', disableRetryOnRateLimit: true });
 }
 
-/** `${status} ${statusText}: ${body}` is how web3.js reports a non-2xx response, possibly wrapped. */
-const WEB3_HTTP_STATUS = /(?:^|: |Error: )(\d{3}) [A-Za-z][A-Za-z ]*:/;
-
-type Verdict = 'skip' | 'cooldown';
+/**
+ * `${status} ${statusText}: ${body}` is how web3.js reports a non-2xx response,
+ * possibly wrapped in `failed to ...: Error: `. Chrome leaves `statusText` empty
+ * on HTTP/2, so the reason phrase is optional: `403 : {...}`.
+ */
+const WEB3_HTTP_STATUS = /(?:^|: |Error: )(\d{3}) [A-Za-z ]*:/;
 
 /**
- * Classify an error thrown by a web3.js `Connection` call. HTTP 401/403 and a
- * refused method skip the URL without cooling it down; anything else (429, 5xx,
- * transport failures, and errors we cannot read) cools the URL down as before.
+ * Classify an error thrown by a web3.js `Connection` call. A `SolanaJSONRPCError`
+ * carries the server's code; a wrapped HTTP failure carries the status in its
+ * message. Transport errors and anything unreadable cool the URL down.
  */
-export function classifyConnectionError(error: unknown): Verdict {
-  if (error && typeof error === 'object') {
-    if (isSkipRpcCode((error as { code?: unknown }).code)) return 'skip';
-  }
+export function classifyConnectionError(error: unknown): RpcVerdict {
   const message = error instanceof Error ? error.message : String(error);
+  const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;
+  // JSON-RPC codes are negative; a DOMException (AbortError 20, TimeoutError 23) also has a numeric `code`.
+  if (typeof code === 'number' && Number.isInteger(code) && code < 0) {
+    return classifyJsonRpcError(code, message);
+  }
   const status = Number(WEB3_HTTP_STATUS.exec(message)?.[1]);
-  if (!Number.isNaN(status) && isSkipStatus(status)) return 'skip';
-  if (/method not found/i.test(message)) return 'skip';
+  if (status >= 400 && status <= 599) return classifyHttpStatus(status);
+  if (SKIP_RPC_MESSAGE.test(message)) return 'skip';
   return 'cooldown';
 }
 
@@ -85,10 +136,9 @@ class RpcApplicationError extends Error {
 }
 
 /**
- * One JSON-RPC call over the URL list, healthy endpoints first.
- * - 401 / 403 and a refused method (`SKIP_RPC_CODES`) skip to the next URL for this call only.
- * - 408 / 429 / 5xx and transport errors mark the URL unhealthy and move on.
- * - Any other HTTP status or JSON-RPC error is the caller's problem and throws at once.
+ * One JSON-RPC call over the URL list, healthy endpoints first. Same verdicts as
+ * `classifyConnectionError`: `skip` moves on, `cooldown` rests the URL and moves
+ * on, `throw` rethrows at once. A rejected `fetch` (DNS, TLS, CORS, offline) cools down.
  */
 export async function rpcJson<T>(urls: string[], method: string, params: unknown): Promise<T> {
   if (urls.length === 0) {
@@ -115,26 +165,17 @@ export async function rpcJson<T>(urls: string[], method: string, params: unknown
       }
       return json.result as T;
     } catch (error) {
+      let verdict: RpcVerdict;
       if (error instanceof RpcHttpError) {
-        if (isSkipStatus(error.status)) {
-          lastError = error;
-          continue;
-        }
-        if (!isCooldownStatus(error.status)) throw error;
-        markRpcUnhealthy(url);
-        lastError = error;
-        continue;
+        verdict = classifyHttpStatus(error.status);
+      } else if (error instanceof RpcApplicationError) {
+        verdict = classifyJsonRpcError(error.code, error.message);
+      } else {
+        verdict = 'cooldown';
       }
-      if (error instanceof RpcApplicationError) {
-        if (isSkipRpcCode(error.code)) {
-          lastError = error;
-          continue;
-        }
-        throw error;
-      }
-      // fetch rejected: DNS, TLS, CORS, offline.
+      if (verdict === 'throw') throw error;
+      if (verdict === 'cooldown') markRpcUnhealthy(url);
       lastError = error instanceof Error ? error : new Error(`${method} failed`);
-      markRpcUnhealthy(url);
     }
   }
   throw lastError ?? new Error(`${method} failed`);
@@ -150,7 +191,9 @@ export async function withRotatedConnection<T>(
     try {
       return await fn(makeConnection(url));
     } catch (error) {
-      if (classifyConnectionError(error) === 'cooldown') markRpcUnhealthy(url);
+      const verdict = classifyConnectionError(error);
+      if (verdict === 'throw') throw error;
+      if (verdict === 'cooldown') markRpcUnhealthy(url);
       lastError = error;
     }
   }
@@ -166,7 +209,9 @@ export async function readyConnection(urls: string[]): Promise<Connection> {
       await connection.getLatestBlockhash('confirmed');
       return connection;
     } catch (error) {
-      if (classifyConnectionError(error) === 'cooldown') markRpcUnhealthy(url);
+      const verdict = classifyConnectionError(error);
+      if (verdict === 'throw') throw error;
+      if (verdict === 'cooldown') markRpcUnhealthy(url);
       lastError = error;
     }
   }
