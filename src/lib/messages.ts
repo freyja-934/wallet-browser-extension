@@ -1,5 +1,14 @@
 export const WALLET_CHANNEL = 'cinder-wallet';
 
+/**
+ * How long the injected script waits for any reply before rejecting with
+ * `Request timeout`. The content script gives up strictly earlier than this and
+ * withdraws the request, and the worker refuses to approve anything past
+ * `createdAt + PAGE_TIMEOUT_MS`, so an Approve the page has stopped waiting for
+ * can never sign or broadcast.
+ */
+export const PAGE_TIMEOUT_MS = 120_000;
+
 export const DAP_MESSAGE_TYPES = [
   'WALLET_CONNECT',
   'WALLET_DISCONNECT',
@@ -84,8 +93,13 @@ export interface PendingApproval {
   kind: ApprovalKind;
   origin: string;
   createdAt: number;
+  /** `createdAt + PAGE_TIMEOUT_MS`: the worker refuses to approve after this, whatever the page is doing. */
+  deadline: number;
   /** The approval window `chrome.windows.create` opened for it; closing that window rejects the request. */
   windowId?: number;
+  /** The tab and frame that asked; closing that tab rejects the request and closes its window. */
+  tabId?: number;
+  frameId?: number;
   transactionBytes?: number[];
   messageBytes?: number[];
 }
@@ -97,9 +111,13 @@ export interface ConnectedSite {
   accountIndexes: number[];
 }
 
-/** Pushed from the worker to connected pages (via the content script) and to the popup. */
+/**
+ * Pushed from the worker to connected pages (via the content script) and to the
+ * popup. `unlocked` goes to extension pages only, never to a tab.
+ */
 export type WalletEventName =
   | 'locked'
+  | 'unlocked'
   | 'disconnected'
   | 'revoked'
   | 'cleared'

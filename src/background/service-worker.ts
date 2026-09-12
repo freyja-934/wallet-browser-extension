@@ -1,10 +1,9 @@
 /// <reference types="chrome" />
 
 import './buffer-polyfill';
-import { expirePending, onWindowRemoved } from './approvals';
+import { expirePending, installApprovalLifecycle } from './approvals';
 import { installWalletEvents } from './events';
 import { registerAutoLock } from './keyring';
-import { forget } from './origins';
 import { handleMessage } from './router';
 
 registerAutoLock();
@@ -12,20 +11,20 @@ installWalletEvents();
 
 // Registered synchronously at worker start so Chrome wakes us for them.
 // Closing an approval window rejects the request it showed; a closed tab
-// leaves the event delivery registry.
-chrome.windows.onRemoved.addListener((windowId) => {
-  void onWindowRemoved(windowId);
-});
-chrome.tabs.onRemoved.addListener((tabId) => {
-  void forget(tabId);
-});
+// rejects its requests, closes their windows, and leaves the delivery registry.
+installApprovalLifecycle();
 
 // Worker-side backstop for approvals nobody answered or cancelled (5 minutes).
+// Alarms outlive the worker, so only create it when it is not already there:
+// re-creating on every wake would reset the period each time.
 const APPROVALS_SWEEP_ALARM = 'cinder-approvals-sweep';
-void chrome.alarms.create(APPROVALS_SWEEP_ALARM, { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === APPROVALS_SWEEP_ALARM) void expirePending();
 });
+void (async () => {
+  const existing = (await chrome.alarms.get(APPROVALS_SWEEP_ALARM)) as chrome.alarms.Alarm | undefined;
+  if (!existing) await chrome.alarms.create(APPROVALS_SWEEP_ALARM, { periodInMinutes: 1 });
+})();
 
 /** `chrome-extension://<id>/`, the base every popup and approval page loads from. */
 const EXTENSION_BASE = chrome.runtime.getURL('');

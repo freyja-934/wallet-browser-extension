@@ -97,6 +97,19 @@ describe('router events', () => {
     expect(chromeStub.runtime.sent()).toEqual([{ type: 'WALLET_EVENT', event: 'locked' }]);
   });
 
+  it('UNLOCK tells extension pages only, never a tab', async () => {
+    installWalletEvents();
+    await createAndConnect(pageA);
+    await handleMessage({ type: 'LOCK' }, popup, BASE);
+    const before = chromeStub.tabs.sent().length;
+    await handleMessage({ type: 'UNLOCK', password: TEST_PASSWORD }, popup, BASE);
+    expect(chromeStub.runtime.sent()).toEqual([
+      { type: 'WALLET_EVENT', event: 'locked' },
+      { type: 'WALLET_EVENT', event: 'unlocked' },
+    ]);
+    expect(chromeStub.tabs.sent()).toHaveLength(before);
+  });
+
   it('CLEAR_WALLET sends locked then cleared and forgets every site', async () => {
     installWalletEvents();
     await createAndConnect(pageA);
@@ -105,12 +118,17 @@ describe('router events', () => {
     expect(chromeStub.storage.local.snapshot()).toEqual({});
   });
 
-  it('WALLET_DISCONNECT and REVOKE_SITE tell only that origin', async () => {
+  it('WALLET_DISCONNECT tells that origin’s other frames, not the one that asked; REVOKE_SITE tells them all', async () => {
     await createAndConnect(pageA, pageB);
+    // A second tab and an iframe of the same site.
+    await handleMessage({ type: 'WALLET_CONNECT', silent: true }, { ...pageA, tab: { id: 3 } }, BASE);
+    await handleMessage({ type: 'WALLET_CONNECT', silent: true }, { ...pageA, frameId: 5 }, BASE);
     const cluster = await buildCluster();
     await handleMessage({ type: 'WALLET_DISCONNECT' }, pageA, BASE);
+    // The asking frame's own disconnect() emits `change`; a push as well would make the page emit twice.
     expect(chromeStub.tabs.sent()).toEqual([
-      { tabId: 1, frameId: 0, message: { type: 'WALLET_EVENT', event: 'disconnected', origin: A, accounts: [], cluster } },
+      { tabId: 3, frameId: 0, message: { type: 'WALLET_EVENT', event: 'disconnected', origin: A, accounts: [], cluster } },
+      { tabId: 1, frameId: 5, message: { type: 'WALLET_EVENT', event: 'disconnected', origin: A, accounts: [], cluster } },
     ]);
     await handleMessage({ type: 'REVOKE_SITE', origin: B }, popup, BASE);
     expect(chromeStub.tabs.sent().at(-1)).toEqual({

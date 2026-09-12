@@ -15,6 +15,8 @@ export interface WalletEventPayload {
   origin?: string;
   accounts: string[];
   cluster: string;
+  /** Skip this frame: the page that asked for the change already knows (its own `disconnect()` emits). */
+  exclude?: { tabId: number; frameId: number };
 }
 
 export interface WalletEventMessage {
@@ -43,7 +45,9 @@ async function deliver(entry: origins.RegistryEntry, message: WalletEventMessage
 }
 
 export async function sendWalletEvent(event: WalletEventName, payload: WalletEventPayload): Promise<void> {
-  const entries = payload.origin === undefined ? await origins.allTabs() : await origins.tabsFor(payload.origin);
+  const { exclude } = payload;
+  const entries = (payload.origin === undefined ? await origins.allTabs() : await origins.tabsFor(payload.origin))
+    .filter((entry) => !exclude || entry.tabId !== exclude.tabId || entry.frameId !== exclude.frameId);
   await Promise.all(
     entries.map((entry) =>
       deliver(entry, {
@@ -55,13 +59,15 @@ export async function sendWalletEvent(event: WalletEventName, payload: WalletEve
       })
     )
   );
-  if (event === 'locked') {
-    // The popup routes to Unlock on this; the worker's own listener never sees it.
-    try {
-      await chrome.runtime.sendMessage({ type: 'WALLET_EVENT', event: 'locked' });
-    } catch {
-      /* popup closed */
-    }
+  if (event === 'locked') await tellExtensionPages('locked');
+}
+
+/** The popup and any approval window; the worker's own listener never sees it. */
+async function tellExtensionPages(event: 'locked' | 'unlocked'): Promise<void> {
+  try {
+    await chrome.runtime.sendMessage({ type: 'WALLET_EVENT', event });
+  } catch {
+    /* no extension page open */
   }
 }
 
@@ -76,13 +82,15 @@ export async function sendToConnected(event: WalletEventName, payload: Omit<Wall
   );
 }
 
-/** Wire lock and clear (including auto-lock) to the event channel. Called once at worker start. */
+/** Wire lock, unlock and clear (including auto-lock) to the event channel. Called once at worker start. */
 export function installWalletEvents(): void {
   setLockHooks({
     onLocked: async () => {
       const { cluster } = await snapshot();
       await sendWalletEvent('locked', { accounts: [], cluster });
     },
+    // Extension pages only: a page learns it is connected again through its own connect().
+    onUnlocked: () => tellExtensionPages('unlocked'),
     onCleared: async () => {
       const { cluster } = await snapshot();
       await sendWalletEvent('cleared', { accounts: [], cluster });

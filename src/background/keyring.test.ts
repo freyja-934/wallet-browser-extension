@@ -172,6 +172,21 @@ describe('legacy storage', () => {
     expect(JSON.stringify(chromeStub.storage.local.snapshot())).not.toContain('lumen');
   });
 
+  it('moves a scheduled lumen-autolock to cinder-autolock at the same time', async () => {
+    const when = Date.now() + 7 * 60_000;
+    await chromeStub.alarms.create('lumen-autolock', { when });
+    resetKeyringForTests();
+    await getSettings();
+    expect(chromeStub.alarms.scheduled()).not.toHaveProperty('lumen-autolock');
+    expect(chromeStub.alarms.scheduled()['cinder-autolock']).toEqual({ when });
+    expect((await chromeStub.alarms.get('cinder-autolock'))?.scheduledTime).toBe(when);
+  });
+
+  it('schedules no auto-lock when there was no legacy alarm to carry over', async () => {
+    await getSettings();
+    expect(chromeStub.alarms.scheduled()).toEqual({});
+  });
+
   it('keeps the cinder_* value when both names exist, and still drops the old key', async () => {
     await chromeStub.storage.local.set({
       lumen_settings: { cluster: 'devnet' },
@@ -216,6 +231,19 @@ describe('lock', () => {
     expect(await origins.list()).toEqual([]);
     expect(chromeStub.storage.local.snapshot()).toEqual({});
     expect(calls).toEqual(['locked', 'cleared']);
+  });
+
+  it('unlock runs the onUnlocked hook after the session is written', async () => {
+    await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
+    await lock();
+    const seen: boolean[] = [];
+    setLockHooks({
+      onUnlocked: async () => {
+        seen.push((await getPublicState()).isLocked);
+      },
+    });
+    await unlock(TEST_PASSWORD);
+    expect(seen).toEqual([false]);
   });
 
   it('a throwing hook does not break lock', async () => {

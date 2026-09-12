@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DAP_MESSAGE_TYPES, EXTENSION_MESSAGE_TYPES } from './messages';
-import { isExtensionSender, isRequestAllowed, PAGE_ALLOWED_TYPES } from './sender-gate';
+import { isExtensionSender, isRequestAllowed, PAGE_ALLOWED_TYPES, pageOrigin } from './sender-gate';
 
 const ID = 'abcdefghijklmnopabcdefghijklmnop';
 const BASE = `chrome-extension://${ID}/`;
@@ -51,6 +51,44 @@ describe('sender gate', () => {
       for (const sender of [...pageSenders, ...extensionSenders]) {
         expect(isRequestAllowed(type, sender, BASE)).toBe(true);
       }
+    }
+  });
+});
+
+describe('pageOrigin', () => {
+  it('accepts a web origin from sender.origin as is', () => {
+    expect(pageOrigin({ origin: 'https://dapp.example', url: 'https://dapp.example/app?x=1' })).toBe('https://dapp.example');
+    expect(pageOrigin({ origin: 'http://localhost:5174' })).toBe('http://localhost:5174');
+    expect(pageOrigin({ origin: 'https://dapp.example:8443' })).toBe('https://dapp.example:8443');
+  });
+
+  it('reduces sender.url to its origin only when sender.origin is absent', () => {
+    expect(pageOrigin({ url: 'https://dapp.example/app' })).toBe('https://dapp.example');
+    expect(pageOrigin({ url: 'https://dapp.example/other#frag' })).toBe('https://dapp.example');
+    // A present but opaque origin is never rescued by the URL.
+    expect(pageOrigin({ origin: 'null', url: 'https://dapp.example/app' })).toBeNull();
+  });
+
+  it('refuses opaque, empty, malformed, path-bearing and non-web origins', () => {
+    for (const sender of [
+      { origin: 'null' },
+      { origin: '' },
+      {},
+      { origin: 'not a url' },
+      { origin: 'https://dapp.example/' },
+      { origin: 'https://dapp.example/app' },
+      { origin: 'HTTPS://dapp.example' },
+      { origin: 'file://' },
+      { origin: 'data:' },
+      { origin: 'about:blank' },
+      { origin: `chrome-extension://${ID}` },
+      { origin: `chrome-extension://${'z'.repeat(32)}` },
+      { url: 'file:///tmp/page.html' },
+      { url: 'about:blank' },
+      { url: `chrome-extension://${'z'.repeat(32)}/page.html` },
+      { url: 'nonsense' },
+    ]) {
+      expect(pageOrigin(sender), JSON.stringify(sender)).toBeNull();
     }
   });
 });

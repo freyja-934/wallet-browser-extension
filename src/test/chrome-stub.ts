@@ -54,6 +54,13 @@ export interface CreatedWindow {
   options: Record<string, unknown>;
 }
 
+/** What `chrome.alarms.get` resolves with. */
+export interface ScheduledAlarm {
+  name: string;
+  scheduledTime: number;
+  periodInMinutes?: number;
+}
+
 export interface SentTabMessage {
   tabId: number;
   message: unknown;
@@ -69,16 +76,22 @@ export interface ChromeStub {
   };
   alarms: {
     create(name: string, info: Record<string, unknown>): Promise<void>;
+    /** The scheduled alarm as Chrome reports it, or `undefined` when there is none. */
+    get(name: string): Promise<ScheduledAlarm | undefined>;
     clear(name: string): Promise<boolean>;
     onAlarm: StubEvent<[{ name: string }]>;
-    /** Test helper: alarms currently scheduled, by name. */
+    /** Test helper: the `create` info of every alarm currently scheduled, by name. */
     scheduled(): Record<string, Record<string, unknown>>;
   };
   windows: {
     create(options: Record<string, unknown>): Promise<{ id: number }>;
+    /** Rejects like Chrome for an id it never created (or already removed). */
+    remove(windowId: number): Promise<void>;
     onRemoved: StubEvent<[number]>;
     /** Test helper: every `create` call so far, in order. */
     created(): CreatedWindow[];
+    /** Test helper: every `remove` call so far, in order, including ones that rejected. */
+    removed(): number[];
   };
   tabs: {
     sendMessage(tabId: number, message: unknown, options?: { frameId?: number }): Promise<undefined>;
@@ -176,33 +189,56 @@ export function createChromeStub(): ChromeStub {
   const local = makeStorageArea('local', storageChanged);
   const session = makeStorageArea('session', storageChanged);
 
-  let alarms = new Map<string, Record<string, unknown>>();
+  let alarms = new Map<string, { info: Record<string, unknown>; scheduledTime: number }>();
   let createdWindows: CreatedWindow[] = [];
+  let openWindows = new Set<number>();
+  let removedWindows: number[] = [];
   let sentTabMessages: SentTabMessage[] = [];
   let sentRuntimeMessages: unknown[] = [];
   let nextWindowId = 1;
+
+  /** `when` wins; otherwise `delayInMinutes`, then `periodInMinutes`, from now — as Chrome computes it. */
+  const scheduledTimeFor = (info: Record<string, unknown>): number => {
+    if (typeof info.when === 'number') return info.when;
+    const minutes = typeof info.delayInMinutes === 'number' ? info.delayInMinutes
+      : typeof info.periodInMinutes === 'number' ? info.periodInMinutes : 0;
+    return Date.now() + minutes * 60_000;
+  };
 
   const stub: ChromeStub = {
     storage: { local, session, onChanged: storageChanged },
     alarms: {
       async create(name, info) {
-        alarms.set(name, { ...info });
+        alarms.set(name, { info: { ...info }, scheduledTime: scheduledTimeFor(info) });
+      },
+      async get(name) {
+        const entry = alarms.get(name);
+        if (!entry) return undefined;
+        const alarm: ScheduledAlarm = { name, scheduledTime: entry.scheduledTime };
+        if (typeof entry.info.periodInMinutes === 'number') alarm.periodInMinutes = entry.info.periodInMinutes;
+        return alarm;
       },
       async clear(name) {
         return alarms.delete(name);
       },
       onAlarm: makeEvent<[{ name: string }]>(),
-      scheduled: () => Object.fromEntries(alarms),
+      scheduled: () => Object.fromEntries([...alarms].map(([name, entry]) => [name, { ...entry.info }])),
     },
     windows: {
       async create(options) {
         const id = nextWindowId;
         nextWindowId += 1;
         createdWindows.push({ id, options: { ...options } });
+        openWindows.add(id);
         return { id };
+      },
+      async remove(windowId) {
+        removedWindows.push(windowId);
+        if (!openWindows.delete(windowId)) throw new Error(`No window with id: ${windowId}.`);
       },
       onRemoved: makeEvent<[number]>(),
       created: () => [...createdWindows],
+      removed: () => [...removedWindows],
     },
     tabs: {
       async sendMessage(tabId, message, options) {
@@ -231,6 +267,8 @@ export function createChromeStub(): ChromeStub {
       void session.clear();
       alarms = new Map();
       createdWindows = [];
+      openWindows = new Set();
+      removedWindows = [];
       sentTabMessages = [];
       sentRuntimeMessages = [];
       nextWindowId = 1;

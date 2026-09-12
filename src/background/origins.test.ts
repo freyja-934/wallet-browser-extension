@@ -58,10 +58,16 @@ describe('connected origins', () => {
     expect(chromeStub.storage.local.snapshot()).not.toHaveProperty(origins.CONNECTED_KEY);
   });
 
-  it('serialises concurrent connects so none is lost', async () => {
-    await Promise.all([origins.connect(A, [0]), origins.connect(B, [0]), origins.disconnect(A)]);
-    expect(await origins.isConnected(A)).toBe(false);
-    expect(await origins.isConnected(B)).toBe(true);
+  it('serialises concurrent writes in call order so none is lost', async () => {
+    // Without the lock both connects read {} and the second write drops the first origin.
+    await Promise.all([origins.connect(A, [0]), origins.connect(B, [0])]);
+    expect((await origins.list()).map((site) => site.origin).sort()).toEqual([A, B]);
+    // Without the lock the disconnect reads a map without C, finds nothing to remove,
+    // and the connect's write then lands last: C would stay connected.
+    const C = 'https://c.example';
+    await Promise.all([origins.connect(C, [0]), origins.disconnect(C)]);
+    expect(await origins.isConnected(C)).toBe(false);
+    expect((await origins.list()).map((site) => site.origin).sort()).toEqual([A, B]);
   });
 });
 

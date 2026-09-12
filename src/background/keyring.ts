@@ -56,13 +56,26 @@ async function moveLegacyKeys(
 
 let migration: Promise<void> | undefined;
 
+/**
+ * Carry a scheduled `lumen-autolock` over to `cinder-autolock` at the same
+ * moment, so the rename neither postpones nor skips the auto-lock. Not
+ * `scheduleAutoLock`: that reads settings, which would re-enter the migration.
+ */
+async function moveLegacyAlarm(): Promise<void> {
+  if (!chrome.alarms) return;
+  // Chrome resolves with undefined for an alarm that does not exist; the types say otherwise.
+  const legacy = (await chrome.alarms.get(LEGACY_AUTOLOCK_ALARM)) as chrome.alarms.Alarm | undefined;
+  await chrome.alarms.clear(LEGACY_AUTOLOCK_ALARM);
+  if (legacy) await chrome.alarms.create(AUTOLOCK_ALARM, { when: legacy.scheduledTime });
+}
+
 /** One-time move of `lumen_*` keys and the `lumen-autolock` alarm. Runs before any read or write. */
 function ensureMigrated(): Promise<void> {
   if (!migration) {
     migration = (async () => {
       await moveLegacyKeys(chrome.storage.local, LEGACY_LOCAL_KEYS);
       await moveLegacyKeys(sessionArea(), LEGACY_SESSION_KEYS);
-      if (chrome.alarms) await chrome.alarms.clear(LEGACY_AUTOLOCK_ALARM);
+      await moveLegacyAlarm();
     })().catch((error) => {
       // Let the next access try again rather than pinning a failed promise forever.
       migration = undefined;
@@ -81,6 +94,8 @@ export function resetKeyringForTests(): void {
 export interface LockHooks {
   /** After the session is gone and pending approvals rejected (lock, auto-lock, clear). */
   onLocked?: () => void | Promise<void>;
+  /** After a successful unlock wrote the session (the popup re-reads state on this). */
+  onUnlocked?: () => void | Promise<void>;
   /** After the vault and connected sites are removed. */
   onCleared?: () => void | Promise<void>;
 }
@@ -315,6 +330,7 @@ export async function unlock(password: string): Promise<WalletPublicState> {
   await persistAccounts(accounts);
   await writeSession({ seedB64: seed.toString('base64'), activeAccountIndex: 0 });
   await scheduleAutoLock();
+  await runHook(lockHooks.onUnlocked);
   return getPublicState();
 }
 
