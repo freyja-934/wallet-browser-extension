@@ -1,5 +1,5 @@
 import { expect, test } from './fixtures';
-import { importAndUnlock, TEST_MNEMONIC, TEST_PASSWORD } from './popup';
+import { importAndUnlock, importWallet, TEST_MNEMONIC, TEST_PASSWORD } from './popup';
 
 const NEXT_PASSWORD = 'TestWallet2!';
 
@@ -34,4 +34,25 @@ test('settings update auto-lock, export seed, and change password', async ({ con
     await popup.getByTestId('open-settings').click();
   }
   await expect(popup.getByTestId('open-receive')).toBeVisible();
+});
+
+test('clear wallet data resets the settings cache to the worker defaults', async ({ context, extensionId }) => {
+  test.setTimeout(90_000);
+  const popup = await importAndUnlock(context, extensionId);
+
+  await popup.getByTestId('open-settings').click();
+  // The build default is devnet (.env VITE_NETWORK=devnet), so move away from it first.
+  await popup.getByTestId('settings-cluster').selectOption('mainnet-beta');
+  await expect(popup.getByText('Using Solana Mainnet')).toBeVisible();
+  await expect(popup.getByTestId('settings-cluster')).toHaveValue('mainnet-beta');
+
+  await popup.getByRole('button', { name: 'Clear all wallet data', exact: true }).click();
+  await popup.getByRole('button', { name: 'Clear data', exact: true }).click();
+  await expect(popup.getByTestId('import-existing-wallet')).toBeVisible();
+
+  // Same popup page, so the React Query cache survives: it must have been re-synced
+  // with the worker, which reverted to defaults on CLEAR_WALLET. The settings flag
+  // in Redux also survives, so the dashboard remounts straight into Settings.
+  await importWallet(popup, 'settings-cluster');
+  await expect(popup.getByTestId('settings-cluster')).toHaveValue('devnet');
 });

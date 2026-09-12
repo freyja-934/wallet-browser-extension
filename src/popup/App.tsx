@@ -1,11 +1,11 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { Toaster } from 'react-hot-toast';
 import { Dashboard } from '../components/Dashboard';
 import { LoadingScreen } from '../components/common/LoadingScreen';
 import { UnlockScreen } from '../components/wallet/UnlockScreen';
 import { WalletCreationFlow } from '../components/wallet/WalletCreationFlow';
-import { extensionClient } from '../messaging/client';
-import { setCluster, setHideSmallBalances } from '../store/slices/uiSlice';
+import { syncSettings } from '../hooks/useSettings';
 import { initializeWallet } from '../store/slices/walletSlice';
 import { useAppDispatch, useAppSelector } from '../store/store';
 
@@ -35,6 +35,7 @@ const toasterConfig = {
 
 function App() {
   const dispatch = useAppDispatch();
+  const queryClient = useQueryClient();
   const { isInitialized, isLocked, hasVault } = useAppSelector((state) => state.wallet);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -42,9 +43,7 @@ function App() {
     const init = async () => {
       try {
         await dispatch(initializeWallet()).unwrap();
-        const settings = await extensionClient.getSettings();
-        dispatch(setCluster(settings.cluster));
-        dispatch(setHideSmallBalances(settings.hideSmallBalances));
+        await syncSettings(queryClient, dispatch);
       } catch (error) {
         console.error('Failed to initialize wallet:', error);
       } finally {
@@ -52,7 +51,7 @@ function App() {
       }
     };
     init();
-  }, [dispatch]);
+  }, [dispatch, queryClient]);
 
   if (!isInitialized || isLoading) {
     return <LoadingScreen />;
