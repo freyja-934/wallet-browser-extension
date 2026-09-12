@@ -5,9 +5,7 @@ import { Dashboard } from '../components/Dashboard';
 import { LoadingScreen } from '../components/common/LoadingScreen';
 import { UnlockScreen } from '../components/wallet/UnlockScreen';
 import { WalletCreationFlow } from '../components/wallet/WalletCreationFlow';
-import { SETTINGS_QUERY_KEY } from '../hooks/useSettings';
-import { extensionClient } from '../messaging/client';
-import { setCluster, setHideSmallBalances } from '../store/slices/uiSlice';
+import { syncSettings } from '../hooks/useSettings';
 import { initializeWallet } from '../store/slices/walletSlice';
 import { useAppDispatch, useAppSelector } from '../store/store';
 
@@ -45,12 +43,7 @@ function App() {
     const init = async () => {
       try {
         await dispatch(initializeWallet()).unwrap();
-        const settings = await extensionClient.getSettings();
-        // Seed the React Query cache so useSettings() does not refetch, and keep
-        // the Redux mirror for the consumers that still read it (SHIP-8a).
-        queryClient.setQueryData(SETTINGS_QUERY_KEY, settings);
-        dispatch(setCluster(settings.cluster));
-        dispatch(setHideSmallBalances(settings.hideSmallBalances));
+        await syncSettings(queryClient, dispatch);
       } catch (error) {
         console.error('Failed to initialize wallet:', error);
       } finally {

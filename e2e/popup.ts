@@ -13,7 +13,8 @@ export async function openPopup(context: BrowserContext, extensionId: string): P
   return page;
 }
 
-export async function importWallet(page: Page): Promise<void> {
+/** Import the fixture wallet; `landing` is the testid that proves the dashboard mounted. */
+export async function importWallet(page: Page, landing = 'open-receive'): Promise<void> {
   await page.getByTestId('import-existing-wallet').click();
   await page.getByTestId('seed-paste').fill(TEST_MNEMONIC);
   await page.getByTestId('seed-import-submit').click();
@@ -23,7 +24,7 @@ export async function importWallet(page: Page): Promise<void> {
   await page.getByTestId('password-submit').click();
   const failed = page.getByText('Failed to create wallet');
   await Promise.race([
-    page.getByTestId('open-receive').waitFor({ timeout: 30_000 }),
+    page.getByTestId(landing).waitFor({ timeout: 30_000 }),
     failed.waitFor({ timeout: 30_000 }).then(async () => {
       throw new Error(`import failed; body=${await page.locator('body').innerText()}`);
     }),

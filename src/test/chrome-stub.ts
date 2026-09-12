@@ -136,9 +136,11 @@ function makeStorageArea(areaName: string, global: StubEvent<[StorageChanges, st
       const changes: StorageChanges = {};
       for (const [key, value] of Object.entries(items)) {
         if (value === undefined) continue;
-        const oldValue = data.get(key);
+        // Chrome omits `oldValue` for a newly created key rather than setting it to undefined.
+        changes[key] = data.has(key)
+          ? { oldValue: clone(data.get(key)), newValue: clone(value) }
+          : { newValue: clone(value) };
         data.set(key, clone(value));
-        changes[key] = { oldValue: clone(oldValue), newValue: clone(value) };
       }
       fire(changes);
     },

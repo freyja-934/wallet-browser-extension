@@ -1,12 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_TRANSACTION_BYTES } from './bridge';
+import { MAX_MESSAGE_BYTES, MAX_TRANSACTION_BYTES } from './bridge';
 import { EXTENSION_MESSAGE_TYPES, type ExtensionMessageType } from './messages';
-import { parseRequest, PROTOCOL_COVERS_ALLOWLIST, type WalletRequest } from './protocol';
+import { parseRequest, PROTOCOL_COVERS_ALLOWLIST } from './protocol';
 
 interface Case {
   valid: Record<string, unknown>;
-  /** What `parseRequest` should hand back for `valid` (defaults to `valid` itself). */
-  parsed?: WalletRequest;
   malformed: Record<string, unknown>;
   error: string;
 }
@@ -71,6 +69,9 @@ const cases: Record<ExtensionMessageType, Case> = {
 
 describe('parseRequest', () => {
   it('covers the allowlist exactly', () => {
+    // Coverage is enforced by tsc (the constant's type is `never` when the union or
+    // response map drifts from the allowlist); vitest does not typecheck, so this
+    // runtime assertion only documents the intent.
     expect(PROTOCOL_COVERS_ALLOWLIST).toBe(true);
     expect(Object.keys(cases).sort()).toEqual([...EXTENSION_MESSAGE_TYPES].sort());
   });
@@ -103,16 +104,50 @@ describe('parseRequest', () => {
   });
 
   it('treats an empty seedPhrase, mint, and reason as absent', () => {
-    expect(parseRequest({ type: 'CREATE_WALLET', password: 'pw', seedPhrase: '' })).toEqual({
+    expect(parseRequest({ type: 'CREATE_WALLET', password: 'pw', seedPhrase: '' })).toStrictEqual({
       type: 'CREATE_WALLET',
       password: 'pw',
     });
-    expect(parseRequest({ type: 'SEND_TRANSFER', to: 'x', amountSmallest: '1', mint: '' })).toEqual({
+    expect(parseRequest({ type: 'SEND_TRANSFER', to: 'x', amountSmallest: '1', mint: '' })).toStrictEqual({
       type: 'SEND_TRANSFER',
       to: 'x',
       amountSmallest: '1',
     });
-    expect(parseRequest({ type: 'REJECT_REQUEST', id: 'a', reason: '' })).toEqual({ type: 'REJECT_REQUEST', id: 'a' });
+    expect(parseRequest({ type: 'REJECT_REQUEST', id: 'a', reason: '' })).toStrictEqual({
+      type: 'REJECT_REQUEST',
+      id: 'a',
+    });
+  });
+
+  it('requires a string password on CREATE_WALLET', () => {
+    expect(() => parseRequest({ type: 'CREATE_WALLET' })).toThrow('Invalid password');
+    expect(() => parseRequest({ type: 'CREATE_WALLET', password: 42 })).toThrow('Invalid password');
+  });
+
+  it('accepts an empty SIGN_MESSAGE and rejects one over the byte cap', () => {
+    expect(parseRequest({ type: 'SIGN_MESSAGE', message: [] })).toStrictEqual({ type: 'SIGN_MESSAGE', message: [] });
+    expect(() => parseRequest({ type: 'SIGN_MESSAGE', message: new Array(MAX_MESSAGE_BYTES + 1).fill(0) })).toThrow(
+      'Invalid message',
+    );
+  });
+
+  it('only accepts a non-negative integer below the hardened-derivation limit as an index', () => {
+    for (const index of [1.5, NaN, -1, Infinity, 2 ** 31]) {
+      expect(() => parseRequest({ type: 'SWITCH_ACCOUNT', index })).toThrow('Invalid index');
+      expect(() => parseRequest({ type: 'EXPORT_PRIVATE_KEY', password: 'pw', accountIndex: index })).toThrow(
+        'Invalid accountIndex',
+      );
+    }
+    expect(parseRequest({ type: 'SWITCH_ACCOUNT', index: 2 ** 31 - 1 })).toStrictEqual({
+      type: 'SWITCH_ACCOUNT',
+      index: 2 ** 31 - 1,
+    });
+  });
+
+  it('requires a non-empty string recipient on SEND_TRANSFER', () => {
+    for (const to of ['', 5]) {
+      expect(() => parseRequest({ type: 'SEND_TRANSFER', to, amountSmallest: '1' })).toThrow('Invalid to');
+    }
   });
 
   it('validates every settings field by type and rejects unknown keys', () => {
@@ -134,7 +169,7 @@ describe('parseRequest', () => {
       [{ hideSmallBalances: 'yes' }, 'Invalid settings.hideSmallBalances'],
       [{ smallBalanceThreshold: NaN }, 'Invalid settings.smallBalanceThreshold'],
       [{ cluster: 'testnet' }, 'Invalid settings.cluster'],
-      [{ rpcUrl: 'https://x' }, 'Invalid settings'],
+      [{ bogus: 1 }, 'Invalid settings'],
     ];
     for (const [settings, message] of bad) {
       expect(() => parseRequest({ type: 'UPDATE_SETTINGS', settings })).toThrow(message);

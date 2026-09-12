@@ -107,8 +107,11 @@ function optionalString(value: unknown, field: string): string | undefined {
   return requireString(value, field);
 }
 
+/** Hardened derivation adds 2^31 to the index, so anything above 0x7fffffff cannot be a child index. */
+const MAX_INDEX = 0x7fffffff;
+
 function requireIndex(value: unknown, field: string): number {
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) invalid(field);
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > MAX_INDEX) invalid(field);
   return value;
 }
 

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { MAX_TRANSACTION_BYTES } from '../lib/bridge';
 import type { PendingApproval, WalletPublicState } from '../lib/messages';
 import { installChromeStub, STUB_EXTENSION_ID, uninstallChromeStub, type ChromeStub } from '../test/chrome-stub';
 import { TEST_ADDRESS, TEST_MNEMONIC, TEST_PASSWORD } from '../test/fixtures';
@@ -11,6 +12,7 @@ const page = { origin: 'https://dapp.example', url: 'https://dapp.example/app' }
 let chromeStub: ChromeStub;
 
 beforeEach(() => {
+  // approvals.ts keeps an in-memory pending Map across tests; isolation relies on random ids.
   chromeStub = installChromeStub();
 });
 
@@ -34,6 +36,29 @@ describe('handleMessage', () => {
     );
     expect(chromeStub.windows.created()).toEqual([]);
     expect(chromeStub.storage.local.snapshot()).toEqual({});
+  });
+
+  it('refuses every privileged type from a page without touching storage', async () => {
+    await createFixtureWallet();
+    const before = chromeStub.storage.local.snapshot();
+    const privileged = [
+      { type: 'UNLOCK', password: TEST_PASSWORD },
+      { type: 'GET_STATE' },
+      { type: 'CLEAR_WALLET' },
+      { type: 'GET_PENDING_REQUEST', id: 'any' },
+    ];
+    for (const raw of privileged) {
+      await expect(handleMessage(raw, page, BASE)).rejects.toThrow('Not allowed from a page');
+    }
+    expect(chromeStub.storage.local.snapshot()).toEqual(before);
+    expect(chromeStub.windows.created()).toEqual([]);
+  });
+
+  it('rejects a non-string UNLOCK password before consulting the keyring', async () => {
+    // Fresh install: the keyring would say 'No wallet found', so 'Invalid password'
+    // proves the parser rejected the payload first.
+    await expect(handleMessage({ type: 'UNLOCK', password: 42 }, popup, BASE)).rejects.toThrow('Invalid password');
+    expect(chromeStub.storage.session.snapshot()).toEqual({});
   });
 
   it('rejects unknown and non-string types', async () => {
@@ -136,6 +161,18 @@ describe('handleMessage', () => {
     expect(request?.origin).toBe(page.url);
   });
 
+  it('refuses APPROVE_REQUEST from the requesting page itself', async () => {
+    await createFixtureWallet();
+    const { pendingId } = (await handleMessage({ type: 'WALLET_CONNECT' }, page, BASE)) as { pendingId: string };
+
+    await expect(handleMessage({ type: 'APPROVE_REQUEST', id: pendingId }, page, BASE)).rejects.toThrow(
+      'Not allowed from a page',
+    );
+    await expect(handleMessage({ type: 'POLL_APPROVAL', id: pendingId }, page, BASE)).resolves.toEqual({
+      status: 'pending',
+    });
+  });
+
   it('completes a connect approval with the fixture account', async () => {
     await createFixtureWallet();
     const { pendingId } = (await handleMessage({ type: 'WALLET_CONNECT' }, page, BASE)) as { pendingId: string };
@@ -149,7 +186,7 @@ describe('handleMessage', () => {
 
   it('rejects a malformed transaction from a page and from the popup', async () => {
     await createFixtureWallet();
-    for (const transaction of ['AQ==', [], [256], new Array(1233).fill(0)]) {
+    for (const transaction of ['AQ==', [], [256], new Array(MAX_TRANSACTION_BYTES + 1).fill(0)]) {
       await expect(handleMessage({ type: 'SIGN_TRANSACTION', transaction }, page, BASE)).rejects.toThrow(
         'Invalid transaction',
       );
@@ -164,7 +201,6 @@ describe('handleMessage', () => {
     await createFixtureWallet();
     await handleMessage({ type: 'LOCK' }, popup, BASE);
     await expect(handleMessage({ type: 'UNLOCK', password: 'wrong' }, popup, BASE)).rejects.toThrow('Invalid password');
-    await expect(handleMessage({ type: 'UNLOCK', password: 42 }, popup, BASE)).rejects.toThrow('Invalid password');
     const { state } = (await handleMessage({ type: 'GET_STATE' }, popup, BASE)) as { state: WalletPublicState };
     expect(state.isLocked).toBe(true);
   });

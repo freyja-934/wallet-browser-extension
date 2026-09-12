@@ -1,7 +1,8 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import toast from 'react-hot-toast';
 import { WALLET_NAME, WALLET_VERSION, type Cluster } from '../../config/constants';
-import { useSettings, useUpdateSettings } from '../../hooks/useSettings';
+import { SETTINGS_QUERY_KEY, syncSettings, useSettings, useUpdateSettings } from '../../hooks/useSettings';
 import { useInvalidateWalletData } from '../../hooks/useWalletQueries';
 import { DEFAULT_SETTINGS } from '../../lib/messages';
 import {
@@ -22,6 +23,7 @@ import { Modal, ModalContent, ModalFooter, ModalHeader } from '../ui/Modal';
 
 export function Settings() {
   const dispatch = useAppDispatch();
+  const queryClient = useQueryClient();
   const { accounts, activeAccountIndex } = useAppSelector((state) => state.wallet);
   const reduxHideSmallBalances = useAppSelector((state) => state.ui.hideSmallBalances);
   const reduxCluster = useAppSelector((state) => state.ui.cluster);
@@ -91,6 +93,9 @@ export function Settings() {
   const handleClearData = async () => {
     try {
       await dispatch(clearWalletData()).unwrap();
+      // The worker reverted to defaults; drop the staleTime: Infinity cache and re-sync.
+      queryClient.removeQueries({ queryKey: SETTINGS_QUERY_KEY });
+      await syncSettings(queryClient, dispatch);
       dispatch(initializeWallet());
       toast.success('Wallet data cleared');
     } catch {
