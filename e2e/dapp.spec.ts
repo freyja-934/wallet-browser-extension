@@ -117,3 +117,38 @@ async function waitForUnlock(context: BrowserContext): Promise<Page> {
   }
   throw new Error(`no unlock among ${context.pages().map((page) => page.url()).join(', ')}`);
 }
+
+test('a page cannot override the bridged message type or origin', async ({ context, extensionId }) => {
+  await importAndUnlock(context, extensionId);
+
+  const dapp = await context.newPage();
+  await dapp.goto('http://localhost:5174/');
+  await expect(dapp.locator('#log')).toContainText('registered Cinder Wallet', { timeout: 15_000 });
+
+  // Outer type is allow-listed; the payload tries to swap it for a popup-only
+  // type and to spoof the origin. The old bridge spread the payload last.
+  const reply = await dapp.evaluate(
+    () =>
+      new Promise<{ response?: Record<string, unknown>; error?: string }>((resolve) => {
+        const id = 424242;
+        window.addEventListener('message', (event) => {
+          if (event.source !== window || event.data?.channel !== 'cinder-wallet' || event.data.id !== id) return;
+          if (event.data.response === undefined && event.data.error === undefined) return;
+          resolve({ response: event.data.response, error: event.data.error });
+        });
+        window.postMessage(
+          {
+            channel: 'cinder-wallet',
+            id,
+            type: 'GET_ACCOUNTS',
+            payload: { type: 'GET_STATE', origin: 'https://evil.example' },
+          },
+          '*',
+        );
+      }),
+  );
+
+  expect(reply.error).toBeUndefined();
+  expect(reply.response?.state).toBeUndefined();
+  expect(Array.isArray(reply.response?.accounts)).toBe(true);
+});

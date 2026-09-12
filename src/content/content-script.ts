@@ -1,5 +1,6 @@
 /// <reference types="chrome" />
 
+import { buildRuntimeMessage } from '../lib/bridge';
 import { isDappMessageType, WALLET_CHANNEL } from '../lib/messages';
 
 const script = document.createElement('script');
@@ -75,11 +76,12 @@ window.addEventListener('message', async (event) => {
   }
 
   try {
-    const response = await chrome.runtime.sendMessage({
-      type: event.data.type,
-      ...event.data.payload,
-      origin: window.location.origin,
-    }) as { success?: boolean; pendingId?: string; error?: string } | undefined;
+    // Copy only the fields this dApp type accepts. Never spread the page's
+    // payload: it could override `type` and reach popup-only handlers.
+    const request = buildRuntimeMessage(event.data.type, event.data.payload, window.location.origin);
+    const response = await chrome.runtime.sendMessage(request) as
+      | { success?: boolean; pendingId?: string; error?: string }
+      | undefined;
 
     if (!response) {
       throw new Error('No response from Cinder Wallet');

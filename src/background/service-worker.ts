@@ -5,7 +5,7 @@ import {
   Transaction,
   VersionedTransaction,
 } from '@solana/web3.js';
-import { isExtensionMessageType, type PendingApproval } from '../lib/messages';
+import { DAP_MESSAGE_TYPES, isExtensionMessageType, type PendingApproval } from '../lib/messages';
 import { deserializeTransaction, getInstructions, decodeInstruction, collectWarnings } from '../lib/tx-preview';
 import {
   changePassword,
@@ -42,6 +42,15 @@ chrome.runtime.onConnect.addListener((port) => {
   });
 });
 
+/** Message types a content script (any web page) may send. Everything else is popup / approval only. */
+const PAGE_ALLOWED_TYPES = new Set<string>([...DAP_MESSAGE_TYPES, 'POLL_APPROVAL']);
+const EXTENSION_ORIGIN = new URL(chrome.runtime.getURL('')).origin;
+
+function isExtensionPage(sender: chrome.runtime.MessageSender): boolean {
+  if (sender.origin) return sender.origin === EXTENSION_ORIGIN;
+  return typeof sender.url === 'string' && sender.url.startsWith(`${EXTENSION_ORIGIN}/`);
+}
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   const type = request?.type as string;
   if (!type || !isExtensionMessageType(type)) {
@@ -49,7 +58,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return false;
   }
 
-  const origin = request.origin || sender.origin || sender.url || '';
+  if (!isExtensionPage(sender) && !PAGE_ALLOWED_TYPES.has(type)) {
+    sendResponse({ success: false, error: 'Not allowed from a page' });
+    return false;
+  }
+
+  // Trust the browser's view of who sent this, never a field in the payload.
+  const origin = sender.origin || sender.url || '';
 
   void (async () => {
     try {
