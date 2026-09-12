@@ -106,7 +106,8 @@ const WEB3_HTTP_STATUS = /(?:^|: |Error: )(\d{3}) [A-Za-z ]*:/;
 /**
  * Classify an error thrown by a web3.js `Connection` call. A `SolanaJSONRPCError`
  * carries the server's code; a wrapped HTTP failure carries the status in its
- * message. Transport errors and anything unreadable cool the URL down.
+ * message. Transport errors and anything unreadable cool the URL down; a
+ * `TypeError` that is not a transport error is our own bug and throws.
  */
 export function classifyConnectionError(error: unknown): RpcVerdict {
   const message = error instanceof Error ? error.message : String(error);
@@ -118,7 +119,8 @@ export function classifyConnectionError(error: unknown): RpcVerdict {
   const status = connectionErrorHttpStatus(error);
   if (status !== undefined) return classifyHttpStatus(status);
   if (SKIP_RPC_MESSAGE.test(message)) return 'skip';
-  return 'cooldown';
+  if (COOLDOWN_RPC_MESSAGE.test(message)) return 'cooldown';
+  return classifyThrownError(error);
 }
 
 /** The HTTP status behind a failed `Connection` call or `rpcJson` call, when there was one. */
@@ -131,19 +133,32 @@ export function connectionErrorHttpStatus(error: unknown): number | undefined {
 }
 
 /**
- * `fetch` itself rejected (DNS, TLS, CORS, offline, a network filter), or the
- * request was aborted or timed out: no server answered. `Connection.getBalance`
- * stringifies the cause into its message (`...: TypeError: Failed to fetch`).
+ * How `fetch` says no server answered: Chrome's `Failed to fetch`, Safari's
+ * `Load failed`, Node's `fetch failed`, Chromium's `net::ERR_*` codes, libc errno
+ * names, and abort or timeout phrasing. `Connection.getBalance` stringifies the
+ * cause into its message (`...: TypeError: Failed to fetch`), so the message is
+ * matched, not the class: a `TypeError` from a bug in our own code is not a
+ * network failure.
  */
 export const TRANSPORT_ERROR_MESSAGE =
-  /TypeError: |failed to fetch|fetch failed|network ?error|load failed|timed? ?out|aborted|ECONN|ENOTFOUND|EAI_AGAIN/i;
+  /failed to fetch|fetch failed|load failed|network ?error|ERR_|ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|AbortError|TimeoutError|timed? ?out|aborted/i;
 
 export function isTransportError(error: unknown): boolean {
-  if (error instanceof TypeError) return true;
   const name = error instanceof Error ? error.name : '';
   if (name === 'AbortError' || name === 'TimeoutError') return true;
   const message = error instanceof Error ? error.message : String(error);
   return TRANSPORT_ERROR_MESSAGE.test(message);
+}
+
+/**
+ * Verdict for an error with no HTTP status and no JSON-RPC code: a transport
+ * failure cools the URL down, a `TypeError` that is not one is our own bug and
+ * would recur on every endpoint, and anything else unreadable cools down.
+ */
+export function classifyThrownError(error: unknown): RpcVerdict {
+  if (isTransportError(error)) return 'cooldown';
+  if (error instanceof TypeError) return 'throw';
+  return 'cooldown';
 }
 
 /** Nothing at this URL will serve us from here: a transport failure, or 401/403 at the door. */
@@ -219,7 +234,7 @@ export async function rpcJson<T>(
       } else if (error instanceof RpcApplicationError) {
         verdict = classifyJsonRpcError(error.code, error.message);
       } else {
-        verdict = 'cooldown';
+        verdict = classifyThrownError(error);
       }
       onFailure?.({ url, error, verdict });
       if (verdict === 'throw') throw error;

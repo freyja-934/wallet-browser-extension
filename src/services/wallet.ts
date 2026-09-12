@@ -1,6 +1,7 @@
 import { PublicKey } from '@solana/web3.js';
+import type { TokenNames } from '../lib/token-metadata';
 import { coinGeckoService, type TokenPrice } from './coingecko';
-import { heliusService, type TokenBalance } from './helius';
+import { heliusService, type TokenBalance, type TokenNameRef } from './helius';
 
 export interface WalletBalances {
   /** SOL as a float, for the current UI. Prefer `lamports`. */
@@ -34,13 +35,22 @@ class WalletService {
     };
   }
 
-  /** SOL and per-mint prices, or throws; the caller decides what an absent price looks like. */
+  /**
+   * SOL and per-mint prices. The two reads are independent: a failed token-price
+   * call leaves `tokens` empty, while a failed SOL price still throws so the UI
+   * shows `—` rather than a total that is missing its largest part.
+   */
   async getPrices(mints: string[]): Promise<WalletPrices> {
     const [sol, tokens] = await Promise.all([
       coinGeckoService.getSolanaPrice(),
-      coinGeckoService.getTokenPrices(mints),
+      coinGeckoService.getTokenPrices(mints).catch(() => new Map<string, TokenPrice>()),
     ]);
     return { sol, tokens };
+  }
+
+  /** Names for the tokens DAS left unnamed, keyed by mint; see `heliusService.getTokenNames`. */
+  async getTokenNames(tokens: TokenNameRef[]): Promise<Record<string, TokenNames>> {
+    return heliusService.getTokenNames(tokens);
   }
 
   async estimateFee(): Promise<number> {

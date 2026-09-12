@@ -1,14 +1,16 @@
-import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID, getTokenMetadata } from '@solana/spl-token';
+import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID, TokenAccountNotFoundError, getTokenMetadata } from '@solana/spl-token';
 import { PublicKey, type AccountInfo, type Connection } from '@solana/web3.js';
 import { Buffer } from 'buffer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   METADATA_BATCH,
   METADATA_PROGRAM_ID,
+  TOKEN_2022_CONCURRENCY,
   decodeMetadata,
   fetchTokenMetadata,
   metadataPda,
   type ConnectionRunner,
+  type TokenNames,
 } from './token-metadata';
 
 vi.mock('@solana/spl-token', async (importOriginal) => {
@@ -95,16 +97,34 @@ describe('decodeMetadata', () => {
 });
 
 describe('fetchTokenMetadata', () => {
+  /**
+   * A runner standing in for `withRotatedConnection`: it records every error the
+   * callback lets through, which is what the rotation layer would classify.
+   */
   function fakeConnection(handler: (keys: PublicKey[]) => Array<AccountInfo<Buffer> | null>) {
     const calls: PublicKey[][] = [];
+    const rejections: unknown[] = [];
     const connection = {
       getMultipleAccountsInfo: vi.fn(async (keys: PublicKey[]) => {
         calls.push(keys);
         return handler(keys);
       }),
     } as unknown as Connection;
-    const run: ConnectionRunner = (fn) => fn(connection);
-    return { run, calls };
+    const run: ConnectionRunner = async (fn) => {
+      try {
+        return await fn(connection);
+      } catch (error) {
+        rejections.push(error);
+        throw error;
+      }
+    };
+    return { run, calls, rejections };
+  }
+
+  const TOKEN_2022 = TOKEN_2022_PROGRAM_ID.toBase58();
+
+  function extension(mint: PublicKey, names: TokenNames) {
+    return { ...names, uri: '', mint, additionalMetadata: [] as Array<[string, string]> };
   }
 
   it('batches Metaplex lookups by 100 and names only the mints that have an account', async () => {
@@ -160,6 +180,75 @@ describe('fetchTokenMetadata', () => {
     expect(calls).toEqual([[metadataPda(withoutExtension)]]);
     expect(names.get(withExtension.toBase58())).toEqual({ name: 'Ext Token', symbol: 'EXT' });
     expect(names.get(withoutExtension.toBase58())).toEqual({ name: 'Legacy', symbol: 'LGCY' });
+  });
+
+  it('runs Token-2022 lookups four at a time, each settled on its own', async () => {
+    const mints = Array.from({ length: 10 }, () => PublicKey.unique());
+    let inFlight = 0;
+    let peak = 0;
+    mockedGetTokenMetadata.mockImplementation(async (_connection, mint) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      inFlight -= 1;
+      return extension(mint, { name: `Token ${mint.toBase58().slice(0, 4)}`, symbol: 'TKN' });
+    });
+    const { run, calls, rejections } = fakeConnection(() => []);
+
+    const names = await fetchTokenMetadata(
+      run,
+      mints.map((mint) => ({ mint: mint.toBase58(), programId: TOKEN_2022 })),
+    );
+
+    expect(mockedGetTokenMetadata).toHaveBeenCalledTimes(10);
+    expect(peak).toBe(TOKEN_2022_CONCURRENCY);
+    expect(names.size).toBe(10);
+    expect(calls).toEqual([]);
+    expect(rejections).toEqual([]);
+  });
+
+  it('keeps a mint without the extension away from the rotation layer: no endpoint sees an error', async () => {
+    const named = PublicKey.unique();
+    const missing = PublicKey.unique();
+    mockedGetTokenMetadata.mockImplementation(async (_connection, mint) => {
+      if (mint.equals(named)) return extension(mint, { name: 'Ext Token', symbol: 'EXT' });
+      // What spl-token throws when the mint has no metadata extension: a TokenError with an empty message.
+      throw new TokenAccountNotFoundError();
+    });
+    const { run, calls, rejections } = fakeConnection((keys) =>
+      keys.map((key) => (key.equals(metadataPda(missing)) ? account(buildMetadata({ name: 'Legacy', symbol: 'LGCY', uri: '' })) : null)),
+    );
+
+    const names = await fetchTokenMetadata(run, [
+      { mint: named.toBase58(), programId: TOKEN_2022 },
+      { mint: missing.toBase58(), programId: TOKEN_2022 },
+    ]);
+
+    expect(rejections).toEqual([]);
+    expect(names.get(named.toBase58())).toEqual({ name: 'Ext Token', symbol: 'EXT' });
+    expect(names.get(missing.toBase58())).toEqual({ name: 'Legacy', symbol: 'LGCY' });
+    expect(calls).toEqual([[metadataPda(missing)]]);
+  });
+
+  it('lets an endpoint failure reach the rotation layer, and moves only that mint to Metaplex when every URL fails', async () => {
+    const broken = PublicKey.unique();
+    const fine = PublicKey.unique();
+    mockedGetTokenMetadata.mockImplementation(async (_connection, mint) => {
+      if (mint.equals(broken)) throw new Error(`failed to get info about account ${mint.toBase58()}: Error: 503 : down`);
+      return extension(mint, { name: 'Fine', symbol: 'FINE' });
+    });
+    const { run, calls, rejections } = fakeConnection(() => [null]);
+
+    const names = await fetchTokenMetadata(run, [
+      { mint: broken.toBase58(), programId: TOKEN_2022 },
+      { mint: fine.toBase58(), programId: TOKEN_2022 },
+    ]);
+
+    expect(rejections).toHaveLength(1);
+    expect((rejections[0] as Error).message).toContain('503');
+    expect(names.get(fine.toBase58())).toEqual({ name: 'Fine', symbol: 'FINE' });
+    expect(names.has(broken.toBase58())).toBe(false);
+    expect(calls).toEqual([[metadataPda(broken)]]);
   });
 
   it('skips the batch when nothing is left to look up', async () => {

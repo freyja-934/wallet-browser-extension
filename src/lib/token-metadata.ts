@@ -1,12 +1,16 @@
 import { TOKEN_2022_PROGRAM_ID, getTokenMetadata } from '@solana/spl-token';
 import { PublicKey, type Connection } from '@solana/web3.js';
 import { Buffer } from 'buffer';
+import { COOLDOWN_RPC_MESSAGE, SKIP_RPC_MESSAGE, connectionErrorHttpStatus, isTransportError } from './rpc-rotate';
 
 /** Metaplex Token Metadata program. */
 export const METADATA_PROGRAM_ID = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
 
 /** `getMultipleAccountsInfo` accepts at most 100 keys per call. */
 export const METADATA_BATCH = 100;
+
+/** Token-2022 extension lookups in flight at once; each one is a `getAccountInfo` of the mint. */
+export const TOKEN_2022_CONCURRENCY = 4;
 
 /** Metaplex `Key::MetadataV1`, the first byte of every metadata account. */
 const METADATA_V1_KEY = 4;
@@ -68,32 +72,56 @@ export function decodeMetadata(data: Uint8Array): DecodedMetadata | undefined {
 }
 
 /**
+ * Did the endpoint fail (HTTP status, JSON-RPC code, transport, node-health text)?
+ * Anything else thrown inside a lookup, such as spl-token's `TokenAccountNotFoundError`
+ * (an empty message) for a mint without the extension, or a decode error on odd
+ * account data, is about that one mint and must never reach the rotation layer,
+ * which would read it as endpoint trouble and cool the URL down.
+ */
+function isEndpointFailure(error: unknown): boolean {
+  if (isTransportError(error)) return true;
+  if (connectionErrorHttpStatus(error) !== undefined) return true;
+  const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;
+  if (typeof code === 'number' && Number.isInteger(code) && code < 0) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return SKIP_RPC_MESSAGE.test(message) || COOLDOWN_RPC_MESSAGE.test(message);
+}
+
+/** The Token-2022 metadata extension for one mint, or undefined when the mint has none. */
+async function token2022Names(run: ConnectionRunner, mint: PublicKey): Promise<TokenNames | undefined> {
+  const meta = await run(async (connection) => {
+    try {
+      return await getTokenMetadata(connection, mint, 'confirmed', TOKEN_2022_PROGRAM_ID);
+    } catch (error) {
+      if (isEndpointFailure(error)) throw error;
+      return null;
+    }
+  });
+  return meta && (meta.name || meta.symbol) ? { name: meta.name, symbol: meta.symbol } : undefined;
+}
+
+/**
  * Names for `mints` from chain data: Token-2022 mints try the metadata extension
- * (`getTokenMetadata`) first, then every mint still unnamed is looked up at its
- * Metaplex PDA in batches of `METADATA_BATCH`. Mints with no metadata are left
- * out of the map; a per-mint failure is not an error, a failed batch is.
+ * (`getTokenMetadata`) first, `TOKEN_2022_CONCURRENCY` at a time and each
+ * settled on its own, then every mint still unnamed is looked up at its Metaplex
+ * PDA in batches of `METADATA_BATCH`. Mints with no metadata are left out of the
+ * map; a per-mint failure is not an error, a failed Metaplex batch is.
  */
 export async function fetchTokenMetadata(run: ConnectionRunner, mints: MintRef[]): Promise<Map<string, TokenNames>> {
   const names = new Map<string, TokenNames>();
-  const remaining: PublicKey[] = [];
   const token2022 = TOKEN_2022_PROGRAM_ID.toBase58();
 
-  for (const { mint, programId } of mints) {
-    const key = new PublicKey(mint);
-    if (programId === token2022) {
-      try {
-        const meta = await run((connection) => getTokenMetadata(connection, key, 'confirmed', TOKEN_2022_PROGRAM_ID));
-        if (meta && (meta.name || meta.symbol)) {
-          names.set(mint, { name: meta.name, symbol: meta.symbol });
-          continue;
-        }
-      } catch {
-        // No extension, or the mint could not be read: fall through to Metaplex.
-      }
-    }
-    remaining.push(key);
+  const extensionMints = mints.filter(({ programId }) => programId === token2022);
+  for (let i = 0; i < extensionMints.length; i += TOKEN_2022_CONCURRENCY) {
+    const chunk = extensionMints.slice(i, i + TOKEN_2022_CONCURRENCY);
+    const settled = await Promise.allSettled(chunk.map(({ mint }) => token2022Names(run, new PublicKey(mint))));
+    settled.forEach((result, index) => {
+      // A rejected lookup means every endpoint failed for this mint; it falls through to Metaplex.
+      if (result.status === 'fulfilled' && result.value) names.set(chunk[index].mint, result.value);
+    });
   }
 
+  const remaining = mints.filter(({ mint }) => !names.has(mint)).map(({ mint }) => new PublicKey(mint));
   for (let i = 0; i < remaining.length; i += METADATA_BATCH) {
     const chunk = remaining.slice(i, i + METADATA_BATCH);
     const accounts = await run((connection) => connection.getMultipleAccountsInfo(chunk.map(metadataPda)));

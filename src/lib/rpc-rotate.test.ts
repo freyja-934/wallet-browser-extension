@@ -10,12 +10,16 @@ import {
 import {
   classifyConnectionError,
   classifyJsonRpcError,
+  connectionErrorHttpStatus,
+  isTransportError,
+  isUnreachableFailure,
   markRpcUnhealthy,
   prioritizeRpcUrls,
   readyConnection,
   resetRpcCooldowns,
   rpcJson,
   withRotatedConnection,
+  type RpcFailure,
 } from './rpc-rotate';
 
 /*
@@ -390,13 +394,60 @@ describe('classifyConnectionError', () => {
     expect(classifyConnectionError('string error')).toBe('cooldown');
   });
 
+  it('throws on a TypeError that is not a transport failure: our bug would recur on every endpoint', () => {
+    expect(classifyConnectionError(new TypeError("Cannot read properties of undefined (reading 'value')"))).toBe('throw');
+  });
+
   it('throws on an HTTP status that is neither auth nor endpoint trouble', () => {
     expect(classifyConnectionError(new Error('400 Bad Request: nope'))).toBe('throw');
     expect(classifyConnectionError(new Error('failed to get balance of account x: Error: 404 : {}'))).toBe('throw');
   });
 });
 
+describe('failure shape helpers', () => {
+  const web3Wrapped = new Error(`failed to get balance of account ${TEST_ADDRESS}: TypeError: Failed to fetch`);
+  const bug = new TypeError("Cannot read properties of undefined (reading 'value')");
+  const table: Array<[label: string, error: unknown, status: number | undefined, transport: boolean, unreachable: boolean]> = [
+    ["TypeError 'Failed to fetch'", new TypeError('Failed to fetch'), undefined, true, true],
+    ['AbortError', new DOMException('The user aborted a request.', 'AbortError'), undefined, true, true],
+    ['web3 getBalance wrapping a fetch failure', web3Wrapped, undefined, true, true],
+    ["TypeError 'Cannot read properties of undefined'", bug, undefined, false, false],
+    ['403', new Error('403 Forbidden: nope'), 403, false, true],
+    ['503', new Error('failed to get balance of account x: Error: 503 : down'), 503, false, false],
+    ['plain Error', new Error('something else'), undefined, false, false],
+  ];
+
+  it.each(table)('%s', (_label, error, status, transport, unreachable) => {
+    expect(connectionErrorHttpStatus(error)).toBe(status);
+    expect(isTransportError(error)).toBe(transport);
+    expect(isUnreachableFailure(error)).toBe(unreachable);
+  });
+});
+
 describe('withRotatedConnection', () => {
+  it('reports every failure to the observer in order, the throw verdict included', async () => {
+    const seen: RpcFailure[] = [];
+    const bug = new TypeError("Cannot read properties of undefined (reading 'value')");
+    await expect(
+      withRotatedConnection(
+        [A, B],
+        async (connection) => {
+          if (connection.rpcEndpoint === A) throw new Error('503 Service Unavailable: down');
+          throw bug;
+        },
+        (failure) => seen.push(failure),
+      ),
+    ).rejects.toBe(bug);
+    expect(seen.map(({ url, verdict }) => ({ url, verdict }))).toEqual([
+      { url: A, verdict: 'cooldown' },
+      { url: B, verdict: 'throw' },
+    ]);
+    expect(seen[1].error).toBe(bug);
+    // The bug threw at once: B was not cooled down, only A was.
+    expect(prioritizeRpcUrls([A, B])).toEqual([B, A]);
+  });
+
+
   it('builds confirmed connections that do not retry on 429, in URL order', async () => {
     const seen: string[] = [];
     await withRotatedConnection([A, B], async (connection) => {

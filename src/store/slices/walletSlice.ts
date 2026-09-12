@@ -195,4 +195,6 @@ export type Transaction = {
   mint?: string;
   fee: number;
   description?: string;
+  /** The signature is real but its details could not be fetched; the row shows "Details unavailable". */
+  detailsUnavailable?: true;
 };
