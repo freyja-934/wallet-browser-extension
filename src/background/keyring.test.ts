@@ -1,6 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { installChromeStub, uninstallChromeStub, type ChromeStub } from '../test/chrome-stub';
-import { getSettings, setBuildHeliusApiKeyForTests, updateSettings } from './keyring';
+import { TEST_MNEMONIC, TEST_PASSWORD } from '../test/fixtures';
+import { enqueueApproval, getApprovalResult } from './approvals';
+import * as origins from './origins';
+import {
+  clearWallet,
+  createWallet,
+  getPublicState,
+  getSettings,
+  lock,
+  resetKeyringForTests,
+  setBuildHeliusApiKeyForTests,
+  setLockHooks,
+  touchActivity,
+  unlock,
+  updateSettings,
+} from './keyring';
 
 const BUILD_KEY = 'build-seed-not-a-real-key';
 const USER_KEY = 'user-typed-not-a-real-key';
@@ -9,6 +24,7 @@ let chromeStub: ChromeStub;
 
 beforeEach(() => {
   chromeStub = installChromeStub();
+  resetKeyringForTests();
   setBuildHeliusApiKeyForTests(BUILD_KEY);
 });
 
@@ -123,5 +139,114 @@ describe('legacy storage', () => {
     expect(next.cluster).toBe('devnet');
     expect(next.heliusApiKey).toBe(USER_KEY);
     expect(stored()?.heliusApiKey).toBe(USER_KEY);
+  });
+
+  it('moves every lumen_* key to its cinder_* name once and removes the old one', async () => {
+    await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
+    const local = chromeStub.storage.local.snapshot();
+    const session = chromeStub.storage.session.snapshot();
+    // Simulate an install that wrote under the old names only.
+    await chromeStub.storage.local.clear();
+    await chromeStub.storage.session.clear();
+    await chromeStub.storage.local.set({
+      lumen_vault: local.cinder_vault,
+      lumen_settings: { cluster: 'devnet' },
+      lumen_accounts: local.cinder_accounts,
+    });
+    await chromeStub.storage.session.set({ lumen_session: session.cinder_session });
+    await chromeStub.alarms.create('lumen-autolock', { delayInMinutes: 15 });
+    resetKeyringForTests();
+
+    const state = await getPublicState();
+    expect(state.hasVault).toBe(true);
+    expect(state.isLocked).toBe(false);
+    expect(state.accounts[0]?.address).toBe(
+      (local.cinder_accounts as { accounts: { address: string }[] }).accounts[0].address,
+    );
+    const migratedLocal = chromeStub.storage.local.snapshot();
+    expect(Object.keys(migratedLocal).sort()).toEqual(['cinder_accounts', 'cinder_settings', 'cinder_vault']);
+    expect(migratedLocal.cinder_vault).toEqual(local.cinder_vault);
+    expect(migratedLocal.cinder_settings).toEqual({ cluster: 'devnet' });
+    expect(Object.keys(chromeStub.storage.session.snapshot())).toEqual(['cinder_session']);
+    expect(chromeStub.alarms.scheduled()).not.toHaveProperty('lumen-autolock');
+    expect(JSON.stringify(chromeStub.storage.local.snapshot())).not.toContain('lumen');
+  });
+
+  it('keeps the cinder_* value when both names exist, and still drops the old key', async () => {
+    await chromeStub.storage.local.set({
+      lumen_settings: { cluster: 'devnet' },
+      cinder_settings: { cluster: 'mainnet-beta' },
+    });
+    expect((await getSettings()).cluster).toBe('mainnet-beta');
+    expect(chromeStub.storage.local.snapshot()).not.toHaveProperty('lumen_settings');
+  });
+});
+
+describe('session storage', () => {
+  it('never falls back to local storage for the session', async () => {
+    delete (chromeStub.storage as { session?: unknown }).session;
+    await expect(createWallet(TEST_PASSWORD, TEST_MNEMONIC)).rejects.toThrow('Session storage unavailable');
+    expect(JSON.stringify(chromeStub.storage.local.snapshot())).not.toContain('seedB64');
+  });
+});
+
+describe('lock', () => {
+  it('rejects pending approvals, clears the alarm, and runs the onLocked hook', async () => {
+    await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
+    const pendingId = await enqueueApproval('connect', 'https://dapp.example');
+    const calls: string[] = [];
+    setLockHooks({ onLocked: () => { calls.push('locked'); }, onCleared: () => { calls.push('cleared'); } });
+
+    const state = await lock();
+    expect(state.isLocked).toBe(true);
+    expect(chromeStub.alarms.scheduled()).toEqual({});
+    expect(chromeStub.storage.session.snapshot()).not.toHaveProperty('cinder_session');
+    await expect(getApprovalResult(pendingId)).resolves.toEqual({ status: 'rejected', error: 'Wallet locked' });
+    expect(calls).toEqual(['locked']);
+  });
+
+  it('clearWallet also forgets connected sites and runs onCleared after onLocked', async () => {
+    await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
+    await origins.connect('https://dapp.example', [0]);
+    const calls: string[] = [];
+    setLockHooks({ onLocked: () => { calls.push('locked'); }, onCleared: () => { calls.push('cleared'); } });
+
+    const state = await clearWallet();
+    expect(state).toEqual({ hasVault: false, isLocked: true, accounts: [], activeAccountIndex: 0 });
+    expect(await origins.list()).toEqual([]);
+    expect(chromeStub.storage.local.snapshot()).toEqual({});
+    expect(calls).toEqual(['locked', 'cleared']);
+  });
+
+  it('a throwing hook does not break lock', async () => {
+    await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
+    setLockHooks({ onLocked: () => { throw new Error('tab gone'); } });
+    expect((await lock()).isLocked).toBe(true);
+  });
+});
+
+describe('touchActivity', () => {
+  it('re-arms the auto-lock alarm while unlocked and does nothing while locked', async () => {
+    await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
+    await updateSettings({ autoLockTimeout: 5 });
+    await chromeStub.alarms.clear('cinder-autolock');
+    await touchActivity();
+    expect(chromeStub.alarms.scheduled()['cinder-autolock']).toEqual({ delayInMinutes: 5 });
+
+    await lock();
+    await touchActivity();
+    expect(chromeStub.alarms.scheduled()).toEqual({});
+
+    await unlock(TEST_PASSWORD);
+    await chromeStub.alarms.clear('cinder-autolock');
+    await touchActivity();
+    expect(chromeStub.alarms.scheduled()).toHaveProperty('cinder-autolock');
+  });
+
+  it('respects "never" auto-lock', async () => {
+    await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
+    await updateSettings({ autoLockTimeout: 0 });
+    await touchActivity();
+    expect(chromeStub.alarms.scheduled()).toEqual({});
   });
 });

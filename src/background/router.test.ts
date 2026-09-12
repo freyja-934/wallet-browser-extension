@@ -3,6 +3,7 @@ import { MAX_TRANSACTION_BYTES } from '../lib/bridge';
 import type { PendingApproval, WalletPublicState } from '../lib/messages';
 import { installChromeStub, STUB_EXTENSION_ID, uninstallChromeStub, type ChromeStub } from '../test/chrome-stub';
 import { TEST_ADDRESS, TEST_MNEMONIC, TEST_PASSWORD } from '../test/fixtures';
+import { resetKeyringForTests } from './keyring';
 import { handleMessage } from './router';
 
 const BASE = `chrome-extension://${STUB_EXTENSION_ID}/`;
@@ -13,8 +14,8 @@ const otherPage = { origin: 'https://other.example', url: 'https://other.example
 let chromeStub: ChromeStub;
 
 beforeEach(() => {
-  // approvals.ts keeps an in-memory pending Map across tests; isolation relies on random ids.
   chromeStub = installChromeStub();
+  resetKeyringForTests();
 });
 
 afterEach(() => {

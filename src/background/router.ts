@@ -18,6 +18,7 @@ import {
   lock,
   signMessage,
   switchAccount,
+  touchActivity,
   unlock,
   updateSettings,
   getKeypair,
@@ -55,8 +56,11 @@ export async function handleMessage(
   // Trust the browser's view of who sent this, never a field in the payload.
   const origin = sender.origin || sender.url || '';
 
-  // A page talking from a tab: note where it is so events can reach it later.
-  if (!isExtensionSender(sender, extensionBase)) {
+  if (isExtensionSender(sender, extensionBase)) {
+    // The user is in the popup or approval window: push the auto-lock out again.
+    await touchActivity();
+  } else {
+    // A page talking from a tab: note where it is so events can reach it later.
     await origins.remember(sender, origin);
   }
 

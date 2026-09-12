@@ -151,7 +151,7 @@ test('a page cannot override the bridged message type', async ({ context, extens
 
   // GET_ACCOUNTS needs a connected origin; a stranger gets 'Not connected' and no window.
   const stranger = await postToBridge(dapp, { type: 'GET_ACCOUNTS', payload: {} });
-  expect(stranger.error).toBe('Not connected');
+  expect(stranger.response).toMatchObject({ success: false, error: 'Not connected' });
   await approveNext(context, () => dapp.locator('#connect').click(), dapp);
   await expect(dapp.locator('#log')).toContainText(/"accounts":\s*\[\s*"/, { timeout: 15_000 });
 
