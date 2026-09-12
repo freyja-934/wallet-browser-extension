@@ -35,6 +35,22 @@ describe('buildRuntimeMessage', () => {
   it('drops fields the type does not accept', () => {
     const out = buildRuntimeMessage('SIGN_MESSAGE', { message: [104, 105], to: 'x', amountSmallest: '1' }, ORIGIN);
     expect(out).toEqual({ type: 'SIGN_MESSAGE', origin: ORIGIN, message: [104, 105] });
+    for (const type of ['SIGN_TRANSACTION', 'SIGN_AND_SEND_TRANSACTION'] as const) {
+      expect(buildRuntimeMessage(type, { transaction: [1], message: [2], origin: 'x', id: 7 }, ORIGIN)).toEqual({
+        type,
+        origin: ORIGIN,
+        transaction: [1],
+      });
+    }
+  });
+
+  it('allows an empty message but never an empty transaction', () => {
+    expect(buildRuntimeMessage('SIGN_MESSAGE', { message: [] }, ORIGIN)).toEqual({
+      type: 'SIGN_MESSAGE',
+      origin: ORIGIN,
+      message: [],
+    });
+    expect(() => buildRuntimeMessage('SIGN_TRANSACTION', { transaction: [] }, ORIGIN)).toThrow('Invalid transaction');
   });
 
   it('copies transaction bytes and rejects malformed ones', () => {

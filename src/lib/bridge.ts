@@ -13,8 +13,8 @@ export interface RuntimeMessage {
   message?: number[];
 }
 
-function byteArray(value: unknown, max: number, field: string): number[] {
-  if (!Array.isArray(value) || value.length === 0 || value.length > max) {
+function byteArray(value: unknown, max: number, field: string, allowEmpty = false): number[] {
+  if (!Array.isArray(value) || (value.length === 0 && !allowEmpty) || value.length > max) {
     throw new Error(`Invalid ${field}`);
   }
   const out = new Array<number>(value.length);
@@ -46,7 +46,8 @@ export function buildRuntimeMessage(type: unknown, payload: unknown, origin: str
     case 'SIGN_AND_SEND_TRANSACTION':
       return { type, origin, transaction: byteArray(input.transaction, MAX_TRANSACTION_BYTES, 'transaction') };
     case 'SIGN_MESSAGE':
-      return { type, origin, message: byteArray(input.message, MAX_MESSAGE_BYTES, 'message') };
+      // Wallet Standard does not forbid signing an empty message.
+      return { type, origin, message: byteArray(input.message, MAX_MESSAGE_BYTES, 'message', true) };
     case 'WALLET_CONNECT':
     case 'WALLET_DISCONNECT':
     case 'GET_ACCOUNTS':
