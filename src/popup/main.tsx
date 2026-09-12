@@ -1,5 +1,6 @@
+// First import on purpose: chain libraries below read `Buffer` while they load.
+import '../lib/buffer-global';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { Buffer } from 'buffer';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { Provider } from 'react-redux';
@@ -9,7 +10,6 @@ import '../styles/index.css';
 import App from './App';
 
 if (typeof window !== 'undefined') {
-  window.Buffer = Buffer;
   window.global = window;
 }
 
@@ -17,7 +17,8 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
-      retry: 1,
+      // A failed read shows an error card with Retry; only `useBalances` opts into one automatic retry.
+      retry: false,
     },
   },
 });

@@ -106,7 +106,8 @@ const WEB3_HTTP_STATUS = /(?:^|: |Error: )(\d{3}) [A-Za-z ]*:/;
 /**
  * Classify an error thrown by a web3.js `Connection` call. A `SolanaJSONRPCError`
  * carries the server's code; a wrapped HTTP failure carries the status in its
- * message. Transport errors and anything unreadable cool the URL down.
+ * message. Transport errors and anything unreadable cool the URL down; a
+ * `TypeError` that is not a transport error is our own bug and throws.
  */
 export function classifyConnectionError(error: unknown): RpcVerdict {
   const message = error instanceof Error ? error.message : String(error);
@@ -115,11 +116,66 @@ export function classifyConnectionError(error: unknown): RpcVerdict {
   if (typeof code === 'number' && Number.isInteger(code) && code < 0) {
     return classifyJsonRpcError(code, message);
   }
-  const status = Number(WEB3_HTTP_STATUS.exec(message)?.[1]);
-  if (status >= 400 && status <= 599) return classifyHttpStatus(status);
+  const status = connectionErrorHttpStatus(error);
+  if (status !== undefined) return classifyHttpStatus(status);
   if (SKIP_RPC_MESSAGE.test(message)) return 'skip';
+  if (COOLDOWN_RPC_MESSAGE.test(message)) return 'cooldown';
+  return classifyThrownError(error);
+}
+
+/** The HTTP status behind a failed `Connection` call or `rpcJson` call, when there was one. */
+export function connectionErrorHttpStatus(error: unknown): number | undefined {
+  const status = error && typeof error === 'object' ? (error as { status?: unknown }).status : undefined;
+  if (typeof status === 'number' && status >= 400 && status <= 599) return status;
+  const message = error instanceof Error ? error.message : String(error);
+  const parsed = Number(WEB3_HTTP_STATUS.exec(message)?.[1]);
+  return parsed >= 400 && parsed <= 599 ? parsed : undefined;
+}
+
+/**
+ * How `fetch` says no server answered: Chrome's `Failed to fetch`, Safari's
+ * `Load failed`, Node's `fetch failed`, Chromium's `net::ERR_*` codes, libc errno
+ * names, and abort or timeout phrasing. `Connection.getBalance` stringifies the
+ * cause into its message (`...: TypeError: Failed to fetch`), so the message is
+ * matched, not the class: a `TypeError` from a bug in our own code is not a
+ * network failure.
+ */
+export const TRANSPORT_ERROR_MESSAGE =
+  /failed to fetch|fetch failed|load failed|network ?error|ERR_|ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|AbortError|TimeoutError|timed? ?out|aborted/i;
+
+export function isTransportError(error: unknown): boolean {
+  const name = error instanceof Error ? error.name : '';
+  if (name === 'AbortError' || name === 'TimeoutError') return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return TRANSPORT_ERROR_MESSAGE.test(message);
+}
+
+/**
+ * Verdict for an error with no HTTP status and no JSON-RPC code: a transport
+ * failure cools the URL down, a `TypeError` that is not one is our own bug and
+ * would recur on every endpoint, and anything else unreadable cools down.
+ */
+export function classifyThrownError(error: unknown): RpcVerdict {
+  if (isTransportError(error)) return 'cooldown';
+  if (error instanceof TypeError) return 'throw';
   return 'cooldown';
 }
+
+/** Nothing at this URL will serve us from here: a transport failure, or 401/403 at the door. */
+export function isUnreachableFailure(error: unknown): boolean {
+  if (isTransportError(error)) return true;
+  const status = connectionErrorHttpStatus(error);
+  return status !== undefined && SKIP_HTTP_STATUSES.includes(status);
+}
+
+/** One endpoint's failure during a rotated call, as seen by `onFailure`. */
+export interface RpcFailure {
+  url: string;
+  error: unknown;
+  verdict: RpcVerdict;
+}
+
+export type RpcFailureObserver = (failure: RpcFailure) => void;
 
 class RpcHttpError extends Error {
   constructor(method: string, readonly status: number) {
@@ -139,8 +195,15 @@ class RpcApplicationError extends Error {
  * One JSON-RPC call over the URL list, healthy endpoints first. Same verdicts as
  * `classifyConnectionError`: `skip` moves on, `cooldown` rests the URL and moves
  * on, `throw` rethrows at once. A rejected `fetch` (DNS, TLS, CORS, offline) cools down.
+ * `onFailure` sees every endpoint's failure and verdict, so a caller can tell
+ * "no URL serves this method" from "the call is broken".
  */
-export async function rpcJson<T>(urls: string[], method: string, params: unknown): Promise<T> {
+export async function rpcJson<T>(
+  urls: string[],
+  method: string,
+  params: unknown,
+  onFailure?: RpcFailureObserver,
+): Promise<T> {
   if (urls.length === 0) {
     throw new Error(`${method} failed: no RPC endpoint`);
   }
@@ -171,8 +234,9 @@ export async function rpcJson<T>(urls: string[], method: string, params: unknown
       } else if (error instanceof RpcApplicationError) {
         verdict = classifyJsonRpcError(error.code, error.message);
       } else {
-        verdict = 'cooldown';
+        verdict = classifyThrownError(error);
       }
+      onFailure?.({ url, error, verdict });
       if (verdict === 'throw') throw error;
       if (verdict === 'cooldown') markRpcUnhealthy(url);
       lastError = error instanceof Error ? error : new Error(`${method} failed`);
@@ -181,10 +245,14 @@ export async function rpcJson<T>(urls: string[], method: string, params: unknown
   throw lastError ?? new Error(`${method} failed`);
 }
 
-/** Run `fn` against each URL in turn until one succeeds; see `classifyConnectionError` for the rotation rule. */
+/**
+ * Run `fn` against each URL in turn until one succeeds; see `classifyConnectionError`
+ * for the rotation rule. `onFailure` sees every endpoint's failure and verdict.
+ */
 export async function withRotatedConnection<T>(
   urls: string[],
   fn: (connection: Connection) => Promise<T>,
+  onFailure?: RpcFailureObserver,
 ): Promise<T> {
   let lastError: unknown;
   for (const url of prioritizeRpcUrls(urls)) {
@@ -192,6 +260,7 @@ export async function withRotatedConnection<T>(
       return await fn(makeConnection(url));
     } catch (error) {
       const verdict = classifyConnectionError(error);
+      onFailure?.({ url, error, verdict });
       if (verdict === 'throw') throw error;
       if (verdict === 'cooldown') markRpcUnhealthy(url);
       lastError = error;

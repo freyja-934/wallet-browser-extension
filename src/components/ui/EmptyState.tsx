@@ -1,6 +1,78 @@
 import type { ReactNode } from 'react';
-import { IconButton, PrimaryButton } from './Button';
+import { showSettings } from '../../store/slices/uiSlice';
+import { useAppDispatch } from '../../store/store';
+import { IconButton, PrimaryButton, SecondaryButton } from './Button';
 import { Icon, type IconName } from './Icon';
+
+/**
+ * A failed read, said plainly: what could not load, why, and a Retry. Never a
+ * zero or an empty list standing in for an error.
+ */
+export function ErrorCard({
+  title,
+  body,
+  onRetry,
+  action,
+  testId = 'error-card',
+}: {
+  title: string;
+  body: ReactNode;
+  onRetry?: () => void;
+  action?: { label: string; onClick: () => void };
+  testId?: string;
+}) {
+  return (
+    <div
+      role="alert"
+      data-testid={testId}
+      className="flex flex-col items-center rounded-2xl border border-ui-danger/30 bg-ui-danger/10 px-4 py-5 text-center"
+    >
+      <div className="mb-3 grid h-10 w-10 place-items-center rounded-full bg-ui-danger/15 text-ui-danger">
+        <Icon name="warning" className="h-4 w-4" />
+      </div>
+      <h3 className="text-sm font-medium text-fg-0">{title}</h3>
+      <p className="mt-1 max-w-[260px] break-words text-xs leading-relaxed text-fg-2">{body}</p>
+      {(onRetry || action) && (
+        <div className="mt-4 flex items-center gap-2">
+          {onRetry && (
+            <SecondaryButton type="button" className="h-8 px-4 text-xs" onClick={onRetry}>
+              Retry
+            </SecondaryButton>
+          )}
+          {action && (
+            <PrimaryButton type="button" className="h-8 px-4 text-xs" onClick={action.onClick}>
+              {action.label}
+            </PrimaryButton>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Inline "Settings" link for the "add an RPC endpoint" guidance; opens the Settings panel. */
+export function SettingsLink({ children = 'Settings' }: { children?: ReactNode }) {
+  const dispatch = useAppDispatch();
+  return (
+    <button
+      type="button"
+      onClick={() => dispatch(showSettings())}
+      className="text-fg-0 underline decoration-white/30 underline-offset-2 hover:text-brand-a"
+      data-testid="open-settings-link"
+    >
+      {children}
+    </button>
+  );
+}
+
+/** The one sentence every "no reachable endpoint" state shows. */
+export function EndpointsUnreachableBody() {
+  return (
+    <>
+      No RPC endpoint reachable from this network. Add one in <SettingsLink />.
+    </>
+  );
+}
 
 export function EmptyState({
   icon = 'nft',
