@@ -169,6 +169,8 @@ export type Token = {
   usdValue?: number;
   logoURI?: string;
   priceChange24h?: number;
+  /** Owning token program, base58: SPL Token or Token-2022. */
+  programId: string;
 };
 export type NFT = {
   id: string;

@@ -9,7 +9,8 @@ export function TransactionHistory() {
   const { accounts, activeAccountIndex } = useAppSelector((state) => state.wallet);
   const cluster = useAppSelector((state) => state.ui.cluster);
   const activeAccount = accounts[activeAccountIndex];
-  const { data: transactions = [], isLoading } = useTransactions(activeAccount?.address);
+  const { data, isLoading } = useTransactions(activeAccount?.address);
+  const transactions = data?.pages.flat() ?? [];
   const [filter, setFilter] = useState<'all' | 'sent' | 'received'>('all');
 
   const filteredTransactions = transactions.filter((tx) => {
