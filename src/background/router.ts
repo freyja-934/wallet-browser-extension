@@ -5,7 +5,7 @@ import {
 import bs58 from 'bs58';
 import { isExtensionMessageType, type PendingApproval } from '../lib/messages';
 import { parseRequest, type WalletRequest, type WalletResponse } from '../lib/protocol';
-import { isRequestAllowed, type SenderLike } from '../lib/sender-gate';
+import { isExtensionSender, isRequestAllowed, type SenderLike } from '../lib/sender-gate';
 import { buildPreview, type PreviewResult } from '../lib/preview';
 import {
   changePassword,
@@ -30,6 +30,7 @@ import {
   rejectApproval,
   resolveApproval,
 } from './approvals';
+import * as origins from './origins';
 import { getConnection, sendTransfer } from './transfers';
 
 /**
@@ -54,7 +55,20 @@ export async function handleMessage(
   // Trust the browser's view of who sent this, never a field in the payload.
   const origin = sender.origin || sender.url || '';
 
+  // A page talking from a tab: note where it is so events can reach it later.
+  if (!isExtensionSender(sender, extensionBase)) {
+    await origins.remember(sender, origin);
+  }
+
   return dispatch(parseRequest(raw), origin);
+}
+
+async function requireConnected(origin: string): Promise<void> {
+  if (!(await origins.isConnected(origin))) throw new Error('Not connected');
+}
+
+function addresses(state: { accounts: { address: string }[] }): string[] {
+  return state.accounts.map((account) => account.address);
 }
 
 function assertNever(_request: never): never {
@@ -87,12 +101,17 @@ async function dispatch(request: WalletRequest, origin: string): Promise<WalletR
     case 'EXPORT_PRIVATE_KEY':
       return { privateKey: await exportPrivateKey(request.password, request.accountIndex ?? 0) };
     case 'GET_ACCOUNTS': {
+      await requireConnected(origin);
       const state = await getPublicState();
       if (state.isLocked) return { accounts: [] };
-      return { accounts: state.accounts.map((account) => account.address) };
+      return { accounts: addresses(state) };
     }
     case 'WALLET_CONNECT': {
       const state = await getPublicState();
+      // A site that already connected gets its accounts back without a prompt.
+      if (!state.isLocked && (await origins.isConnected(origin))) return { accounts: addresses(state) };
+      // Silent connects never open a window: nothing to show is an empty account list.
+      if (request.silent) return { accounts: [] };
       if (state.isLocked) {
         await openUnlockWindow();
         throw new Error('Wallet is locked. Unlock Cinder Wallet and try again.');
@@ -100,13 +119,16 @@ async function dispatch(request: WalletRequest, origin: string): Promise<WalletR
       return { pendingId: await enqueueApproval('connect', origin) };
     }
     case 'WALLET_DISCONNECT':
+      await origins.disconnect(origin);
       return { disconnected: true };
     case 'SIGN_MESSAGE':
+      await requireConnected(origin);
       return {
         pendingId: await enqueueApproval('signMessage', origin, { messageBytes: [...request.message] }),
       };
     case 'SIGN_TRANSACTION':
     case 'SIGN_AND_SEND_TRANSACTION': {
+      await requireConnected(origin);
       const kind = request.type === 'SIGN_AND_SEND_TRANSACTION' ? 'signAndSendTransaction' : 'signTransaction';
       return {
         pendingId: await enqueueApproval(kind, origin, { transactionBytes: [...request.transaction] }),
@@ -127,6 +149,16 @@ async function dispatch(request: WalletRequest, origin: string): Promise<WalletR
     case 'REJECT_REQUEST':
       await rejectApproval(request.id, request.reason || 'User rejected');
       return {};
+    case 'CANCEL_APPROVAL':
+      // The page gave up waiting (its 120 s timeout); a later Approve must not sign.
+      // The id is unguessable, so the page can only cancel its own request.
+      await rejectApproval(request.id, 'Request timeout');
+      return {};
+    case 'GET_CONNECTED_SITES':
+      return { sites: await origins.list() };
+    case 'REVOKE_SITE':
+      await origins.disconnect(request.origin);
+      return {};
     case 'SEND_TRANSFER':
       return {
         signature: await sendTransfer({
@@ -143,9 +175,13 @@ async function dispatch(request: WalletRequest, origin: string): Promise<WalletR
 export async function fulfillApproval(request: PendingApproval): Promise<Record<string, unknown>> {
   if (request.kind === 'connect') {
     const next = await getPublicState();
+    await origins.connect(
+      request.origin,
+      next.accounts.map((account) => account.index),
+    );
     return {
       connected: true,
-      accounts: next.accounts.map((account) => account.address),
+      accounts: addresses(next),
       publicKey: next.accounts[next.activeAccountIndex]?.address,
     };
   }

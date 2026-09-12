@@ -26,7 +26,7 @@ const privileged = EXTENSION_MESSAGE_TYPES.filter((type) => !PAGE_ALLOWED_TYPES.
 describe('sender gate', () => {
   it('has something to protect', () => {
     expect(privileged).toEqual(expect.arrayContaining(['UNLOCK', 'EXPORT_SEED', 'SEND_TRANSFER', 'CLEAR_WALLET', 'APPROVE_REQUEST']));
-    expect([...PAGE_ALLOWED_TYPES]).toEqual([...DAP_MESSAGE_TYPES, 'POLL_APPROVAL']);
+    expect([...PAGE_ALLOWED_TYPES]).toEqual([...DAP_MESSAGE_TYPES, 'POLL_APPROVAL', 'CANCEL_APPROVAL']);
   });
 
   it('recognises extension pages, with and without a trailing slash on the base', () => {

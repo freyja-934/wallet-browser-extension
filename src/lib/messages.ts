@@ -28,6 +28,9 @@ export const EXTENSION_MESSAGE_TYPES = [
   'GET_SETTINGS',
   'CLEAR_WALLET',
   'SWITCH_ACCOUNT',
+  'CANCEL_APPROVAL',
+  'GET_CONNECTED_SITES',
+  'REVOKE_SITE',
 ] as const;
 
 export type DappMessageType = (typeof DAP_MESSAGE_TYPES)[number];
@@ -81,9 +84,27 @@ export interface PendingApproval {
   kind: ApprovalKind;
   origin: string;
   createdAt: number;
+  /** The approval window `chrome.windows.create` opened for it; closing that window rejects the request. */
+  windowId?: number;
   transactionBytes?: number[];
   messageBytes?: number[];
 }
+
+/** One entry of the Settings "Connected sites" list. */
+export interface ConnectedSite {
+  origin: string;
+  connectedAt: number;
+  accountIndexes: number[];
+}
+
+/** Pushed from the worker to connected pages (via the content script) and to the popup. */
+export type WalletEventName =
+  | 'locked'
+  | 'disconnected'
+  | 'revoked'
+  | 'cleared'
+  | 'accountsChanged'
+  | 'clusterChanged';
 
 export const DEFAULT_SETTINGS: WalletSettings = {
   autoLockTimeout: 15,

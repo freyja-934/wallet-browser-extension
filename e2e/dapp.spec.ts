@@ -149,6 +149,12 @@ test('a page cannot override the bridged message type', async ({ context, extens
   await dapp.goto('http://localhost:5174/');
   await expect(dapp.locator('#log')).toContainText('registered Cinder Wallet', { timeout: 15_000 });
 
+  // GET_ACCOUNTS needs a connected origin; a stranger gets 'Not connected' and no window.
+  const stranger = await postToBridge(dapp, { type: 'GET_ACCOUNTS', payload: {} });
+  expect(stranger.error).toBe('Not connected');
+  await approveNext(context, () => dapp.locator('#connect').click(), dapp);
+  await expect(dapp.locator('#log')).toContainText(/"accounts":\s*\[\s*"/, { timeout: 15_000 });
+
   // The old bridge spread the payload after `type`, so `payload.type` overrode the
   // allow-listed outer type and the worker answered GET_STATE with wallet state.
   const smuggled = await postToBridge(dapp, { type: 'GET_ACCOUNTS', payload: { type: 'GET_STATE' } });

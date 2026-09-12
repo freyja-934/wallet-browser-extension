@@ -57,6 +57,8 @@ export interface CreatedWindow {
 export interface SentTabMessage {
   tabId: number;
   message: unknown;
+  /** The `frameId` passed in `options`, when any. */
+  frameId?: number;
 }
 
 export interface ChromeStub {
@@ -79,7 +81,7 @@ export interface ChromeStub {
     created(): CreatedWindow[];
   };
   tabs: {
-    sendMessage(tabId: number, message: unknown): Promise<undefined>;
+    sendMessage(tabId: number, message: unknown, options?: { frameId?: number }): Promise<undefined>;
     onRemoved: StubEvent<[number]>;
     /** Test helper: every `sendMessage` call so far, in order. */
     sent(): SentTabMessage[];
@@ -203,8 +205,10 @@ export function createChromeStub(): ChromeStub {
       created: () => [...createdWindows],
     },
     tabs: {
-      async sendMessage(tabId, message) {
-        sentTabMessages.push({ tabId, message });
+      async sendMessage(tabId, message, options) {
+        const record: SentTabMessage = { tabId, message };
+        if (typeof options?.frameId === 'number') record.frameId = options.frameId;
+        sentTabMessages.push(record);
         return undefined;
       },
       onRemoved: makeEvent<[number]>(),
