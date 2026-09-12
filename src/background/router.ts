@@ -4,8 +4,9 @@ import {
 } from '@solana/web3.js';
 import bs58 from 'bs58';
 import { isExtensionMessageType, type PendingApproval } from '../lib/messages';
+import { parseRequest, type WalletRequest, type WalletResponse } from '../lib/protocol';
 import { isRequestAllowed, type SenderLike } from '../lib/sender-gate';
-import { buildPreview } from '../lib/preview';
+import { buildPreview, type PreviewResult } from '../lib/preview';
 import {
   changePassword,
   clearWallet,
@@ -32,17 +33,16 @@ import {
 import { getConnection, sendTransfer } from './transfers';
 
 /**
- * Worker entry for one runtime message. Gate on the sender first, then
- * dispatch. `extensionBase` is `chrome.runtime.getURL('')`, passed in so this
- * module never touches `chrome.*` at import time and stays unit-testable.
+ * Worker entry for one runtime message. Gate on the sender first, then parse,
+ * then dispatch. `extensionBase` is `chrome.runtime.getURL('')`, passed in so
+ * this module never touches `chrome.*` at import time and stays unit-testable.
  */
 export async function handleMessage(
   raw: unknown,
   sender: SenderLike,
   extensionBase: string
 ): Promise<Record<string, unknown>> {
-  const request = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-  const type = request.type;
+  const type = raw && typeof raw === 'object' && 'type' in raw ? raw.type : undefined;
   if (typeof type !== 'string' || !isExtensionMessageType(type)) {
     throw new Error('Unknown message type');
   }
@@ -54,45 +54,38 @@ export async function handleMessage(
   // Trust the browser's view of who sent this, never a field in the payload.
   const origin = sender.origin || sender.url || '';
 
-  return dispatch(type, request, origin);
+  return dispatch(parseRequest(raw), origin);
 }
 
-async function dispatch(
-  type: string,
-  request: Record<string, unknown>,
-  origin: string
-): Promise<Record<string, unknown>> {
-  switch (type) {
+function assertNever(_request: never): never {
+  throw new Error('Unknown message type');
+}
+
+async function dispatch(request: WalletRequest, origin: string): Promise<WalletResponse> {
+  switch (request.type) {
     case 'GET_STATE':
       return { state: await getPublicState() };
     case 'GET_SETTINGS':
       return { settings: await getSettings() };
     case 'UPDATE_SETTINGS':
-      return { settings: await updateSettings((request.settings ?? {}) as object) };
+      return { settings: await updateSettings(request.settings) };
     case 'CREATE_WALLET':
-      return {
-        state: await createWallet(
-          String(request.password),
-          request.seedPhrase ? String(request.seedPhrase) : undefined
-        ),
-      };
+      return { state: await createWallet(request.password, request.seedPhrase) };
     case 'UNLOCK':
-      return { state: await unlock(String(request.password)) };
+      return { state: await unlock(request.password) };
     case 'LOCK':
       return { state: await lock() };
     case 'CLEAR_WALLET':
       return { state: await clearWallet() };
     case 'SWITCH_ACCOUNT':
-      return { state: await switchAccount(Number(request.index)) };
+      return { state: await switchAccount(request.index) };
     case 'CHANGE_PASSWORD':
-      await changePassword(String(request.currentPassword), String(request.newPassword));
+      await changePassword(request.currentPassword, request.newPassword);
       return {};
     case 'EXPORT_SEED':
-      return { seedPhrase: await exportSeed(String(request.password)) };
+      return { seedPhrase: await exportSeed(request.password) };
     case 'EXPORT_PRIVATE_KEY':
-      return {
-        privateKey: await exportPrivateKey(String(request.password), Number(request.accountIndex ?? 0)),
-      };
+      return { privateKey: await exportPrivateKey(request.password, request.accountIndex ?? 0) };
     case 'GET_ACCOUNTS': {
       const state = await getPublicState();
       if (state.isLocked) return { accounts: [] };
@@ -108,49 +101,42 @@ async function dispatch(
     }
     case 'WALLET_DISCONNECT':
       return { disconnected: true };
-    case 'SIGN_MESSAGE': {
-      const message = Uint8Array.from(request.message as number[]);
+    case 'SIGN_MESSAGE':
       return {
-        pendingId: await enqueueApproval('signMessage', origin, { messageBytes: [...message] }),
+        pendingId: await enqueueApproval('signMessage', origin, { messageBytes: [...request.message] }),
       };
-    }
     case 'SIGN_TRANSACTION':
     case 'SIGN_AND_SEND_TRANSACTION': {
-      const bytes = Uint8Array.from(request.transaction as number[]);
-      const kind = type === 'SIGN_AND_SEND_TRANSACTION' ? 'signAndSendTransaction' : 'signTransaction';
+      const kind = request.type === 'SIGN_AND_SEND_TRANSACTION' ? 'signAndSendTransaction' : 'signTransaction';
       return {
-        pendingId: await enqueueApproval(kind, origin, { transactionBytes: [...bytes] }),
+        pendingId: await enqueueApproval(kind, origin, { transactionBytes: [...request.transaction] }),
       };
     }
-    case 'PREVIEW_TRANSACTION': {
-      const bytes = Uint8Array.from(request.transaction as number[]);
-      return previewTransaction(bytes);
-    }
-    case 'GET_PENDING_REQUEST': {
-      const pending = await getPending(String(request.id));
-      return { request: pending };
-    }
+    case 'PREVIEW_TRANSACTION':
+      return previewTransaction(Uint8Array.from(request.transaction));
+    case 'GET_PENDING_REQUEST':
+      return { request: await getPending(request.id) };
     case 'POLL_APPROVAL':
-      return getApprovalResult(String(request.id));
+      return getApprovalResult(request.id);
     case 'APPROVE_REQUEST': {
-      const pending = await getPending(String(request.id));
+      const pending = await getPending(request.id);
       if (!pending) throw new Error('Approval expired — unlock and retry the dApp request');
       await resolveApproval(pending.id, await fulfillApproval(pending));
       return {};
     }
     case 'REJECT_REQUEST':
-      await rejectApproval(String(request.id), String(request.reason || 'User rejected'));
+      await rejectApproval(request.id, request.reason || 'User rejected');
       return {};
-    case 'SEND_TRANSFER': {
-      const signature = await sendTransfer({
-        to: String(request.to),
-        amountSmallest: String(request.amountSmallest),
-        mint: request.mint ? String(request.mint) : undefined,
-      });
-      return { signature };
-    }
+    case 'SEND_TRANSFER':
+      return {
+        signature: await sendTransfer({
+          to: request.to,
+          amountSmallest: request.amountSmallest,
+          mint: request.mint,
+        }),
+      };
     default:
-      throw new Error('Unknown message type');
+      return assertNever(request);
   }
 }
 
@@ -191,7 +177,7 @@ async function signTransactionBytes(bytes: Uint8Array): Promise<Uint8Array> {
   }
 }
 
-export async function previewTransaction(bytes: Uint8Array): Promise<Record<string, unknown>> {
+export async function previewTransaction(bytes: Uint8Array): Promise<{ preview: PreviewResult }> {
   const preview = await buildPreview(bytes, async (tx) => {
     const connection = await getConnection();
     const simulation = tx instanceof VersionedTransaction

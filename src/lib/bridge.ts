@@ -13,7 +13,11 @@ export interface RuntimeMessage {
   message?: number[];
 }
 
-function byteArray(value: unknown, max: number, field: string, allowEmpty = false): number[] {
+/**
+ * Copy `value` into a fresh array of integers in 0..255, or throw `Invalid <field>`.
+ * Shared by the content-script bridge and the worker's `parseRequest`.
+ */
+export function validateByteArray(value: unknown, max: number, field: string, allowEmpty = false): number[] {
   if (!Array.isArray(value) || (value.length === 0 && !allowEmpty) || value.length > max) {
     throw new Error(`Invalid ${field}`);
   }
@@ -44,10 +48,10 @@ export function buildRuntimeMessage(type: unknown, payload: unknown, origin: str
   switch (type) {
     case 'SIGN_TRANSACTION':
     case 'SIGN_AND_SEND_TRANSACTION':
-      return { type, origin, transaction: byteArray(input.transaction, MAX_TRANSACTION_BYTES, 'transaction') };
+      return { type, origin, transaction: validateByteArray(input.transaction, MAX_TRANSACTION_BYTES, 'transaction') };
     case 'SIGN_MESSAGE':
       // Wallet Standard does not forbid signing an empty message.
-      return { type, origin, message: byteArray(input.message, MAX_MESSAGE_BYTES, 'message', true) };
+      return { type, origin, message: validateByteArray(input.message, MAX_MESSAGE_BYTES, 'message', true) };
     case 'WALLET_CONNECT':
     case 'WALLET_DISCONNECT':
     case 'GET_ACCOUNTS':
