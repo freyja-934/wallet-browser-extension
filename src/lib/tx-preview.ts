@@ -38,7 +38,7 @@ export interface UnreadableInstruction {
 export type PreviewInstruction = TransactionInstruction | UnreadableInstruction;
 
 const UNREADABLE_REASON =
-  'Instruction uses an address lookup table this preview cannot resolve. Reject unless you trust this site.';
+  'Instruction references accounts this preview cannot resolve (address lookup table or malformed message). Reject unless you trust this site.';
 
 /** System Program instruction index (u32 little-endian) to label and optional warning. */
 const SYSTEM_INSTRUCTIONS: Record<number, { label: string; warning?: string }> = {
@@ -46,6 +46,7 @@ const SYSTEM_INSTRUCTIONS: Record<number, { label: string; warning?: string }> =
   2: { label: 'Transfer SOL' },
   3: { label: 'Create account with seed' },
   10: { label: 'Assign account with seed', warning: 'This instruction can change account ownership.' },
+  11: { label: 'Transfer SOL (seed)' },
 };
 
 /** Token and Token-2022 instruction index (u8) to label and optional warning. */
@@ -58,6 +59,7 @@ const TOKEN_INSTRUCTIONS: Record<number, { label: string; warning?: string }> = 
   8: { label: 'Burn tokens' },
   9: { label: 'Close token account', warning: 'Closes a token account and sends its lamports elsewhere.' },
   10: { label: 'Freeze token account', warning: 'Freezes a token account so it can no longer move tokens.' },
+  11: { label: 'Thaw token account' },
   12: { label: 'Transfer tokens (checked)' },
   13: { label: 'Approve delegate (checked)', warning: 'Approves another account to spend tokens.' },
   14: { label: 'Mint tokens (checked)' },

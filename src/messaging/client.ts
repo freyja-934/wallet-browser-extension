@@ -1,4 +1,5 @@
 import type { PendingApproval, WalletPublicState, WalletSettings } from '../lib/messages';
+import type { PreviewResult } from '../lib/preview';
 
 interface Envelope {
   success: boolean;
@@ -44,5 +45,5 @@ export const extensionClient = {
     await send('REJECT_REQUEST', { id, reason });
   },
   previewTransaction: async (transaction: number[]) =>
-    send('PREVIEW_TRANSACTION', { transaction }),
+    (await send('PREVIEW_TRANSACTION', { transaction })).preview as PreviewResult,
 };

@@ -37,4 +37,11 @@ describe('Cinder brand mark', () => {
     expect(source).not.toMatch(/from ['"]react/);
     expect(source).not.toMatch(/\bdocument\b|\bwindow\b/);
   });
+
+  it('is what the injected wallet registers', () => {
+    const injected = readFileSync(new URL('../content/injected.ts', import.meta.url), 'utf8');
+    expect(injected).toContain('icon: CINDER_ICON_DATA_URI');
+    expect(injected).toContain("version: '1.0.0'");
+    expect(injected).not.toContain('data:image/svg+xml;base64,');
+  });
 });

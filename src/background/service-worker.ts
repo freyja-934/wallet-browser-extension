@@ -8,14 +8,7 @@ import {
 import bs58 from 'bs58';
 import { isExtensionMessageType, type PendingApproval } from '../lib/messages';
 import { isRequestAllowed } from '../lib/sender-gate';
-import {
-  collectWarnings,
-  decodeInstruction,
-  deserializeTransaction,
-  getInstructions,
-  type DecodedInstruction,
-  type PreviewWarning,
-} from '../lib/tx-preview';
+import { buildPreview } from '../lib/preview';
 import {
   changePassword,
   clearWallet,
@@ -219,45 +212,13 @@ async function signTransactionBytes(bytes: Uint8Array): Promise<Uint8Array> {
 }
 
 async function previewTransaction(bytes: Uint8Array): Promise<Record<string, unknown>> {
-  let tx: Transaction | VersionedTransaction;
-  let instructions: DecodedInstruction[];
-  let warnings: PreviewWarning[];
-  try {
-    tx = deserializeTransaction(bytes);
-    instructions = getInstructions(tx).map(decodeInstruction);
-    warnings = collectWarnings(instructions);
-  } catch {
-    return {
-      success: false,
-      error: 'Could not decode transaction',
-      instructions: [],
-      warnings: [{ level: 'danger', message: 'Unreadable transaction. Reject unless you trust this site.' }],
-    };
-  }
-
-  try {
-    // Inside the try so a dead RPC degrades to the decode-only preview instead of rejecting it.
-    const connection = await getConnection().catch(() => {
-      throw new Error('No RPC endpoint');
-    });
+  const preview = await buildPreview(bytes, async (tx) => {
+    const connection = await getConnection();
     const simulation = tx instanceof VersionedTransaction
       ? await connection.simulateTransaction(tx, { sigVerify: false, innerInstructions: true })
       : await connection.simulateTransaction(tx);
-    const err = simulation.value.err;
-    return {
-      success: !err,
-      error: err ? JSON.stringify(err) : undefined,
-      logs: simulation.value.logs ?? [],
-      unitsConsumed: simulation.value.unitsConsumed,
-      instructions,
-      warnings,
-    };
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'Simulation failed',
-      instructions,
-      warnings,
-    };
-  }
+    return simulation.value;
+  });
+  // Nested so the preview's own `success` never collides with the message envelope.
+  return { preview };
 }

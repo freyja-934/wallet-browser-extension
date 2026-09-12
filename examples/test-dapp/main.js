@@ -64,6 +64,7 @@ async function waitForConfirmation(connection, signature) {
     const { value } = await connection
       .getSignatureStatuses([signature], { searchTransactionHistory: true })
       .catch(() => ({ value: [null] }));
+    if (value[0]?.err) return false; // landed but failed on-chain
     const status = value[0]?.confirmationStatus;
     if (status === 'confirmed' || status === 'finalized') return true;
     await new Promise((resolve) => setTimeout(resolve, 1000));

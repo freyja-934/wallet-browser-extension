@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { PendingApproval } from '../../lib/messages';
+import type { PreviewResult } from '../../lib/preview';
 import { extensionClient } from '../../messaging/client';
 import { PopupFrame } from '../ui/Atmosphere';
 import { Banner } from '../ui/EmptyState';
@@ -7,14 +8,7 @@ import { PrimaryButton, SecondaryButton } from '../ui/Button';
 import { Card, CardContent } from '../ui/Card';
 import { GlowMark } from '../ui/GlowMark';
 
-interface Preview {
-  success?: boolean;
-  error?: string;
-  logs?: string[];
-  unitsConsumed?: number;
-  instructions?: Array<{ label: string; programName: string; known: boolean; warning?: string }>;
-  warnings?: Array<{ level: string; message: string }>;
-}
+type Preview = PreviewResult;
 
 const KIND_LABEL: Record<string, string> = {
   connect: 'Connect',
@@ -38,18 +32,29 @@ export function ApprovalScreen() {
       setError('Missing request id');
       return;
     }
-    extensionClient.getPendingRequest(id).then(async (pending) => {
-      setRequest(pending);
-      if (pending?.transactionBytes) {
+    let cancelled = false;
+    (async () => {
+      try {
+        const pending = await extensionClient.getPendingRequest(id);
+        if (cancelled) return;
+        setRequest(pending);
+        if (!pending?.transactionBytes) return;
         try {
           const result = await extensionClient.previewTransaction(pending.transactionBytes);
-          setPreview(result as Preview);
+          if (!cancelled) setPreview(result);
+        } catch (err) {
+          // Error and settle land in the same handler so Approve never enables before the banner renders.
+          if (!cancelled) setError(err instanceof Error ? err.message : 'Preview failed');
         } finally {
-          // Resolved or rejected, the user has now seen everything the preview can tell them.
-          setPreviewSettled(true);
+          if (!cancelled) setPreviewSettled(true);
         }
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Request failed');
       }
-    }).catch((err) => setError(err.message));
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [id]);
 
   const approve = async () => {

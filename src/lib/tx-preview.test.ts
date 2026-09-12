@@ -19,6 +19,7 @@ import {
   createMintToInstruction,
   createRevokeInstruction,
   createSetAuthorityInstruction,
+  createThawAccountInstruction,
   createTransferCheckedInstruction,
   createTransferInstruction,
 } from '@solana/spl-token';
@@ -204,7 +205,7 @@ describe('v0 messages', () => {
     expect(collectWarnings(decoded)).toEqual([]);
   });
 
-  it('marks an instruction that reaches into a lookup table as unreadable instead of throwing', () => {
+  it('marks an instruction whose account index reaches into a lookup table as unreadable', () => {
     const payer = PublicKey.unique();
     // Static keys: [payer, System]. Account index 2 lives in the lookup table.
     const message = new MessageV0({
@@ -231,5 +232,39 @@ describe('v0 messages', () => {
     expect(decoded[0].label).toBe('Unreadable instruction');
     expect(decoded[0].known).toBe(false);
     expect(collectWarnings(decoded)).toEqual([{ level: 'danger', message: expect.stringContaining('lookup table') }]);
+  });
+  it('marks an instruction whose program id index is out of range as unreadable instead of throwing', () => {
+    const payer = PublicKey.unique();
+    // Static keys: [payer, System]. Program id index 5 has no static key; the old decoder threw on toBase58().
+    const message = new MessageV0({
+      header: { numRequiredSignatures: 1, numReadonlySignedAccounts: 0, numReadonlyUnsignedAccounts: 1 },
+      staticAccountKeys: [payer, SystemProgram.programId],
+      recentBlockhash: PublicKey.default.toBase58(),
+      compiledInstructions: [{ programIdIndex: 5, accountKeyIndexes: [0, 1], data: Buffer.from([2, 0, 0, 0]) }],
+      addressTableLookups: [{ accountKey: PublicKey.unique(), writableIndexes: [0, 1, 2, 3], readonlyIndexes: [] }],
+    });
+    const tx = deserializeTransaction(new VersionedTransaction(message).serialize());
+    let decoded: ReturnType<typeof decodeInstruction>[] = [];
+    expect(() => {
+      decoded = getInstructions(tx).map(decodeInstruction);
+    }).not.toThrow();
+    expect(decoded.map((ix) => ix.label)).toEqual(['Unreadable instruction']);
+    expect(collectWarnings(decoded)).toEqual([{ level: 'danger', message: expect.stringContaining('cannot resolve') }]);
+  });
+
+  it('labels TransferWithSeed (System 11) and ThawAccount (Token 11)', () => {
+    const seeded = SystemProgram.transfer({
+      fromPubkey: a,
+      basePubkey: b,
+      toPubkey: c,
+      lamports: 1,
+      seed: 'seed',
+      programId: SystemProgram.programId,
+    });
+    expect(seeded.data.readUInt32LE(0)).toBe(11);
+    expect(decode(seeded)).toMatchObject({ label: 'Transfer SOL (seed)', warnings: [] });
+    const thaw = createThawAccountInstruction(a, mint, b);
+    expect(thaw.data[0]).toBe(11);
+    expect(decode(thaw)).toMatchObject({ label: 'Thaw token account', warnings: [] });
   });
 });
