@@ -61,7 +61,10 @@ test('Connect, sign message, and sign v0 transfer', async ({ context, extensionI
   await expect(dapp.locator('#log')).toContainText('signedBytes', { timeout: 30_000 });
 });
 
-test('locked Connect opens Unlock, then signAndSend can be rejected', async ({ context, extensionId }) => {
+test('locked Connect unlocks inside the approval window, then signAndSend can be rejected', async ({
+  context,
+  extensionId,
+}) => {
   test.setTimeout(120_000);
   const popup = await importAndUnlock(context, extensionId);
 
@@ -72,16 +75,16 @@ test('locked Connect opens Unlock, then signAndSend can be rejected', async ({ c
   await popup.getByLabel('Lock wallet').click();
   await expect(popup.getByTestId('unlock-password')).toBeVisible();
 
+  // No separate index.html window any more: approve.html carries the unlock form.
   await dapp.locator('#connect').click();
-  const unlock = await waitForUnlock(context);
-  await unlock.getByTestId('unlock-password').fill(TEST_PASSWORD);
-  await unlock.getByTestId('unlock-submit').click();
-  await expect(unlock.getByTestId('open-receive').or(popup.getByTestId('open-receive'))).toBeVisible({
-    timeout: 15_000,
-  });
-
-  await approveNext(context, () => dapp.locator('#connect').click(), dapp);
+  const approval = await waitForUnlock(context);
+  await expect(approval.getByTestId('approval-approve')).toBeDisabled();
+  await approval.getByTestId('unlock-password').fill(TEST_PASSWORD);
+  await approval.getByTestId('unlock-submit').click();
+  await expect(approval.getByTestId('approval-approve')).toBeEnabled({ timeout: 15_000 });
+  await approval.getByTestId('approval-approve').click();
   await expect(dapp.locator('#log')).toContainText(/"accounts":\s*\[\s*"/, { timeout: 15_000 });
+  expect(context.pages().filter((page) => page.url().includes('index.html'))).toHaveLength(1);
 
   const sendApproval = await openApproval(context, () => dapp.locator('#signAndSend').click(), dapp);
   await sendApproval.getByTestId('approval-reject').click();
@@ -108,11 +111,12 @@ test('signAndSend approve broadcasts a 0-lamport self-transfer', async ({ contex
   await expect(dapp.locator('#log')).toContainText('"confirmed": true', { timeout: 60_000 });
 });
 
+/** The approval window showing its inline unlock form (a locked connect or sign). */
 async function waitForUnlock(context: BrowserContext): Promise<Page> {
   const deadline = Date.now() + 25_000;
   while (Date.now() < deadline) {
     for (const page of context.pages()) {
-      if (!page.url().includes('index.html')) continue;
+      if (!page.url().includes('approve.html')) continue;
       const field = page.getByTestId('unlock-password');
       if (await field.isVisible().catch(() => false)) return page;
     }

@@ -7,6 +7,7 @@ import { Banner } from '../ui/EmptyState';
 import { PrimaryButton, SecondaryButton } from '../ui/Button';
 import { Card, CardContent } from '../ui/Card';
 import { GlowMark } from '../ui/GlowMark';
+import { UnlockForm } from '../wallet/UnlockForm';
 
 type Preview = PreviewResult;
 
@@ -21,6 +22,8 @@ export function ApprovalScreen() {
   const params = new URLSearchParams(window.location.search);
   const id = params.get('id') || '';
   const [request, setRequest] = useState<PendingApproval | null>(null);
+  // null until GET_STATE answers; the request summary renders either way.
+  const [locked, setLocked] = useState<boolean | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [previewSettled, setPreviewSettled] = useState(false);
   const [showInstructions, setShowInstructions] = useState(false);
@@ -35,19 +38,11 @@ export function ApprovalScreen() {
     let cancelled = false;
     (async () => {
       try {
-        const pending = await extensionClient.getPendingRequest(id);
+        const [state, pending] = await Promise.all([extensionClient.getState(), extensionClient.getPendingRequest(id)]);
         if (cancelled) return;
+        setLocked(state.isLocked);
         setRequest(pending);
-        if (!pending?.transactionBytes) return;
-        try {
-          const result = await extensionClient.previewTransaction(pending.transactionBytes);
-          if (!cancelled) setPreview(result);
-        } catch (err) {
-          // Error and settle land in the same handler so Approve never enables before the banner renders.
-          if (!cancelled) setError(err instanceof Error ? err.message : 'Preview failed');
-        } finally {
-          if (!cancelled) setPreviewSettled(true);
-        }
+        if (!pending) setError('This request has expired. Retry it from the site.');
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Request failed');
       }
@@ -56,6 +51,26 @@ export function ApprovalScreen() {
       cancelled = true;
     };
   }, [id]);
+
+  // The preview needs the RPC and a readable request; it runs once the wallet is unlocked.
+  useEffect(() => {
+    if (locked !== false || !request?.transactionBytes || previewSettled) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await extensionClient.previewTransaction(request.transactionBytes!);
+        if (!cancelled) setPreview(result);
+      } catch (err) {
+        // Error and settle land in the same handler so Approve never enables before the banner renders.
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Preview failed');
+      } finally {
+        if (!cancelled) setPreviewSettled(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [locked, request, previewSettled]);
 
   const approve = async () => {
     setBusy(true);
@@ -102,6 +117,14 @@ export function ApprovalScreen() {
 
         <div className="min-h-0 flex-1 overflow-y-auto">
           {error && <Banner tone="danger">{error}</Banner>}
+          {locked && (
+            <Card className="mb-4" data-testid="approval-unlock">
+              <CardContent className="space-y-4">
+                <p className="text-sm text-fg-2">Unlock Cinder Wallet to review this request.</p>
+                <UnlockForm onUnlocked={() => setLocked(false)} />
+              </CardContent>
+            </Card>
+          )}
           {request && (
             <Card className="mb-4">
               <CardContent className="space-y-2 text-sm">
@@ -172,7 +195,7 @@ export function ApprovalScreen() {
           </SecondaryButton>
           <PrimaryButton
             onClick={approve}
-            disabled={busy || !request || awaitingPreview}
+            disabled={busy || !request || locked !== false || awaitingPreview}
             data-testid="approval-approve"
             className={isSend && danger ? 'bg-ui-danger text-[#010000] shadow-none' : ''}
           >

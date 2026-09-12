@@ -195,21 +195,40 @@ describe('handleMessage', () => {
     );
   });
 
-  it('opens the unlock window and throws on WALLET_CONNECT while locked', async () => {
+  it('WALLET_CONNECT while locked opens the approval window, which unlocks inline, then approves', async () => {
     await createFixtureWallet();
     await handleMessage({ type: 'LOCK' }, popup, BASE);
 
-    await expect(handleMessage({ type: 'WALLET_CONNECT' }, page, BASE)).rejects.toThrow(
-      'Wallet is locked. Unlock Cinder Wallet and try again.',
+    const { pendingId } = (await handleMessage({ type: 'WALLET_CONNECT' }, page, BASE)) as { pendingId: string };
+    const [approveWindow] = chromeStub.windows.created();
+    expect(approveWindow?.options.url).toBe(`${BASE}approve.html?id=${encodeURIComponent(pendingId)}`);
+    expect(chromeStub.windows.created().some((w) => String(w.options.url).endsWith('index.html'))).toBe(false);
+
+    // Approve before unlocking neither connects the origin nor settles the request.
+    await expect(handleMessage({ type: 'APPROVE_REQUEST', id: pendingId }, popup, BASE)).rejects.toThrow(
+      'Wallet is locked',
     );
-    const [unlockWindow] = chromeStub.windows.created();
-    expect(unlockWindow?.options.url).toBe(`${BASE}index.html`);
-    expect(chromeStub.storage.session.snapshot()).not.toHaveProperty('cinder_pending');
+    await expect(handleMessage({ type: 'POLL_APPROVAL', id: pendingId }, page, BASE)).resolves.toEqual({
+      status: 'pending',
+    });
+    expect(chromeStub.storage.local.snapshot()).not.toHaveProperty('cinder_connected');
   });
 
-  it('SIGN_MESSAGE while locked queues an approval that cannot be fulfilled', async () => {
-    // Today only WALLET_CONNECT short-circuits to the unlock window; a locked
-    // sign request opens the approval window and fails at APPROVE_REQUEST.
+  it('a locked connect approved after an inline unlock returns the accounts', async () => {
+    await createFixtureWallet();
+    await handleMessage({ type: 'LOCK' }, popup, BASE);
+    const { pendingId } = (await handleMessage({ type: 'WALLET_CONNECT' }, page, BASE)) as { pendingId: string };
+    await handleMessage({ type: 'UNLOCK', password: TEST_PASSWORD }, popup, BASE);
+    await expect(handleMessage({ type: 'APPROVE_REQUEST', id: pendingId }, popup, BASE)).resolves.toEqual({});
+    await expect(handleMessage({ type: 'POLL_APPROVAL', id: pendingId }, page, BASE)).resolves.toEqual({
+      status: 'approved',
+      value: { connected: true, accounts: [TEST_ADDRESS], publicKey: TEST_ADDRESS },
+    });
+    await expect(handleMessage({ type: 'GET_ACCOUNTS' }, page, BASE)).resolves.toEqual({ accounts: [TEST_ADDRESS] });
+  });
+
+  it('SIGN_MESSAGE while locked queues an approval that cannot be fulfilled until unlock', async () => {
+    // The approval window renders the unlock form; APPROVE_REQUEST before that fails at the keyring.
     await createFixtureWallet();
     await connectPage(page);
     await handleMessage({ type: 'LOCK' }, popup, BASE);

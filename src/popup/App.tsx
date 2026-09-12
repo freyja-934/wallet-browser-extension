@@ -53,6 +53,17 @@ function App() {
     init();
   }, [dispatch, queryClient]);
 
+  // The worker says it locked (auto-lock, or a lock from another window): re-read state so we route to Unlock.
+  useEffect(() => {
+    if (typeof chrome === 'undefined' || !chrome.runtime?.onMessage) return;
+    const onMessage = (message: unknown) => {
+      const event = message as { type?: unknown; event?: unknown } | null;
+      if (event?.type === 'WALLET_EVENT' && event.event === 'locked') void dispatch(initializeWallet());
+    };
+    chrome.runtime.onMessage.addListener(onMessage);
+    return () => chrome.runtime.onMessage.removeListener(onMessage);
+  }, [dispatch]);
+
   if (!isInitialized || isLoading) {
     return <LoadingScreen />;
   }

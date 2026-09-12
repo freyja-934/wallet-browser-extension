@@ -27,7 +27,6 @@ import {
   enqueueApproval,
   getApprovalResult,
   getPending,
-  openUnlockWindow,
   rejectApproval,
   resolveApproval,
 } from './approvals';
@@ -127,10 +126,7 @@ async function dispatch(request: WalletRequest, origin: string): Promise<WalletR
       if (!state.isLocked && (await origins.isConnected(origin))) return { accounts: addresses(state) };
       // Silent connects never open a window: nothing to show is an empty account list.
       if (request.silent) return { accounts: [] };
-      if (state.isLocked) {
-        await openUnlockWindow();
-        throw new Error('Wallet is locked. Unlock Cinder Wallet and try again.');
-      }
+      // Locked: the approval window renders the unlock form first, then the request.
       return { pendingId: await enqueueApproval('connect', origin) };
     }
     case 'WALLET_DISCONNECT': {
@@ -161,6 +157,8 @@ async function dispatch(request: WalletRequest, origin: string): Promise<WalletR
     case 'APPROVE_REQUEST': {
       const pending = await getPending(request.id);
       if (!pending) throw new Error('Approval expired — unlock and retry the dApp request');
+      // The approval window unlocks inline first; nothing is approved on a locked wallet.
+      if ((await getPublicState()).isLocked) throw new Error('Wallet is locked');
       await resolveApproval(pending.id, await fulfillApproval(pending));
       return {};
     }

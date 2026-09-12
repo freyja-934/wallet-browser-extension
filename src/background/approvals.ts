@@ -150,13 +150,3 @@ export async function rejectAll(reason: string): Promise<void> {
     }
   });
 }
-
-export async function openUnlockWindow(): Promise<void> {
-  await chrome.windows.create({
-    url: chrome.runtime.getURL('index.html'),
-    type: 'popup',
-    width: 400,
-    height: 640,
-    focused: true,
-  });
-}
