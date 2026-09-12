@@ -1,7 +1,7 @@
 import { Keypair } from '@solana/web3.js';
 import { Buffer } from 'buffer';
 import bs58 from 'bs58';
-import { getCluster } from '../config/constants';
+import { BUILD_HELIUS_API_KEY, getCluster } from '../config/constants';
 import { decrypt, encrypt, EncryptedData } from '../lib/encryption-simple';
 import {
   DEFAULT_SETTINGS,
@@ -112,19 +112,47 @@ export async function hasVault(): Promise<boolean> {
 
 export async function getSettings(): Promise<WalletSettings> {
   const stored = (await localGetFirst<Partial<WalletSettings>>(SETTINGS_KEYS)) ?? {};
-  return {
+  const settings: WalletSettings = {
     ...DEFAULT_SETTINGS,
     ...stored,
     cluster: stored.cluster ?? getCluster(),
   };
+  // The build-time key is a dev convenience: it only fills in when the user has stored none.
+  if (!stored.heliusApiKey && BUILD_HELIUS_API_KEY) settings.heliusApiKey = BUILD_HELIUS_API_KEY;
+  return settings;
+}
+
+/** `'  '` and `''` both clear the field; whitespace around a value is never stored. */
+function normalizeOptional(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 export async function updateSettings(partial: Partial<WalletSettings>): Promise<WalletSettings> {
   const current = await getSettings();
-  const next = { ...current, ...partial };
+  const next: WalletSettings = { ...current, ...partial };
+  if ('rpcUrl' in partial) {
+    const rpcUrl = normalizeOptional(partial.rpcUrl);
+    if (rpcUrl !== undefined && !isHttpsUrl(rpcUrl)) throw new Error('Invalid rpcUrl');
+    if (rpcUrl === undefined) delete next.rpcUrl;
+    else next.rpcUrl = rpcUrl;
+  }
+  if ('heliusApiKey' in partial) {
+    const heliusApiKey = normalizeOptional(partial.heliusApiKey);
+    if (heliusApiKey === undefined) delete next.heliusApiKey;
+    else next.heliusApiKey = heliusApiKey;
+  }
   await localSet(SETTINGS_KEYS[0], next);
   await scheduleAutoLock();
-  return next;
+  return getSettings();
 }
 
 export async function getPublicState(): Promise<WalletPublicState> {
