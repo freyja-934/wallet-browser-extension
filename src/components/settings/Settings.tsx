@@ -1,9 +1,10 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { WALLET_NAME, WALLET_VERSION, type Cluster } from '../../config/constants';
 import { SETTINGS_QUERY_KEY, syncSettings, useSettings, useUpdateSettings } from '../../hooks/useSettings';
 import { useInvalidateWalletData } from '../../hooks/useWalletQueries';
+import { errorMessage } from '../../lib/errors';
 import { DEFAULT_SETTINGS } from '../../lib/messages';
 import {
   changePassword,
@@ -17,9 +18,50 @@ import { Banner } from '../ui/EmptyState';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { DangerButton, PrimaryButton, SecondaryButton } from '../ui/Button';
 import { Card, CardContent } from '../ui/Card';
-import { FieldLabel, PasswordField, Select } from '../ui/Input';
+import { FieldLabel, PasswordField, Select, TextField } from '../ui/Input';
 import { Icon } from '../ui/Icon';
 import { Modal, ModalContent, ModalFooter, ModalHeader } from '../ui/Modal';
+
+const PROBE_TIMEOUT_MS = 10_000;
+
+/** Match pattern for `chrome.permissions` covering every path on the URL's origin. */
+function originPatternFor(url: URL): string {
+  return `${url.origin}/*`;
+}
+
+/** Optional host permissions only; removing a required one throws, which is fine to ignore. */
+async function dropOriginPermission(pattern: string): Promise<void> {
+  try {
+    await chrome.permissions.remove({ origins: [pattern] });
+  } catch {
+    /* required permission or already gone */
+  }
+}
+
+/** One `getHealth` from the popup. Any well-formed JSON-RPC envelope proves the endpoint answers us. */
+async function probeRpc(url: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 'cinder', method: 'getHealth' }),
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    });
+  } catch {
+    return { ok: false, error: 'Could not reach that endpoint (offline, blocked, or no CORS)' };
+  }
+  if (!response.ok) {
+    return { ok: false, error: `Endpoint answered HTTP ${response.status}` };
+  }
+  try {
+    const json = (await response.json()) as { result?: unknown; error?: { code?: unknown } };
+    if (json.result !== undefined || typeof json.error?.code === 'number') return { ok: true };
+  } catch {
+    /* not JSON */
+  }
+  return { ok: false, error: 'That endpoint did not answer JSON-RPC' };
+}
 
 export function Settings() {
   const dispatch = useAppDispatch();
@@ -46,6 +88,98 @@ export function Settings() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [seedPhrase, setSeedPhrase] = useState('');
   const [privateKey, setPrivateKey] = useState('');
+  const [rpcUrlDraft, setRpcUrlDraft] = useState(settings?.rpcUrl ?? '');
+  const [heliusKeyDraft, setHeliusKeyDraft] = useState(settings?.heliusApiKey ?? '');
+  const [rpcBusy, setRpcBusy] = useState(false);
+  const storedRpcUrl = settings?.rpcUrl ?? '';
+  const storedHeliusKey = settings?.heliusApiKey ?? '';
+
+  // Drafts follow the stored values (they arrive async and change on Save / Clear / wipe).
+  useEffect(() => {
+    setRpcUrlDraft(storedRpcUrl);
+  }, [storedRpcUrl]);
+  useEffect(() => {
+    setHeliusKeyDraft(storedHeliusKey);
+  }, [storedHeliusKey]);
+
+  const finishRpcSave = async (
+    url: string,
+    key: string,
+    originPattern: string | undefined,
+    permission: Promise<boolean>,
+  ) => {
+    setRpcBusy(true);
+    try {
+      if (url && originPattern) {
+        if (!(await permission)) {
+          toast.error('Access to that host was not granted');
+          return;
+        }
+        const probe = await probeRpc(url);
+        if (!probe.ok) {
+          await dropOriginPermission(originPattern);
+          toast.error(probe.error);
+          return;
+        }
+      }
+      await updateSettings.mutateAsync({ rpcUrl: url, heliusApiKey: key });
+      invalidate(address);
+      toast.success('RPC settings saved');
+    } catch (error) {
+      toast.error(errorMessage(error, 'Could not save RPC settings'));
+    } finally {
+      setRpcBusy(false);
+    }
+  };
+
+  /**
+   * Click handler, not async: `chrome.permissions.request` must run inside the
+   * user gesture, so it is issued before the first `await` when a URL is set.
+   */
+  const handleRpcSave = () => {
+    const url = rpcUrlDraft.trim();
+    const key = heliusKeyDraft.trim();
+    let originPattern: string | undefined;
+    let permission: Promise<boolean> = Promise.resolve(true);
+    if (url) {
+      let parsed: URL | undefined;
+      try {
+        parsed = new URL(url);
+      } catch {
+        parsed = undefined;
+      }
+      if (!parsed || parsed.protocol !== 'https:') {
+        toast.error('RPC URL must start with https://');
+        return;
+      }
+      originPattern = originPatternFor(parsed);
+      permission = chrome.permissions.request({ origins: [originPattern] });
+    }
+    void finishRpcSave(url, key, originPattern, permission);
+  };
+
+  const handleRpcClear = async () => {
+    setRpcBusy(true);
+    try {
+      const previous = storedRpcUrl;
+      await updateSettings.mutateAsync({ rpcUrl: '', heliusApiKey: '' });
+      setRpcUrlDraft('');
+      setHeliusKeyDraft('');
+      if (previous) {
+        try {
+          await dropOriginPermission(originPatternFor(new URL(previous)));
+        } catch {
+          /* stored value was not a URL; nothing to drop */
+        }
+      }
+      invalidate(address);
+      toast.success('RPC settings cleared');
+    } catch (error) {
+      toast.error(errorMessage(error, 'Could not clear RPC settings'));
+    } finally {
+      setRpcBusy(false);
+    }
+  };
 
   const handleExportSeedPhrase = async () => {
     try {
@@ -175,6 +309,60 @@ export function Settings() {
             />
           </label>
           <SettingRow title="Change password" onClick={() => setShowChangePassword(true)} testId="settings-change-password" />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="space-y-4">
+          <h3 className="text-[11px] uppercase tracking-[0.16em] text-fg-2">RPC</h3>
+          <div>
+            <FieldLabel htmlFor="settings-rpc-url">Custom RPC URL</FieldLabel>
+            <TextField
+              id="settings-rpc-url"
+              name="rpcUrl"
+              type="url"
+              inputMode="url"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="https://"
+              value={rpcUrlDraft}
+              onChange={(e) => setRpcUrlDraft(e.target.value)}
+              disabled={rpcBusy}
+              data-testid="settings-rpc-url"
+            />
+            <p className="mt-1 text-xs text-fg-3">
+              Tried first, before Helius and the public endpoints. https only.
+            </p>
+          </div>
+          <div>
+            <FieldLabel htmlFor="settings-helius-key">Helius API key</FieldLabel>
+            <PasswordField
+              id="settings-helius-key"
+              name="heliusApiKey"
+              autoComplete="off"
+              placeholder="Optional"
+              value={heliusKeyDraft}
+              onChange={(e) => setHeliusKeyDraft(e.target.value)}
+              disabled={rpcBusy}
+              data-testid="settings-helius-key"
+            />
+            <p className="mt-1 text-xs text-fg-3">
+              Stored on this device only. Enables token names and NFTs on Mainnet.
+            </p>
+          </div>
+          <div className="flex gap-3">
+            <SecondaryButton
+              onClick={() => void handleRpcClear()}
+              className="flex-1"
+              disabled={rpcBusy}
+              data-testid="settings-rpc-clear"
+            >
+              Clear
+            </SecondaryButton>
+            <PrimaryButton onClick={handleRpcSave} className="flex-1" disabled={rpcBusy} data-testid="settings-rpc-save">
+              Save
+            </PrimaryButton>
+          </div>
         </CardContent>
       </Card>
 
