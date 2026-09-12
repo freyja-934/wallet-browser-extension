@@ -11,6 +11,12 @@ import { Icon } from './ui/Icon';
 import { PrimaryButton, SecondaryButton } from './ui/Button';
 import { BalanceCard } from './wallet/BalanceCard';
 
+/**
+ * Each tab mounts only while active. That is deliberate: the chain queries in
+ * `useWalletQueries` carry a `staleTime` and `placeholderData: keepPreviousData`,
+ * so switching back renders the cached rows at once and refetches only once
+ * they are stale, without three tabs' worth of DOM kept alive in a popup.
+ */
 export function Dashboard() {
   const dispatch = useAppDispatch();
   const { activeView, showSettingsModal } = useAppSelector((state) => state.ui);

@@ -1,10 +1,11 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import toast from 'react-hot-toast';
 import { useNFTs } from '../../hooks/useWalletQueries';
+import { errorMessage } from '../../lib/errors';
 import { setNftViewMode, setRefreshing } from '../../store/slices/uiSlice';
 import type { NFT } from '../../store/slices/walletSlice';
 import { useAppDispatch, useAppSelector } from '../../store/store';
-import { EmptyState, Skeleton } from '../ui/EmptyState';
+import { EmptyState, ErrorCard, SettingsLink, Skeleton } from '../ui/EmptyState';
 import { Icon } from '../ui/Icon';
 import { TextField } from '../ui/Input';
 import { Modal, ModalContent, ModalFooter, ModalHeader } from '../ui/Modal';
@@ -15,7 +16,7 @@ export function NFTGallery() {
   const dispatch = useAppDispatch();
   const { accounts, activeAccountIndex } = useAppSelector((state) => state.wallet);
   const address = accounts[activeAccountIndex]?.address;
-  const { data, isLoading, refetch } = useNFTs(address);
+  const { data, isLoading, isError, error, refetch } = useNFTs(address);
   const nfts = useMemo(() => data?.nfts ?? [], [data]);
   const nftCollections = useMemo(() => data?.nftCollections ?? {}, [data]);
   const { nftViewMode, isRefreshing } = useAppSelector((state) => state.ui);
@@ -48,11 +49,40 @@ export function NFTGallery() {
     return filtered;
   }, [nfts, nftCollections, selectedCollection, searchQuery]);
 
+  if (isError) {
+    return (
+      <div className="px-4 py-4">
+        <ErrorCard
+          testId="nfts-error"
+          title="Could not load collectibles"
+          body={errorMessage(error, 'The RPC endpoint did not answer.')}
+          onRetry={handleRefresh}
+        />
+      </div>
+    );
+  }
+
   if (isLoading && nfts.length === 0) {
     return (
       <div className="grid grid-cols-2 gap-3 px-4 py-4">
         <Skeleton className="aspect-square rounded-2xl" />
         <Skeleton className="aspect-square rounded-2xl" />
+      </div>
+    );
+  }
+
+  // No configured endpoint serves DAS: a configuration state, not an empty wallet.
+  if (data?.nftsUnavailable) {
+    return (
+      <div className="px-4 py-4">
+        <EmptyState
+          icon="nft"
+          title="Collectibles need an endpoint"
+          body="The configured RPC endpoints do not serve NFT data."
+        />
+        <p className="-mt-6 px-6 text-center text-xs leading-relaxed text-fg-2" data-testid="nfts-unavailable">
+          Add an RPC endpoint in <SettingsLink /> to see NFTs
+        </p>
       </div>
     );
   }
