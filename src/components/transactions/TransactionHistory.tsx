@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { useTransactions } from '../../hooks/useWalletQueries';
 import { errorMessage } from '../../lib/errors';
+import { isEndpointsUnreachable } from '../../services/helius';
 import { useAppSelector } from '../../store/store';
 import { SecondaryButton } from '../ui/Button';
-import { EmptyState, ErrorCard, Skeleton } from '../ui/EmptyState';
+import { EmptyState, EndpointsUnreachableBody, ErrorCard, Skeleton } from '../ui/EmptyState';
 import { SegmentedControl } from '../ui/Input';
 import { TransactionRow } from './TransactionRow';
 
@@ -11,8 +12,17 @@ export function TransactionHistory() {
   const { accounts, activeAccountIndex } = useAppSelector((state) => state.wallet);
   const cluster = useAppSelector((state) => state.ui.cluster);
   const activeAccount = accounts[activeAccountIndex];
-  const { data, isLoading, isError, error, refetch, fetchNextPage, hasNextPage, isFetchingNextPage } =
-    useTransactions(activeAccount?.address);
+  const {
+    data,
+    isLoading,
+    isError,
+    error,
+    refetch,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    isFetchNextPageError,
+  } = useTransactions(activeAccount?.address);
   const transactions = data?.pages.flat() ?? [];
   const [filter, setFilter] = useState<'all' | 'sent' | 'received'>('all');
 
@@ -24,13 +34,15 @@ export function TransactionHistory() {
     return true;
   });
 
-  if (isError) {
+  // The card replaces the list only when there is no list: a later page that
+  // failed keeps the rows already shown and says so by the Load more row.
+  if (isError && transactions.length === 0) {
     return (
       <div className="px-4 py-4">
         <ErrorCard
           testId="history-error"
           title="Could not load activity"
-          body={errorMessage(error, 'The RPC endpoint did not answer.')}
+          body={isEndpointsUnreachable(error) ? <EndpointsUnreachableBody /> : errorMessage(error, 'The RPC endpoint did not answer.')}
           onRetry={() => void refetch()}
         />
       </div>
@@ -75,15 +87,26 @@ export function TransactionHistory() {
         </div>
       )}
       {hasNextPage && (
-        <SecondaryButton
-          type="button"
-          className="h-10 w-full text-xs"
-          onClick={() => void fetchNextPage()}
-          disabled={isFetchingNextPage}
-          data-testid="history-load-more"
-        >
-          {isFetchingNextPage ? 'Loading…' : 'Load more'}
-        </SecondaryButton>
+        <div className="space-y-2">
+          {isFetchNextPageError && (
+            <p
+              role="alert"
+              data-testid="history-page-error"
+              className="rounded-2xl border border-ui-danger/30 bg-ui-danger/10 px-3 py-2.5 text-center text-xs leading-relaxed text-fg-2"
+            >
+              Could not load more activity: {errorMessage(error, 'the RPC endpoint did not answer')}
+            </p>
+          )}
+          <SecondaryButton
+            type="button"
+            className="h-10 w-full text-xs"
+            onClick={() => void fetchNextPage()}
+            disabled={isFetchingNextPage}
+            data-testid="history-load-more"
+          >
+            {isFetchingNextPage ? 'Loading…' : isFetchNextPageError ? 'Retry' : 'Load more'}
+          </SecondaryButton>
+        </div>
       )}
     </div>
   );

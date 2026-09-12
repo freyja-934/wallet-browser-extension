@@ -31,6 +31,8 @@ export function BalanceCard() {
   // Loading and error both show a dash: a figure here is a real balance or nothing.
   const sol = balances.data && !balances.isError ? formatLamports(BigInt(balances.data.lamports)) : '—';
   const usd = balances.isError ? undefined : usdTotal(balances.data, prices.data);
+  // Tokens could not be listed, so the sum is SOL alone; say so rather than present it as the portfolio.
+  const solOnly = Boolean(balances.data?.tokensError);
 
   return (
     <div className="text-center">
@@ -40,7 +42,11 @@ export function BalanceCard() {
         <span className="ml-1.5 text-lg font-medium text-fg-2">SOL</span>
       </p>
       <p className="mt-3 text-sm text-fg-2" data-testid="usd-balance">
-        {cluster === 'devnet' ? 'Devnet · USD prices are hidden' : usd === undefined ? '—' : formatUsd(usd)}
+        {cluster === 'devnet'
+          ? 'Devnet · USD prices are hidden'
+          : usd === undefined
+            ? '—'
+            : `${formatUsd(usd)}${solOnly ? ' · SOL only' : ''}`}
       </p>
       {balances.isError && (
         <div className="mt-4 text-left">

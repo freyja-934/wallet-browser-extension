@@ -1,11 +1,11 @@
 import { useMemo, useState, type ReactNode } from 'react';
-import toast from 'react-hot-toast';
 import { useNFTs } from '../../hooks/useWalletQueries';
 import { errorMessage } from '../../lib/errors';
+import { isEndpointsUnreachable } from '../../services/helius';
 import { setNftViewMode, setRefreshing } from '../../store/slices/uiSlice';
 import type { NFT } from '../../store/slices/walletSlice';
 import { useAppDispatch, useAppSelector } from '../../store/store';
-import { EmptyState, ErrorCard, SettingsLink, Skeleton } from '../ui/EmptyState';
+import { EmptyState, EndpointsUnreachableBody, ErrorCard, SettingsLink, Skeleton } from '../ui/EmptyState';
 import { Icon } from '../ui/Icon';
 import { TextField } from '../ui/Input';
 import { Modal, ModalContent, ModalFooter, ModalHeader } from '../ui/Modal';
@@ -26,13 +26,9 @@ export function NFTGallery() {
 
   const handleRefresh = async () => {
     dispatch(setRefreshing(true));
-    try {
-      await refetch();
-    } catch {
-      toast.error('Failed to refresh NFTs');
-    } finally {
-      dispatch(setRefreshing(false));
-    }
+    // `refetch` never rejects: a failure lands in `isError` and the card below.
+    await refetch();
+    dispatch(setRefreshing(false));
   };
 
   const filteredNFTs = useMemo(() => {
@@ -55,7 +51,7 @@ export function NFTGallery() {
         <ErrorCard
           testId="nfts-error"
           title="Could not load collectibles"
-          body={errorMessage(error, 'The RPC endpoint did not answer.')}
+          body={isEndpointsUnreachable(error) ? <EndpointsUnreachableBody /> : errorMessage(error, 'The RPC endpoint did not answer.')}
           onRetry={handleRefresh}
         />
       </div>
