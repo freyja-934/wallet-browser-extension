@@ -1,12 +1,20 @@
 import { Connection } from '@solana/web3.js';
-import {
-  isHeliusRpcUrl,
-  rpcUrlsFor,
-  type Cluster,
-} from '../config/constants';
 
 const COOLDOWN_MS = 30_000;
 const cooldownUntil = new Map<string, number>();
+
+/**
+ * HTTP statuses that say "this endpoint will not serve this call" rather than
+ * "this endpoint is unwell": try the next URL for this call only, no cooldown.
+ */
+export const SKIP_HTTP_STATUSES: readonly number[] = [401, 403];
+
+/**
+ * JSON-RPC codes a public endpoint returns for a method it refuses to serve
+ * (`-32601` method not found; `-32600` / `-32000` are what the fallback fixture
+ * pins for a blocked method, see rpc-rotate.test.ts). Same rule: skip, no cooldown.
+ */
+export const SKIP_RPC_CODES: readonly number[] = [-32601, -32600, -32000];
 
 export function resetRpcCooldowns(): void {
   cooldownUntil.clear();
@@ -23,22 +31,68 @@ export function prioritizeRpcUrls(urls: string[], now = Date.now()): string[] {
   return healthy.length > 0 ? [...healthy, ...resting] : [...urls];
 }
 
-function shouldRotateStatus(status: number): boolean {
+/** Endpoint trouble: rotate and rest this URL for `COOLDOWN_MS`. */
+function isCooldownStatus(status: number): boolean {
   return status === 408 || status === 429 || status >= 500;
 }
 
-export async function rpcJson<T>(
-  cluster: Cluster,
-  method: string,
-  params: unknown,
-  options: { das?: boolean; urls?: string[] } = {},
-): Promise<T> {
-  let urls = options.urls ?? rpcUrlsFor(cluster);
-  if (options.das) {
-    urls = urls.filter(isHeliusRpcUrl);
+function isSkipStatus(status: number): boolean {
+  return SKIP_HTTP_STATUSES.includes(status);
+}
+
+function isSkipRpcCode(code: unknown): boolean {
+  return typeof code === 'number' && SKIP_RPC_CODES.includes(code);
+}
+
+export function makeConnection(url: string): Connection {
+  // React Query owns retries; web3.js's own 429 backoff logs console.error and hides latency.
+  return new Connection(url, { commitment: 'confirmed', disableRetryOnRateLimit: true });
+}
+
+/** `${status} ${statusText}: ${body}` is how web3.js reports a non-2xx response, possibly wrapped. */
+const WEB3_HTTP_STATUS = /(?:^|: |Error: )(\d{3}) [A-Za-z][A-Za-z ]*:/;
+
+type Verdict = 'skip' | 'cooldown';
+
+/**
+ * Classify an error thrown by a web3.js `Connection` call. HTTP 401/403 and a
+ * refused method skip the URL without cooling it down; anything else (429, 5xx,
+ * transport failures, and errors we cannot read) cools the URL down as before.
+ */
+export function classifyConnectionError(error: unknown): Verdict {
+  if (error && typeof error === 'object') {
+    if (isSkipRpcCode((error as { code?: unknown }).code)) return 'skip';
   }
+  const message = error instanceof Error ? error.message : String(error);
+  const status = Number(WEB3_HTTP_STATUS.exec(message)?.[1]);
+  if (!Number.isNaN(status) && isSkipStatus(status)) return 'skip';
+  if (/method not found/i.test(message)) return 'skip';
+  return 'cooldown';
+}
+
+class RpcHttpError extends Error {
+  constructor(method: string, readonly status: number) {
+    super(`${method} failed: ${status}`);
+    this.name = 'RpcHttpError';
+  }
+}
+
+class RpcApplicationError extends Error {
+  constructor(message: string, readonly code: number | undefined) {
+    super(message);
+    this.name = 'RpcApplicationError';
+  }
+}
+
+/**
+ * One JSON-RPC call over the URL list, healthy endpoints first.
+ * - 401 / 403 and a refused method (`SKIP_RPC_CODES`) skip to the next URL for this call only.
+ * - 408 / 429 / 5xx and transport errors mark the URL unhealthy and move on.
+ * - Any other HTTP status or JSON-RPC error is the caller's problem and throws at once.
+ */
+export async function rpcJson<T>(urls: string[], method: string, params: unknown): Promise<T> {
   if (urls.length === 0) {
-    throw new Error(`${method} needs Helius`);
+    throw new Error(`${method} failed: no RPC endpoint`);
   }
 
   let lastError: Error | undefined;
@@ -50,31 +104,35 @@ export async function rpcJson<T>(
         body: JSON.stringify({ jsonrpc: '2.0', id: 'cinder', method, params }),
       });
       if (!response.ok) {
-        const httpError = new Error(`${method} failed: ${response.status}`);
-        if (!shouldRotateStatus(response.status)) {
-          throw httpError;
-        }
-        markRpcUnhealthy(url);
-        lastError = httpError;
-        continue;
+        throw new RpcHttpError(method, response.status);
       }
-      const json = await response.json() as {
+      const json = (await response.json()) as {
         result?: T;
-        error?: { message?: string };
+        error?: { code?: number; message?: string };
       };
       if (json.error) {
-        lastError = new Error(json.error.message || `${method} failed`);
-        markRpcUnhealthy(url);
-        continue;
+        throw new RpcApplicationError(json.error.message || `${method} failed`, json.error.code);
       }
       return json.result as T;
     } catch (error) {
-      if (error instanceof Error && error.message.startsWith(`${method} failed: `)) {
-        const status = Number(error.message.slice(`${method} failed: `.length));
-        if (!Number.isNaN(status) && !shouldRotateStatus(status)) {
-          throw error;
+      if (error instanceof RpcHttpError) {
+        if (isSkipStatus(error.status)) {
+          lastError = error;
+          continue;
         }
+        if (!isCooldownStatus(error.status)) throw error;
+        markRpcUnhealthy(url);
+        lastError = error;
+        continue;
       }
+      if (error instanceof RpcApplicationError) {
+        if (isSkipRpcCode(error.code)) {
+          lastError = error;
+          continue;
+        }
+        throw error;
+      }
+      // fetch rejected: DNS, TLS, CORS, offline.
       lastError = error instanceof Error ? error : new Error(`${method} failed`);
       markRpcUnhealthy(url);
     }
@@ -82,39 +140,33 @@ export async function rpcJson<T>(
   throw lastError ?? new Error(`${method} failed`);
 }
 
+/** Run `fn` against each URL in turn until one succeeds; see `classifyConnectionError` for the rotation rule. */
 export async function withRotatedConnection<T>(
-  cluster: Cluster,
+  urls: string[],
   fn: (connection: Connection) => Promise<T>,
 ): Promise<T> {
-  const urls = prioritizeRpcUrls(rpcUrlsFor(cluster));
   let lastError: unknown;
-  for (const url of urls) {
+  for (const url of prioritizeRpcUrls(urls)) {
     try {
-      return await fn(new Connection(url, 'confirmed'));
+      return await fn(makeConnection(url));
     } catch (error) {
-      markRpcUnhealthy(url);
+      if (classifyConnectionError(error) === 'cooldown') markRpcUnhealthy(url);
       lastError = error;
     }
   }
   throw lastError ?? new Error('RPC failed');
 }
 
-export function connectionForCluster(cluster: Cluster): Connection {
-  const url = prioritizeRpcUrls(rpcUrlsFor(cluster))[0];
-  return new Connection(url, 'confirmed');
-}
-
 /** Probe endpoints until getLatestBlockhash works. Do not reuse this to retry a broadcast. */
-export async function readyConnection(cluster: Cluster): Promise<Connection> {
-  const urls = prioritizeRpcUrls(rpcUrlsFor(cluster));
+export async function readyConnection(urls: string[]): Promise<Connection> {
   let lastError: unknown;
-  for (const url of urls) {
-    const connection = new Connection(url, 'confirmed');
+  for (const url of prioritizeRpcUrls(urls)) {
+    const connection = makeConnection(url);
     try {
       await connection.getLatestBlockhash('confirmed');
       return connection;
     } catch (error) {
-      markRpcUnhealthy(url);
+      if (classifyConnectionError(error) === 'cooldown') markRpcUnhealthy(url);
       lastError = error;
     }
   }

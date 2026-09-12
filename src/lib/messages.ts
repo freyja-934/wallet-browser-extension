@@ -62,6 +62,10 @@ export interface WalletSettings {
   hideSmallBalances: boolean;
   smallBalanceThreshold: number;
   cluster: 'mainnet-beta' | 'devnet';
+  /** User-supplied https JSON-RPC endpoint, tried first. Absent when unset. */
+  rpcUrl?: string;
+  /** User-supplied Helius key, stored on this device in plaintext. Absent when unset. */
+  heliusApiKey?: string;
 }
 
 export type ApprovalKind = 'connect' | 'signTransaction' | 'signAndSendTransaction' | 'signMessage';

@@ -1,5 +1,5 @@
 import { Connection, PublicKey } from '@solana/web3.js';
-import { getRpcUrl } from '../config/constants';
+import { PUBLIC_MAINNET_RPCS } from '../config/constants';
 import { runtimeCluster } from '../lib/runtime-rpc';
 import { coinGeckoService } from './coingecko';
 import { TokenBalance, heliusService } from './helius';
@@ -13,7 +13,7 @@ class WalletService {
   private connection: Connection;
 
   constructor() {
-    this.connection = new Connection(getRpcUrl(), 'confirmed');
+    this.connection = new Connection(PUBLIC_MAINNET_RPCS[0], 'confirmed');
   }
 
   async getTokenBalances(address: string): Promise<{

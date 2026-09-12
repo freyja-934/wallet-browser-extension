@@ -126,6 +126,28 @@ function requireIntegerString(value: unknown, field: string): string {
   return value;
 }
 
+/** Longest Helius key we accept: a UUID is 36 characters, leave room for other formats. */
+export const MAX_HELIUS_KEY_LENGTH = 64;
+
+/** `''` clears the field; otherwise an absolute `https://` URL that `new URL` can parse. */
+function requireRpcUrl(value: unknown, field: string): string {
+  if (typeof value !== 'string') invalid(field);
+  if (value === '') return value;
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    invalid(field);
+  }
+  if (parsed.protocol !== 'https:') invalid(field);
+  return value;
+}
+
+function requireHeliusApiKey(value: unknown, field: string): string {
+  if (typeof value !== 'string' || value.length > MAX_HELIUS_KEY_LENGTH) invalid(field);
+  return value;
+}
+
 function requireSettings(value: unknown): Partial<WalletSettings> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) invalid('settings');
   const input = value as Record<string, unknown>;
@@ -156,6 +178,12 @@ function requireSettings(value: unknown): Partial<WalletSettings> {
       case 'cluster':
         if (typeof raw !== 'string' || !(CLUSTERS as readonly string[]).includes(raw)) invalid(field);
         out.cluster = raw as WalletSettings['cluster'];
+        break;
+      case 'rpcUrl':
+        out.rpcUrl = requireRpcUrl(raw, field);
+        break;
+      case 'heliusApiKey':
+        out.heliusApiKey = requireHeliusApiKey(raw, field);
         break;
       default:
         invalid('settings');

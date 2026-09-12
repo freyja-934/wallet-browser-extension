@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_MESSAGE_BYTES, MAX_TRANSACTION_BYTES } from './bridge';
 import { EXTENSION_MESSAGE_TYPES, type ExtensionMessageType } from './messages';
-import { parseRequest, PROTOCOL_COVERS_ALLOWLIST } from './protocol';
+import { MAX_HELIUS_KEY_LENGTH, parseRequest, PROTOCOL_COVERS_ALLOWLIST } from './protocol';
 
 interface Case {
   valid: Record<string, unknown>;
@@ -176,6 +176,47 @@ describe('parseRequest', () => {
     }
     expect(() => parseRequest({ type: 'UPDATE_SETTINGS' })).toThrow('Invalid settings');
     expect(() => parseRequest({ type: 'UPDATE_SETTINGS', settings: [] })).toThrow('Invalid settings');
+  });
+
+  it('accepts an https rpcUrl or an empty string to clear it', () => {
+    for (const rpcUrl of ['https://rpc.example', 'https://rpc.example/v1?x=1', '']) {
+      expect(parseRequest({ type: 'UPDATE_SETTINGS', settings: { rpcUrl } })).toEqual({
+        type: 'UPDATE_SETTINGS',
+        settings: { rpcUrl },
+      });
+    }
+  });
+
+  it('rejects an rpcUrl that is not an absolute https URL', () => {
+    for (const rpcUrl of [
+      'http://rpc.example',
+      'javascript:alert(1)',
+      'ftp://rpc.example',
+      'rpc.example',
+      'https://',
+      '//rpc.example',
+      42,
+      null,
+    ]) {
+      expect(() => parseRequest({ type: 'UPDATE_SETTINGS', settings: { rpcUrl } })).toThrow('Invalid settings.rpcUrl');
+    }
+  });
+
+  it('accepts a Helius key up to the length cap or an empty string to clear it', () => {
+    for (const heliusApiKey of ['', 'abcd1234-ab12-cd34-ef56-abcdef123456', 'k'.repeat(MAX_HELIUS_KEY_LENGTH)]) {
+      expect(parseRequest({ type: 'UPDATE_SETTINGS', settings: { heliusApiKey } })).toEqual({
+        type: 'UPDATE_SETTINGS',
+        settings: { heliusApiKey },
+      });
+    }
+  });
+
+  it('rejects a Helius key over the cap or of the wrong type', () => {
+    for (const heliusApiKey of ['k'.repeat(MAX_HELIUS_KEY_LENGTH + 1), 7, null, { key: 'x' }]) {
+      expect(() => parseRequest({ type: 'UPDATE_SETTINGS', settings: { heliusApiKey } })).toThrow(
+        'Invalid settings.heliusApiKey',
+      );
+    }
   });
 
   it('only accepts a decimal integer string for amountSmallest', () => {

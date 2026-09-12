@@ -1,9 +1,9 @@
 import { Connection, PublicKey, type ParsedTransactionWithMeta } from '@solana/web3.js';
 import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
-import { getHeliusApiKey, getRpcUrl } from '../config/constants';
+import { BUILD_HELIUS_API_KEY, PUBLIC_MAINNET_RPCS } from '../config/constants';
 import { activityFromParsedTx, normalizeHeliusTransfers } from '../lib/parse-history';
 import { rpcJson, withRotatedConnection } from '../lib/rpc-rotate';
-import { runtimeCluster } from '../lib/runtime-rpc';
+import { runtimeCluster, runtimeRpcUrls } from '../lib/runtime-rpc';
 
 const NFT_INTERFACES = new Set([
   'V1_NFT',
@@ -121,12 +121,12 @@ class HeliusService {
   private baseUrl: string = 'https://api.helius.xyz/v0';
 
   constructor() {
-    this.apiKey = getHeliusApiKey();
-    this.connection = new Connection(getRpcUrl(), 'confirmed');
+    this.apiKey = BUILD_HELIUS_API_KEY;
+    this.connection = new Connection(PUBLIC_MAINNET_RPCS[0], 'confirmed');
   }
 
   private async das<T>(method: string, params: unknown): Promise<T> {
-    return rpcJson<T>(await runtimeCluster(), method, params, { das: true });
+    return rpcJson<T>(await runtimeRpcUrls(), method, params);
   }
 
   async getTokenBalances(address: string): Promise<{
@@ -134,8 +134,8 @@ class HeliusService {
     tokens: TokenBalance[];
   }> {
     const pubkey = new PublicKey(address);
-    const cluster = await runtimeCluster();
-    const [lamports, parsed] = await withRotatedConnection(cluster, async (connection) =>
+    const urls = await runtimeRpcUrls();
+    const [lamports, parsed] = await withRotatedConnection(urls, async (connection) =>
       Promise.all([
         connection.getBalance(pubkey),
         connection.getParsedTokenAccountsByOwner(pubkey, { programId: TOKEN_PROGRAM_ID }),
@@ -256,8 +256,8 @@ class HeliusService {
         }
       }
 
-      const cluster = await runtimeCluster();
-      const { sigs, parsed } = await withRotatedConnection(cluster, async (connection) => {
+      const urls = await runtimeRpcUrls();
+      const { sigs, parsed } = await withRotatedConnection(urls, async (connection) => {
         const sigs = await connection.getSignaturesForAddress(new PublicKey(address), {
           limit,
           before,

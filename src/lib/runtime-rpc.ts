@@ -1,18 +1,25 @@
+import { DEFAULT_SETTINGS, type WalletSettings } from '../lib/messages';
 import { getCluster, rpcUrlsFor, type Cluster } from '../config/constants';
 import { prioritizeRpcUrls } from './rpc-rotate';
 import { extensionClient } from '../messaging/client';
 
-export async function runtimeCluster(): Promise<Cluster> {
+/** Worker-owned settings as seen from the popup; build defaults when the worker is unreachable. */
+export async function runtimeSettings(): Promise<WalletSettings> {
   try {
-    const settings = await extensionClient.getSettings();
-    return settings.cluster ?? getCluster();
+    return await extensionClient.getSettings();
   } catch {
-    return getCluster();
+    return { ...DEFAULT_SETTINGS, cluster: getCluster() };
   }
 }
 
+export async function runtimeCluster(): Promise<Cluster> {
+  return (await runtimeSettings()).cluster;
+}
+
+/** `rpcUrlsFor` over the live settings: custom URL, Helius, then the public defaults. */
 export async function runtimeRpcUrls(): Promise<string[]> {
-  return rpcUrlsFor(await runtimeCluster());
+  const settings = await runtimeSettings();
+  return rpcUrlsFor(settings.cluster, settings);
 }
 
 export async function runtimeRpcUrl(): Promise<string> {
