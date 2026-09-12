@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from './fixtures';
-import { importAndUnlock } from './popup';
+import { importAndUnlock, openPopup } from './popup';
 
 const distManifest = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'manifest.json');
 
@@ -71,4 +71,20 @@ test('UPDATE_SETTINGS / GET_SETTINGS round-trip drives the primary endpoint', as
   if (cleared.success) expect(cleared.settings.rpcUrl).toBeUndefined();
   await popup.reload();
   await expect(popup.getByTestId('network-pill')).toHaveAttribute('title', initialHost!);
+});
+
+// Opt-in: publicnode reachability depends on the network (an ISP filter blocked it on the
+// implementation machine). Run with E2E_LIVE_MAINNET=1 to prove the extension origin gets a 200.
+test('keyless mainnet: the popup origin can reach publicnode', async ({ context, extensionId }) => {
+  test.skip(!process.env.E2E_LIVE_MAINNET, 'set E2E_LIVE_MAINNET=1 to run the live publicnode check');
+  const popup = await openPopup(context, extensionId);
+  const status = await popup.evaluate(async () => {
+    const response = await fetch('https://solana-rpc.publicnode.com', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 'e2e', method: 'getHealth' }),
+    });
+    return response.status;
+  });
+  expect(status).toBe(200);
 });

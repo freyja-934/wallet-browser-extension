@@ -39,6 +39,7 @@ Make the endpoint list settings-driven, ship a browser-permissive mainnet defaul
 
 - publicnode terms are AS IS with unpublished limits; `api.mainnet-beta` stays as a fallback and the user can add their own endpoint.
 - The `permissions.request` call must be the first statement in the click handler; an `await` before it makes Chrome reject the request for lack of a user gesture.
+- The rotation codes are taken from web3.js's `SolanaJSONRPCErrorCode` plus a message heuristic because publicnode was unreachable from the implementation network (ISP filter); verification against publicnode from another network is pending (`E2E_LIVE_MAINNET=1 just e2e e2e/rpc.spec.ts`).
 - Query keys still use `cluster` only until SHIP-4; switching RPC while cached data exists shows stale data until refetch, so Save invalidates the wallet queries.
 
 ## Parking lot

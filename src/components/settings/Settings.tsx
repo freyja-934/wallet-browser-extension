@@ -6,6 +6,7 @@ import { SETTINGS_QUERY_KEY, syncSettings, useSettings, useUpdateSettings } from
 import { useInvalidateWalletData } from '../../hooks/useWalletQueries';
 import { errorMessage } from '../../lib/errors';
 import { DEFAULT_SETTINGS } from '../../lib/messages';
+import { originPatternFor, parseHttpsUrl, saveRpcSettings, type RpcProbeResult, type SaveRpcOutcome } from '../../lib/rpc-save';
 import {
   changePassword,
   clearWalletData,
@@ -24,11 +25,6 @@ import { Modal, ModalContent, ModalFooter, ModalHeader } from '../ui/Modal';
 
 const PROBE_TIMEOUT_MS = 10_000;
 
-/** Match pattern for `chrome.permissions` covering every path on the URL's origin. */
-function originPatternFor(url: URL): string {
-  return `${url.origin}/*`;
-}
-
 /** Optional host permissions only; removing a required one throws, which is fine to ignore. */
 async function dropOriginPermission(pattern: string): Promise<void> {
   try {
@@ -38,14 +34,19 @@ async function dropOriginPermission(pattern: string): Promise<void> {
   }
 }
 
-/** One `getHealth` from the popup. Any well-formed JSON-RPC envelope proves the endpoint answers us. */
-async function probeRpc(url: string): Promise<{ ok: true } | { ok: false; error: string }> {
+type RpcEnvelope = { result?: unknown; error?: { code?: unknown } };
+
+/** One parameterless JSON-RPC call from the popup. Any well-formed envelope proves the endpoint answers us. */
+async function rpcEnvelope(
+  url: string,
+  method: string,
+): Promise<{ ok: true; json: RpcEnvelope } | { ok: false; error: string }> {
   let response: Response;
   try {
     response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 'cinder', method: 'getHealth' }),
+      body: JSON.stringify({ jsonrpc: '2.0', id: 'cinder', method }),
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
   } catch {
@@ -55,12 +56,22 @@ async function probeRpc(url: string): Promise<{ ok: true } | { ok: false; error:
     return { ok: false, error: `Endpoint answered HTTP ${response.status}` };
   }
   try {
-    const json = (await response.json()) as { result?: unknown; error?: { code?: unknown } };
-    if (json.result !== undefined || typeof json.error?.code === 'number') return { ok: true };
+    const json = (await response.json()) as RpcEnvelope;
+    if (json.result !== undefined || typeof json.error?.code === 'number') return { ok: true, json };
   } catch {
     /* not JSON */
   }
   return { ok: false, error: 'That endpoint did not answer JSON-RPC' };
+}
+
+/** `getHealth` proves the endpoint talks to us; `getGenesisHash` says which chain it serves. */
+async function probeRpc(url: string): Promise<RpcProbeResult> {
+  const health = await rpcEnvelope(url, 'getHealth');
+  if (!health.ok) return health;
+  const genesis = await rpcEnvelope(url, 'getGenesisHash');
+  if (!genesis.ok) return genesis;
+  if (typeof genesis.json.result !== 'string') return { ok: false, error: 'That endpoint did not answer getGenesisHash' };
+  return { ok: true, genesisHash: genesis.json.result };
 }
 
 export function Settings() {
@@ -102,27 +113,14 @@ export function Settings() {
     setHeliusKeyDraft(storedHeliusKey);
   }, [storedHeliusKey]);
 
-  const finishRpcSave = async (
-    url: string,
-    key: string,
-    originPattern: string | undefined,
-    permission: Promise<boolean>,
-  ) => {
+  const finishRpcSave = async (outcome: Promise<SaveRpcOutcome>) => {
     setRpcBusy(true);
     try {
-      if (url && originPattern) {
-        if (!(await permission)) {
-          toast.error('Access to that host was not granted');
-          return;
-        }
-        const probe = await probeRpc(url);
-        if (!probe.ok) {
-          await dropOriginPermission(originPattern);
-          toast.error(probe.error);
-          return;
-        }
+      const result = await outcome;
+      if (!result.ok) {
+        toast.error(result.error);
+        return;
       }
-      await updateSettings.mutateAsync({ rpcUrl: url, heliusApiKey: key });
       invalidate(address);
       toast.success('RPC settings saved');
     } catch (error) {
@@ -133,29 +131,20 @@ export function Settings() {
   };
 
   /**
-   * Click handler, not async: `chrome.permissions.request` must run inside the
-   * user gesture, so it is issued before the first `await` when a URL is set.
+   * Click handler, not async: `saveRpcSettings` issues `chrome.permissions.request`
+   * synchronously, inside the user gesture, before its first `await`.
    */
   const handleRpcSave = () => {
-    const url = rpcUrlDraft.trim();
-    const key = heliusKeyDraft.trim();
-    let originPattern: string | undefined;
-    let permission: Promise<boolean> = Promise.resolve(true);
-    if (url) {
-      let parsed: URL | undefined;
-      try {
-        parsed = new URL(url);
-      } catch {
-        parsed = undefined;
-      }
-      if (!parsed || parsed.protocol !== 'https:') {
-        toast.error('RPC URL must start with https://');
-        return;
-      }
-      originPattern = originPatternFor(parsed);
-      permission = chrome.permissions.request({ origins: [originPattern] });
-    }
-    void finishRpcSave(url, key, originPattern, permission);
+    const outcome = saveRpcSettings(
+      { rpcUrl: rpcUrlDraft, heliusApiKey: heliusKeyDraft, cluster, previousRpcUrl: storedRpcUrl || undefined },
+      {
+        requestOrigin: (pattern) => chrome.permissions.request({ origins: [pattern] }),
+        removeOrigin: dropOriginPermission,
+        probe: probeRpc,
+        persist: (settings) => updateSettings.mutateAsync(settings),
+      },
+    );
+    void finishRpcSave(outcome);
   };
 
   const handleRpcClear = async () => {
@@ -165,13 +154,8 @@ export function Settings() {
       await updateSettings.mutateAsync({ rpcUrl: '', heliusApiKey: '' });
       setRpcUrlDraft('');
       setHeliusKeyDraft('');
-      if (previous) {
-        try {
-          await dropOriginPermission(originPatternFor(new URL(previous)));
-        } catch {
-          /* stored value was not a URL; nothing to drop */
-        }
-      }
+      const previousUrl = previous ? parseHttpsUrl(previous) : undefined;
+      if (previousUrl) await dropOriginPermission(originPatternFor(previousUrl));
       invalidate(address);
       toast.success('RPC settings cleared');
     } catch (error) {
@@ -331,7 +315,8 @@ export function Settings() {
               data-testid="settings-rpc-url"
             />
             <p className="mt-1 text-xs text-fg-3">
-              Tried first, before Helius and the public endpoints. https only.
+              Tried first, before Helius and the public endpoints. https only. Your public addresses and signed
+              transactions are sent to this host.
             </p>
           </div>
           <div>

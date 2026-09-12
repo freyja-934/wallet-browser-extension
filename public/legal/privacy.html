@@ -17,17 +17,18 @@
   <main>
     <p>Cinder Wallet</p>
     <h1>Privacy Policy</h1>
-    <p>Last updated: 9 September 2026</p>
+    <p>Last updated: 12 September 2026</p>
     <p>Cinder Wallet is a browser extension. The seed phrase and private keys are encrypted on this device. We do not operate a backend that receives your seed, password, or private keys.</p>
     <h2>What stays on your device</h2>
     <ul>
       <li>Encrypted vault (seed phrase) in <code>chrome.storage.local</code></li>
       <li>Unlocked session seed material in <code>chrome.storage.session</code> until you lock or the browser closes</li>
-      <li>Settings such as auto-lock and network</li>
+      <li>Settings such as auto-lock and network, and any custom RPC URL or Helius API key you enter in Settings</li>
     </ul>
     <h2>What leaves the device</h2>
     <ul>
-      <li>Public addresses and signed transactions sent to Solana RPC (public Solana endpoints or Helius if a builder configured a key)</li>
+      <li>Public addresses and signed transactions sent to a Solana JSON-RPC endpoint. With nothing configured, Mainnet uses <code>https://solana-rpc.publicnode.com</code> (with <code>https://api.mainnet-beta.solana.com</code> as a fallback) and Devnet uses <code>https://api.devnet.solana.com</code></li>
+      <li>A custom RPC URL or Helius API key you enter in Settings receives the same public addresses and signed transactions. Both values are stored only in <code>chrome.storage.local</code> on this device; we never receive them</li>
       <li>Public mint addresses sent to CoinGecko for USD prices on mainnet only</li>
       <li>dApp origins you approve, which see the public addresses you connect</li>
     </ul>

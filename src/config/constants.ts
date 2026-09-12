@@ -48,7 +48,7 @@ export function heliusRpcUrlFor(cluster: Cluster, key: string | undefined): stri
 /** `getGenesisHash` per cluster; Settings refuses a custom URL whose hash belongs to the other one. */
 export const GENESIS_HASH: Readonly<Record<Cluster, string>> = {
   'mainnet-beta': '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d',
-  devnet: 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBA',
+  devnet: 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG',
 };
 
 export function clusterForGenesisHash(hash: string): Cluster | undefined {
