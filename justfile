@@ -52,6 +52,24 @@ store:
     # Empty override beats Vite loading .env. `unset` lets Vite put the key back.
     export VITE_HELIUS_API_KEY=
     pnpm build:extension
+    # Guardrails. A bare `api-key=` template is always present; a UUID after it is a real key.
+    if grep -rEq 'api-key=[0-9a-f]{8}-[0-9a-f]{4}-' dist/; then
+        echo "store: refusing to zip — dist/ contains a Helius key literal. Unset VITE_HELIUS_API_KEY in this shell and rebuild." >&2
+        exit 1
+    fi
+    # The URL is assembled at runtime, so a baked key also appears as a bare UUID constant.
+    # The bundle legitimately carries the nil UUID and the two RFC 4122 namespace UUIDs; nothing else.
+    # -I skips binary media, whose bytes can match the pattern and print "Binary file ... matches".
+    if grep -rEIoh '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' dist/ \
+        | grep -vE '^(00000000-0000-0000-0000-000000000000|6ba7b81[01]-9dad-11d1-80b4-00c04fd430c8)$' \
+        | grep -q .; then
+        echo "store: refusing to zip — dist/ contains a UUID-shaped literal that is not a known vendor constant (a baked API key?). Unset VITE_HELIUS_API_KEY in this shell and rebuild." >&2
+        exit 1
+    fi
+    if ! grep -q 'solana-rpc.publicnode.com' dist/manifest.json; then
+        echo "store: refusing to zip — dist/manifest.json lacks the publicnode host, so the mainnet build cannot load a balance without a key." >&2
+        exit 1
+    fi
     rm -f cinder-wallet-store.zip
     (cd dist && zip -r ../cinder-wallet-store.zip . -x '*.DS_Store')
     echo "Wrote cinder-wallet-store.zip — upload in the Chrome Web Store dashboard. See docs/store/listing.md"

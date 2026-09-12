@@ -44,7 +44,7 @@ Spares if you want to swap one in: `extra-receive-1280x800.png`, `extra-send-rev
 
 - Collects: none from a remote Cinder server
 - Uses: authentication data (password you enter; not transmitted), user activity on-device (approvals)
-- Remote: Solana RPC / optional Helius (public addresses and transactions), CoinGecko (public mints on mainnet)
+- Remote: Solana JSON-RPC (publicnode by default on Mainnet, the public devnet host on Devnet, or a URL / Helius key the user enters in Settings) receives public addresses and signed transactions; CoinGecko receives public mints on Mainnet
 - Certify Limited Use
 
 ## Permission justifications
@@ -52,9 +52,11 @@ Spares if you want to swap one in: `extra-receive-1280x800.png`, `extra-send-rev
 - **storage** — Encrypted vault, public account list, and settings stay on this device.
 - **alarms** — Auto-lock after the timeout the user chose.
 - **clipboardWrite** — Receive → Copy writes the public address after a user click.
-- **https://api.mainnet-beta.solana.com/***, **https://api.devnet.solana.com/***, **https://api.testnet.solana.com/*** — Default JSON-RPC for balances and send.
-- **https://*.helius-rpc.com/***, **https://api.helius.xyz/*** — Optional DAS / enhanced RPC when a builder sets a key. Not required.
+- **https://solana-rpc.publicnode.com/*** — Default Mainnet JSON-RPC for balances and send with no key configured; the Solana Foundation host rejects browser origins.
+- **https://api.mainnet-beta.solana.com/***, **https://api.devnet.solana.com/*** — Fallback Mainnet JSON-RPC and the Devnet default.
+- **https://*.helius-rpc.com/***, **https://api.helius.xyz/*** — Used only when the user enters a Helius API key in Settings, for token names, NFTs, and enriched history. The key is stored on the device and never shipped in the build.
 - **https://api.coingecko.com/*** — Mainnet USD prices only.
+- **optional_host_permissions https://*/*** — Requested at the moment the user saves a custom RPC URL in Settings, scoped to that URL's origin, and removed again if the endpoint fails its health probe. Nothing is requested without that click.
 - **Host access / content scripts on https://*/* and http://localhost/*** — Inject Wallet Standard so sites can request connect and sign. No data is sent until the user approves.
 
 ## Single purpose
