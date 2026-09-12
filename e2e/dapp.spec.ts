@@ -111,6 +111,117 @@ test('signAndSend approve broadcasts a 0-lamport self-transfer', async ({ contex
   await expect(dapp.locator('#log')).toContainText('"confirmed": true', { timeout: 60_000 });
 });
 
+test('closing the approval window rejects the request within 2 s', async ({ context, extensionId }) => {
+  test.setTimeout(120_000);
+  await importAndUnlock(context, extensionId);
+
+  const dapp = await context.newPage();
+  await dapp.goto('http://localhost:5174/');
+  await expect(dapp.locator('#log')).toContainText('registered Cinder Wallet', { timeout: 15_000 });
+
+  const approval = await openApproval(context, () => dapp.locator('#connect').click(), dapp);
+  await approval.close();
+  await expect(dapp.locator('#log')).toContainText('Approval window closed', { timeout: 2_000 });
+  await expect(dapp.locator('#log')).not.toContainText('"accounts"');
+});
+
+test('a connected site connects again without a window; a silent connect never prompts', async ({
+  context,
+  extensionId,
+}) => {
+  test.setTimeout(120_000);
+  await importAndUnlock(context, extensionId);
+
+  const dapp = await context.newPage();
+  await dapp.goto('http://localhost:5174/');
+  await expect(dapp.locator('#log')).toContainText('registered Cinder Wallet', { timeout: 15_000 });
+
+  // Before any approval: silent returns nothing and opens nothing.
+  await dapp.locator('#connectSilent').click();
+  await expect(dapp.locator('#log')).toContainText('"silent": true', { timeout: 15_000 });
+  await expect(dapp.locator('#log')).toContainText('"accounts": []');
+  expect(context.pages().some((page) => page.url().includes('approve.html'))).toBe(false);
+
+  await approveNext(context, () => dapp.locator('#connect').click(), dapp);
+  await expect(dapp.locator('#log')).toContainText(/"accounts":\s*\[\s*"/, { timeout: 15_000 });
+  await expect
+    .poll(() => context.pages().filter((page) => page.url().includes('approve.html')).length, { timeout: 5_000 })
+    .toBe(0);
+
+  // Connected: a second connect answers straight away, no window.
+  await dapp.evaluate(() => {
+    document.getElementById('log')!.textContent = '';
+  });
+  await dapp.locator('#connect').click();
+  await expect(dapp.locator('#log')).toContainText(/"accounts":\s*\[\s*"/, { timeout: 15_000 });
+  expect(context.pages().some((page) => page.url().includes('approve.html'))).toBe(false);
+
+  // ...and so does silent.
+  await dapp.locator('#connectSilent').click();
+  await expect(dapp.locator('#log')).toContainText('"silent": true', { timeout: 15_000 });
+  await expect(dapp.locator('#log')).toContainText(/"accounts":\s*\[\s*"/);
+  expect(context.pages().some((page) => page.url().includes('approve.html'))).toBe(false);
+});
+
+test('revoking in Settings makes the next connect prompt again', async ({ context, extensionId }) => {
+  test.setTimeout(120_000);
+  const popup = await importAndUnlock(context, extensionId);
+
+  const dapp = await context.newPage();
+  await dapp.goto('http://localhost:5174/');
+  await expect(dapp.locator('#log')).toContainText('registered Cinder Wallet', { timeout: 15_000 });
+
+  await approveNext(context, () => dapp.locator('#connect').click(), dapp);
+  await expect(dapp.locator('#log')).toContainText(/"accounts":\s*\[\s*"/, { timeout: 15_000 });
+
+  await popup.bringToFront();
+  await popup.getByTestId('open-settings').click();
+  const site = popup.getByTestId('settings-site');
+  await expect(site).toHaveCount(1);
+  await expect(site).toHaveAttribute('data-origin', 'http://localhost:5174');
+  await popup.getByTestId('settings-revoke-site').click();
+  await expect(popup.getByTestId('settings-no-sites')).toBeVisible();
+
+  // The page hears about it...
+  await expect(dapp.locator('#log')).toContainText('"event": "change"', { timeout: 5_000 });
+  await expect(dapp.locator('#log')).toContainText('"accounts": []');
+
+  // ...and has to ask again.
+  await approveNext(context, () => dapp.locator('#connect').click(), dapp);
+  await expect(dapp.locator('#log')).toContainText(/"accounts":\s*\[\s*"/, { timeout: 15_000 });
+});
+
+test('signMessage from a never-connected origin is rejected without a window', async ({ context, extensionId }) => {
+  test.setTimeout(120_000);
+  await importAndUnlock(context, extensionId);
+
+  const dapp = await context.newPage();
+  await dapp.goto('http://localhost:5174/');
+  await expect(dapp.locator('#log')).toContainText('registered Cinder Wallet', { timeout: 15_000 });
+
+  const signed = await postToBridge(dapp, { type: 'SIGN_MESSAGE', payload: { message: [104, 105] } });
+  expect(signed.response).toMatchObject({ success: false, error: 'Not connected' });
+  expect(context.pages().some((page) => page.url().includes('approve.html'))).toBe(false);
+});
+
+test('locking the wallet empties the connected page’s accounts', async ({ context, extensionId }) => {
+  test.setTimeout(120_000);
+  const popup = await importAndUnlock(context, extensionId);
+
+  const dapp = await context.newPage();
+  await dapp.goto('http://localhost:5174/');
+  await expect(dapp.locator('#log')).toContainText('registered Cinder Wallet', { timeout: 15_000 });
+
+  await approveNext(context, () => dapp.locator('#connect').click(), dapp);
+  await expect(dapp.locator('#log')).toContainText(/"accounts":\s*\[\s*"/, { timeout: 15_000 });
+
+  await popup.bringToFront();
+  await popup.getByLabel('Lock wallet').click();
+  await expect(popup.getByTestId('unlock-password')).toBeVisible();
+  await expect(dapp.locator('#log')).toContainText('"event": "change"', { timeout: 5_000 });
+  await expect(dapp.locator('#log')).toContainText('"accounts": []');
+});
+
 /** The approval window showing its inline unlock form (a locked connect or sign). */
 async function waitForUnlock(context: BrowserContext): Promise<Page> {
   const deadline = Date.now() + 25_000;
