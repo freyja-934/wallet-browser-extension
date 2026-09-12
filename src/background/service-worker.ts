@@ -8,7 +8,14 @@ import {
 import bs58 from 'bs58';
 import { isExtensionMessageType, type PendingApproval } from '../lib/messages';
 import { isRequestAllowed } from '../lib/sender-gate';
-import { deserializeTransaction, getInstructions, decodeInstruction, collectWarnings } from '../lib/tx-preview';
+import {
+  collectWarnings,
+  decodeInstruction,
+  deserializeTransaction,
+  getInstructions,
+  type DecodedInstruction,
+  type PreviewWarning,
+} from '../lib/tx-preview';
 import {
   changePassword,
   clearWallet,
@@ -212,12 +219,27 @@ async function signTransactionBytes(bytes: Uint8Array): Promise<Uint8Array> {
 }
 
 async function previewTransaction(bytes: Uint8Array): Promise<Record<string, unknown>> {
-  const connection = await getConnection();
-  const tx = deserializeTransaction(bytes);
-  const instructions = getInstructions(tx).map(decodeInstruction);
-  const warnings = collectWarnings(instructions);
+  let tx: Transaction | VersionedTransaction;
+  let instructions: DecodedInstruction[];
+  let warnings: PreviewWarning[];
+  try {
+    tx = deserializeTransaction(bytes);
+    instructions = getInstructions(tx).map(decodeInstruction);
+    warnings = collectWarnings(instructions);
+  } catch {
+    return {
+      success: false,
+      error: 'Could not decode transaction',
+      instructions: [],
+      warnings: [{ level: 'danger', message: 'Unreadable transaction. Reject unless you trust this site.' }],
+    };
+  }
 
   try {
+    // Inside the try so a dead RPC degrades to the decode-only preview instead of rejecting it.
+    const connection = await getConnection().catch(() => {
+      throw new Error('No RPC endpoint');
+    });
     const simulation = tx instanceof VersionedTransaction
       ? await connection.simulateTransaction(tx, { sigVerify: false, innerInstructions: true })
       : await connection.simulateTransaction(tx);

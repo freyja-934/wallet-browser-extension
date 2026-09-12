@@ -28,6 +28,7 @@ export function ApprovalScreen() {
   const id = params.get('id') || '';
   const [request, setRequest] = useState<PendingApproval | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
+  const [previewSettled, setPreviewSettled] = useState(false);
   const [showInstructions, setShowInstructions] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -40,8 +41,13 @@ export function ApprovalScreen() {
     extensionClient.getPendingRequest(id).then(async (pending) => {
       setRequest(pending);
       if (pending?.transactionBytes) {
-        const result = await extensionClient.previewTransaction(pending.transactionBytes);
-        setPreview(result as Preview);
+        try {
+          const result = await extensionClient.previewTransaction(pending.transactionBytes);
+          setPreview(result as Preview);
+        } finally {
+          // Resolved or rejected, the user has now seen everything the preview can tell them.
+          setPreviewSettled(true);
+        }
       }
     }).catch((err) => setError(err.message));
   }, [id]);
@@ -73,6 +79,8 @@ export function ApprovalScreen() {
   const originHost = request?.origin ? safeHost(request.origin) : '';
   const danger = preview?.warnings?.some((warning) => warning.level === 'danger');
   const isSend = request?.kind === 'signAndSendTransaction';
+  // Never let a transaction be approved before its preview has settled.
+  const awaitingPreview = Boolean(request?.transactionBytes) && !previewSettled;
 
   return (
     <PopupFrame atmosphere="still" heavy>
@@ -159,7 +167,7 @@ export function ApprovalScreen() {
           </SecondaryButton>
           <PrimaryButton
             onClick={approve}
-            disabled={busy || !request}
+            disabled={busy || !request || awaitingPreview}
             data-testid="approval-approve"
             className={isSend && danger ? 'bg-ui-danger text-[#010000] shadow-none' : ''}
           >
