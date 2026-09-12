@@ -117,3 +117,49 @@ async function waitForUnlock(context: BrowserContext): Promise<Page> {
   }
   throw new Error(`no unlock among ${context.pages().map((page) => page.url()).join(', ')}`);
 }
+
+/** Post a raw bridge message from the page and wait for the content script's reply. */
+async function postToBridge(
+  dapp: Page,
+  message: Record<string, unknown>,
+): Promise<{ response?: Record<string, unknown>; error?: string }> {
+  return dapp.evaluate(
+    (msg) =>
+      new Promise<{ response?: Record<string, unknown>; error?: string }>((resolve) => {
+        const id = Math.floor(Math.random() * 1e9);
+        window.addEventListener('message', (event) => {
+          if (event.source !== window || event.data?.channel !== 'cinder-wallet' || event.data.id !== id) return;
+          if (event.data.response === undefined && event.data.error === undefined) return;
+          resolve({ response: event.data.response, error: event.data.error });
+        });
+        window.postMessage({ channel: 'cinder-wallet', id, ...msg }, '*');
+      }),
+    message,
+  );
+}
+
+test('a page cannot override the bridged message type', async ({ context, extensionId }) => {
+  test.setTimeout(120_000);
+  await importAndUnlock(context, extensionId);
+
+  const dapp = await context.newPage();
+  await dapp.goto('http://localhost:5174/');
+  await expect(dapp.locator('#log')).toContainText('registered Cinder Wallet', { timeout: 15_000 });
+
+  // The old bridge spread the payload after `type`, so `payload.type` overrode the
+  // allow-listed outer type and the worker answered GET_STATE with wallet state.
+  const smuggled = await postToBridge(dapp, { type: 'GET_ACCOUNTS', payload: { type: 'GET_STATE' } });
+  expect(smuggled.error).toBeUndefined();
+  expect(smuggled.response?.state).toBeUndefined();
+  expect(Array.isArray(smuggled.response?.accounts)).toBe(true);
+
+  // Popup-only types and malformed payloads are refused before anything reaches the worker.
+  const direct = await postToBridge(dapp, { type: 'EXPORT_SEED', payload: { password: 'guess' } });
+  expect(direct.error).toBe('Unknown message type');
+  const oversize = await postToBridge(dapp, {
+    type: 'SIGN_MESSAGE',
+    payload: { message: new Array(64 * 1024 + 1).fill(0) },
+  });
+  expect(oversize.error).toBe('Invalid message');
+  expect(context.pages().some((page) => page.url().includes('approve.html'))).toBe(false);
+});

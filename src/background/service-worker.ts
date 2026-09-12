@@ -6,6 +6,7 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js';
 import { isExtensionMessageType, type PendingApproval } from '../lib/messages';
+import { isRequestAllowed } from '../lib/sender-gate';
 import { deserializeTransaction, getInstructions, decodeInstruction, collectWarnings } from '../lib/tx-preview';
 import {
   changePassword,
@@ -42,6 +43,9 @@ chrome.runtime.onConnect.addListener((port) => {
   });
 });
 
+/** `chrome-extension://<id>/`, the base every popup and approval page loads from. */
+const EXTENSION_BASE = chrome.runtime.getURL('');
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   const type = request?.type as string;
   if (!type || !isExtensionMessageType(type)) {
@@ -49,7 +53,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return false;
   }
 
-  const origin = request.origin || sender.origin || sender.url || '';
+  if (!isRequestAllowed(type, sender, EXTENSION_BASE)) {
+    sendResponse({ success: false, error: 'Not allowed from a page' });
+    return false;
+  }
+
+  // Trust the browser's view of who sent this, never a field in the payload.
+  const origin = sender.origin || sender.url || '';
 
   void (async () => {
     try {
