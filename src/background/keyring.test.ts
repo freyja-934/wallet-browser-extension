@@ -1,7 +1,7 @@
 import { Keypair } from '@solana/web3.js';
 import bs58 from 'bs58';
 import { Buffer } from 'buffer';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CURRENT_VAULT_VERSION, V1_KDF, type EncryptedData } from '../lib/encryption-simple';
 import type { WalletAccountInfo } from '../lib/messages';
 import { deriveKeypairFromSeed, mnemonicToSeedBuffer } from '../lib/wallet';
@@ -279,6 +279,25 @@ describe('touchActivity', () => {
     await chromeStub.alarms.clear('cinder-autolock');
     await touchActivity();
     expect(chromeStub.alarms.scheduled()).toHaveProperty('cinder-autolock');
+  });
+
+  it('pushes the deadline out on every touch, so the lock is idle-based, not a countdown from unlock', async () => {
+    await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
+    await updateSettings({ autoLockTimeout: 5 });
+    const armed = (await chromeStub.alarms.get('cinder-autolock'))?.scheduledTime ?? 0;
+    expect(armed).toBeGreaterThan(0);
+
+    // Four of the five minutes have passed and the user is still working.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(armed - 60_000);
+      await touchActivity();
+      const rearmed = (await chromeStub.alarms.get('cinder-autolock'))?.scheduledTime ?? 0;
+      // The full five minutes again from now, not the minute left of the original countdown.
+      expect(rearmed).toBe(armed - 60_000 + 5 * 60_000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('respects "never" auto-lock', async () => {

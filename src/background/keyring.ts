@@ -11,6 +11,7 @@ import {
 } from '../lib/encryption-simple';
 import {
   DEFAULT_SETTINGS,
+  MAX_ACCOUNT_NAME_LENGTH,
   WalletAccountInfo,
   WalletPublicState,
   WalletSettings,
@@ -448,7 +449,37 @@ export async function clearWallet(): Promise<WalletPublicState> {
 
 export async function switchAccount(index: number): Promise<WalletPublicState> {
   const session = await requireSession();
+  const accounts = await accountsFromSession(session);
+  if (!accounts.some((account) => account.index === index)) throw new Error('No such account');
   await writeSession({ ...session, activeAccountIndex: index });
+  return getPublicState();
+}
+
+/**
+ * Derive the next account from the seed already in the session and append it to
+ * `cinder_accounts`. The list is the source of truth for how many accounts exist:
+ * the vault payload is not rewritten, so this needs no password, and `unlock`
+ * derives from the stored count rather than from what the vault happened to hold.
+ */
+export async function addAccount(): Promise<WalletPublicState> {
+  const session = await requireSession();
+  const accounts = await accountsFromSession(session);
+  const nextIndex = accounts.reduce((max, account) => Math.max(max, account.index), -1) + 1;
+  const seed = Buffer.from(session.seedB64, 'base64');
+  const [added] = await generateAccountsFromSeed(seed, 1, nextIndex);
+  await persistAccounts([...accounts, added]);
+  return getPublicState();
+}
+
+/** Rename one account. Names are public data: they live beside the addresses, not in the vault. */
+export async function renameAccount(index: number, name: string): Promise<WalletPublicState> {
+  const session = await requireSession();
+  const trimmed = name.trim();
+  if (trimmed.length === 0 || trimmed.length > MAX_ACCOUNT_NAME_LENGTH) throw new Error('Invalid name');
+  const accounts = await accountsFromSession(session);
+  const at = accounts.findIndex((account) => account.index === index);
+  if (at === -1) throw new Error('No such account');
+  await persistAccounts(accounts.map((account, i) => (i === at ? { ...account, name: trimmed } : account)));
   return getPublicState();
 }
 

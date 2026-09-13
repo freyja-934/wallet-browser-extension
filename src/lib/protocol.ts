@@ -10,6 +10,7 @@ import {
 } from './bridge';
 import {
   isExtensionMessageType,
+  MAX_ACCOUNT_NAME_LENGTH,
   type ConnectedSite,
   type ExtensionMessageType,
   type KnownChain,
@@ -34,6 +35,8 @@ export type WalletRequest =
   | { type: 'LOCK' }
   | { type: 'CLEAR_WALLET' }
   | { type: 'SWITCH_ACCOUNT'; index: number }
+  | { type: 'ADD_ACCOUNT' }
+  | { type: 'RENAME_ACCOUNT'; index: number; name: string }
   | { type: 'CHANGE_PASSWORD'; currentPassword: string; newPassword: string }
   | { type: 'EXPORT_SEED'; password: string }
   | { type: 'EXPORT_PRIVATE_KEY'; password: string; accountIndex?: number }
@@ -72,6 +75,8 @@ export interface WalletResponses {
   LOCK: StateResponse;
   CLEAR_WALLET: StateResponse;
   SWITCH_ACCOUNT: StateResponse;
+  ADD_ACCOUNT: StateResponse;
+  RENAME_ACCOUNT: StateResponse;
   CHANGE_PASSWORD: EmptyResponse;
   EXPORT_SEED: { seedPhrase: string };
   EXPORT_PRIVATE_KEY: { privateKey: string };
@@ -213,6 +218,17 @@ function optionalIndex(value: unknown, field: string): number | undefined {
   return requireIndex(value, field);
 }
 
+/**
+ * An account label the popup shows: trimmed, non-empty, and short enough to
+ * render. Stored beside the public addresses, never inside the vault.
+ */
+function requireAccountName(value: unknown, field: string): string {
+  if (typeof value !== 'string') invalid(field);
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > MAX_ACCOUNT_NAME_LENGTH) invalid(field);
+  return trimmed;
+}
+
 /** Base58 with no 0/O/I/l, the alphabet Solana addresses use; 32 bytes encodes to 32-44 characters. */
 const BASE58_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 /** A 64-byte signature in the same alphabet. */
@@ -332,6 +348,7 @@ export function parseRequest(input: unknown): WalletRequest {
     case 'GET_ACCOUNTS':
     case 'WALLET_DISCONNECT':
     case 'GET_CONNECTED_SITES':
+    case 'ADD_ACCOUNT':
       return { type };
     case 'WALLET_CONNECT': {
       // Absent or null means an ordinary connect; anything else must be a boolean.
@@ -351,6 +368,8 @@ export function parseRequest(input: unknown): WalletRequest {
       return { type, password: requireString(raw.password, 'password') };
     case 'SWITCH_ACCOUNT':
       return { type, index: requireIndex(raw.index, 'index') };
+    case 'RENAME_ACCOUNT':
+      return { type, index: requireIndex(raw.index, 'index'), name: requireAccountName(raw.name, 'name') };
     case 'CHANGE_PASSWORD':
       return {
         type,

@@ -38,6 +38,8 @@ export const EXTENSION_MESSAGE_TYPES = [
   'GET_SETTINGS',
   'CLEAR_WALLET',
   'SWITCH_ACCOUNT',
+  'ADD_ACCOUNT',
+  'RENAME_ACCOUNT',
   'CANCEL_APPROVAL',
   'GET_CONNECTED_SITES',
   'REVOKE_SITE',
@@ -53,6 +55,9 @@ export function isDappMessageType(type: string): type is DappMessageType {
 export function isExtensionMessageType(type: string): type is ExtensionMessageType {
   return (EXTENSION_MESSAGE_TYPES as readonly string[]).includes(type);
 }
+
+/** Longest account label the popup stores. Long enough to be useful, short enough for the header. */
+export const MAX_ACCOUNT_NAME_LENGTH = 32;
 
 export interface WalletAccountInfo {
   address: string;

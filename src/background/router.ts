@@ -16,6 +16,7 @@ import { isExtensionSender, isRequestAllowed, pageOrigin, type SenderLike } from
 import { buildPreview, type PreviewResult } from '../lib/preview';
 import { isTransactionMessage } from '../lib/tx-preview';
 import {
+  addAccount,
   changePassword,
   clearWallet,
   createWallet,
@@ -24,6 +25,7 @@ import {
   getPublicState,
   getSettings,
   lock,
+  renameAccount,
   signMessage,
   switchAccount,
   touchActivity,
@@ -155,6 +157,18 @@ async function dispatch(request: WalletRequest, caller: Caller): Promise<WalletR
       return { state: await clearWallet() };
     case 'SWITCH_ACCOUNT': {
       const state = await switchAccount(request.index);
+      await sendToConnected('accountsChanged', await snapshot());
+      return { state };
+    }
+    // A new or renamed account changes the list a connected page holds, so both
+    // emit the same event as a switch: the active account can move to the front.
+    case 'ADD_ACCOUNT': {
+      const state = await addAccount();
+      await sendToConnected('accountsChanged', await snapshot());
+      return { state };
+    }
+    case 'RENAME_ACCOUNT': {
+      const state = await renameAccount(request.index, request.name);
       await sendToConnected('accountsChanged', await snapshot());
       return { state };
     }
