@@ -12,7 +12,14 @@ import { TEST_ADDRESS, TEST_MNEMONIC, TEST_PASSWORD } from '../test/fixtures';
 import { installApprovalLifecycle, onWindowRemoved } from './approvals';
 import { addressesActiveFirst } from './events';
 import { resetKeyringForTests } from './keyring';
-import { CONFIRMATION_MARGIN_MS, CONFIRMATION_POLL_MS, CONFIRMATION_TIMEOUT_MS, handleMessage, SEND_IN_PROGRESS_MESSAGE } from './router';
+import {
+  CONFIRMATION_MARGIN_MS,
+  CONFIRMATION_POLL_MS,
+  CONFIRMATION_TIMEOUT_MS,
+  handleMessage,
+  SEND_IN_PROGRESS_MESSAGE,
+  UNKNOWN_ACCOUNT_MESSAGE,
+} from './router';
 
 /** The RPC the router broadcasts through, replaced so a test can hold a broadcast open. */
 const rpc = vi.hoisted(() => ({
@@ -89,9 +96,9 @@ async function connectPage(sender: { origin?: string; url?: string; tab?: { id?:
   return pendingId;
 }
 
-/** A v0 self-transfer of 0 lamports from the fixture account, as bytes. */
-function selfTransfer(): number[] {
-  const payer = new PublicKey(TEST_ADDRESS);
+/** A v0 self-transfer of 0 lamports from `address` (the fixture account by default), as bytes. */
+function selfTransfer(address: string = TEST_ADDRESS): number[] {
+  const payer = new PublicKey(address);
   const message = new TransactionMessage({
     payerKey: payer,
     recentBlockhash: PublicKey.default.toBase58(),
@@ -812,6 +819,207 @@ describe('batched sign requests', () => {
       'A request is already pending for this site',
     );
     expect(chromeStub.windows.created()).toHaveLength(2);
+  });
+});
+
+describe('the account a page names', () => {
+  /** The fixture wallet with a second account, connected, still active on account 0. */
+  async function twoAccounts(): Promise<{ first: string; second: string }> {
+    await createFixtureWallet();
+    const state = stateOf(await handleMessage({ type: 'ADD_ACCOUNT' }, popup, BASE));
+    await connectPage(page);
+    const [first, second] = state.accounts.map((account) => account.address);
+    expect(state.activeAccountIndex).toBe(0);
+    expect(second).not.toBe(first);
+    return { first: first!, second: second! };
+  }
+
+  /** The derivation index a queued request is bound to, as the approval window reads it. */
+  async function pinned(pendingId: string): Promise<number | undefined> {
+    const { request } = (await handleMessage({ type: 'GET_PENDING_REQUEST', id: pendingId }, popup, BASE)) as {
+      request: PendingApproval | null;
+    };
+    return request?.accountAtEnqueue;
+  }
+
+  /** True when `signature` over `message` was made by the key behind `address`. */
+  function signedBy(message: number[], signature: number[], address: string): boolean {
+    return nacl.sign.detached.verify(
+      Uint8Array.from(message),
+      Uint8Array.from(signature),
+      new PublicKey(address).toBytes(),
+    );
+  }
+
+  it('signs a message with the account the page named, not the active one', async () => {
+    const { first, second } = await twoAccounts();
+    const message = [104, 105];
+    const { pendingId } = (await handleMessage(
+      { type: 'SIGN_MESSAGE', messages: [message], account: second },
+      page,
+      BASE,
+    )) as { pendingId: string };
+
+    // The index is resolved once, at enqueue, and pinned to the request the window renders.
+    const { request } = (await handleMessage({ type: 'GET_PENDING_REQUEST', id: pendingId }, popup, BASE)) as {
+      request: PendingApproval | null;
+    };
+    expect(request?.accountAtEnqueue).toBe(1);
+
+    await approve(pendingId);
+    const result = (await poll(pendingId)) as { status: string; value: { signatures: number[][] } };
+    expect(result.status).toBe('approved');
+    expect(signedBy(message, result.value.signatures[0], second)).toBe(true);
+    // The account that is still active did not sign it.
+    expect(signedBy(message, result.value.signatures[0], first)).toBe(false);
+  });
+
+  it('signs a transaction with the account the page named', async () => {
+    const { first, second } = await twoAccounts();
+    // Built for the second account, so that account is the one that can sign it.
+    const transaction = selfTransfer(second);
+    const { pendingId } = (await handleMessage(
+      { type: 'SIGN_TRANSACTION', transactions: [transaction], account: second },
+      page,
+      BASE,
+    )) as { pendingId: string };
+    await approve(pendingId);
+    const result = (await poll(pendingId)) as { status: string; value: { signedTransactions: number[][] } };
+    expect(result.status).toBe('approved');
+
+    const signed = VersionedTransaction.deserialize(Uint8Array.from(result.value.signedTransactions[0]));
+    expect(signed.message.staticAccountKeys[0]?.toBase58()).toBe(second);
+    expect(signedBy([...signed.message.serialize()], [...signed.signatures[0]], second)).toBe(true);
+    expect(signedBy([...signed.message.serialize()], [...signed.signatures[0]], first)).toBe(false);
+  });
+
+  it('falls back to the active account when the page names none', async () => {
+    const { second } = await twoAccounts();
+    await handleMessage({ type: 'SWITCH_ACCOUNT', index: 1 }, popup, BASE);
+    const message = [1, 2];
+    const { pendingId } = (await handleMessage({ type: 'SIGN_MESSAGE', messages: [message] }, page, BASE)) as {
+      pendingId: string;
+    };
+    const { request } = (await handleMessage({ type: 'GET_PENDING_REQUEST', id: pendingId }, popup, BASE)) as {
+      request: PendingApproval | null;
+    };
+    expect(request?.accountAtEnqueue).toBe(1);
+    await approve(pendingId);
+    const result = (await poll(pendingId)) as { status: string; value: { signatures: number[][] } };
+    expect(signedBy(message, result.value.signatures[0], second)).toBe(true);
+  });
+
+  it('refuses an address this wallet does not hold, and opens no window', async () => {
+    await twoAccounts();
+    // A real address, but not one of ours: the System Program.
+    const stranger = '11111111111111111111111111111111';
+    for (const message of [
+      { type: 'SIGN_MESSAGE', messages: [[1]], account: stranger },
+      { type: 'SIGN_TRANSACTION', transactions: [selfTransfer()], account: stranger },
+      { type: 'SIGN_AND_SEND_TRANSACTION', transactions: [selfTransfer()], account: stranger },
+    ]) {
+      await expect(handleMessage(message, page, BASE)).rejects.toThrow(UNKNOWN_ACCOUNT_MESSAGE);
+    }
+    // Only the connect window from `twoAccounts`; nothing was queued.
+    expect(chromeStub.windows.created()).toHaveLength(1);
+    expect(chromeStub.storage.session.snapshot().cinder_pending ?? {}).toEqual({});
+    expect(rpc.sendRawTransaction).not.toHaveBeenCalled();
+  });
+
+  it('pins while locked too, against the account list a lock does not erase', async () => {
+    const { first, second } = await twoAccounts();
+    await handleMessage({ type: 'LOCK' }, popup, BASE);
+
+    // Naming none pins the selection the lock kept, rather than nothing: the window
+    // names that account, and a switch away from it withdraws the request.
+    const unnamed = (await handleMessage({ type: 'SIGN_MESSAGE', messages: [[1]] }, page, BASE)) as {
+      pendingId: string;
+    };
+    expect(await pinned(unnamed.pendingId)).toBe(0);
+    await handleMessage({ type: 'REJECT_REQUEST', id: unnamed.pendingId }, popup, BASE);
+
+    // An address this wallet does not hold is refused, locked or not.
+    await expect(
+      handleMessage(
+        { type: 'SIGN_MESSAGE', messages: [[1]], account: '11111111111111111111111111111111' },
+        page,
+        BASE,
+      ),
+    ).rejects.toThrow(UNKNOWN_ACCOUNT_MESSAGE);
+
+    // The auto-lock can fire between a dApp's call and the worker handling it. The
+    // request still queues for the window to unlock inline, pinned to the account the
+    // page named — the addresses are public and survive a lock in `cinder_accounts`.
+    const message = [104, 105];
+    const named = (await handleMessage(
+      { type: 'SIGN_MESSAGE', messages: [message], account: second },
+      page,
+      BASE,
+    )) as { pendingId: string };
+    expect(await pinned(named.pendingId)).toBe(1);
+
+    // And that pin is what signs, once the inline unlock has opened the vault — the
+    // account left active is still the first one.
+    await handleMessage({ type: 'UNLOCK', password: TEST_PASSWORD }, popup, BASE);
+    await approve(named.pendingId);
+    const result = (await poll(named.pendingId)) as { status: string; value: { signatures: number[][] } };
+    expect(signedBy(message, result.value.signatures[0], second)).toBe(true);
+    expect(signedBy(message, result.value.signatures[0], first)).toBe(false);
+  });
+
+  it('switching the active account rejects a pending signature bound to another one', async () => {
+    const { second } = await twoAccounts();
+    const { pendingId } = (await handleMessage({ type: 'SIGN_MESSAGE', messages: [[1]] }, page, BASE)) as {
+      pendingId: string;
+    };
+    const [, signWindow] = chromeStub.windows.created();
+
+    await handleMessage({ type: 'SWITCH_ACCOUNT', index: 1 }, popup, BASE);
+    await expect(poll(pendingId)).resolves.toEqual({ status: 'rejected', error: 'Account changed' });
+    expect(chromeStub.windows.removed()).toEqual([signWindow.id]);
+    await expect(approve(pendingId)).rejects.toThrow('Approval expired');
+
+    // A request pinned to the account now active survives; so does a connect.
+    const { pendingId: kept } = (await handleMessage(
+      { type: 'SIGN_MESSAGE', messages: [[2]], account: second },
+      page,
+      BASE,
+    )) as { pendingId: string };
+    const { pendingId: connect } = (await handleMessage({ type: 'WALLET_CONNECT' }, otherPage, BASE)) as {
+      pendingId: string;
+    };
+    // Switching to the account it is already on is not a change and rejects nothing.
+    await handleMessage({ type: 'SWITCH_ACCOUNT', index: 1 }, popup, BASE);
+    await expect(poll(kept)).resolves.toEqual({ status: 'pending' });
+    await expect(poll(connect, otherPage)).resolves.toEqual({ status: 'pending' });
+  });
+
+  it('previews for the account the request is pinned to, not the active one', async () => {
+    const { second } = await twoAccounts();
+    rpc.getMultipleAccountsInfoAndContext.mockResolvedValue({ context: { slot: 1 }, value: [null, null] });
+    rpc.getMultipleAccountsInfo.mockResolvedValue([]);
+    rpc.simulateTransaction.mockResolvedValue({ value: { err: null, logs: [], accounts: [], unitsConsumed: 0 } });
+
+    const { preview } = (await handleMessage(
+      { type: 'PREVIEW_TRANSACTION', transaction: selfTransfer(second), accountIndex: 1 },
+      popup,
+      BASE,
+    )) as { preview: PreviewResult };
+    // The fee payer is the second account, which is the one the approval will sign with.
+    expect(preview.signerOk).toBe(true);
+
+    // Asked for the active account instead, the same bytes are somebody else's to sign.
+    const active = (await handleMessage(
+      { type: 'PREVIEW_TRANSACTION', transaction: selfTransfer(second) },
+      popup,
+      BASE,
+    )) as { preview: PreviewResult };
+    expect(active.preview.signerOk).toBe(false);
+
+    // An index that names no account is refused rather than previewed for the active one.
+    await expect(
+      handleMessage({ type: 'PREVIEW_TRANSACTION', transaction: selfTransfer(second), accountIndex: 9 }, popup, BASE),
+    ).rejects.toThrow('No such account');
   });
 });
 

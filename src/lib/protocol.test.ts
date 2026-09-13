@@ -10,6 +10,17 @@ import {
   SendError,
 } from './protocol';
 
+/** A valid base58 Solana address: the public devnet fixture. */
+const ADDRESS = 'HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk';
+
+/** The three message types that name the account whose key should sign. */
+const SIGN_TYPES = ['SIGN_MESSAGE', 'SIGN_TRANSACTION', 'SIGN_AND_SEND_TRANSACTION'] as const;
+
+/** The items field each of those carries, so one case can drive all three. */
+function signPayload(type: (typeof SIGN_TYPES)[number]): Record<string, unknown> {
+  return type === 'SIGN_MESSAGE' ? { messages: [[1]] } : { transactions: [[1]] };
+}
+
 interface Case {
   valid: Record<string, unknown>;
   malformed: Record<string, unknown>;
@@ -53,19 +64,28 @@ const cases: Record<ExtensionMessageType, Case> = {
     malformed: { password: 'pw', accountIndex: -1 },
     error: 'Invalid accountIndex',
   },
-  SIGN_MESSAGE: { valid: { messages: [[1, 2, 3]] }, malformed: { messages: [[256]] }, error: 'Invalid messages' },
+  SIGN_MESSAGE: {
+    valid: { messages: [[1, 2, 3]], account: ADDRESS },
+    malformed: { messages: [[256]] },
+    error: 'Invalid messages',
+  },
   SIGN_TRANSACTION: {
-    valid: { transactions: [[1]], chain: 'solana:devnet' },
+    valid: { transactions: [[1]], chain: 'solana:devnet', account: ADDRESS },
     malformed: { transactions: [] },
     error: 'Invalid transactions',
   },
   SIGN_AND_SEND_TRANSACTION: {
-    valid: { transactions: [[0, 255]], chain: 'solana:mainnet', options: { skipPreflight: true, commitment: 'confirmed' } },
+    valid: {
+      transactions: [[0, 255]],
+      chain: 'solana:mainnet',
+      account: ADDRESS,
+      options: { skipPreflight: true, commitment: 'confirmed' },
+    },
     malformed: { transactions: 'AQ==' },
     error: 'Invalid transactions',
   },
   PREVIEW_TRANSACTION: {
-    valid: { transaction: [7] },
+    valid: { transaction: [7], accountIndex: 1 },
     malformed: { transaction: new Array(MAX_TRANSACTION_BYTES + 1).fill(0) },
     error: 'Invalid transaction',
   },
@@ -123,6 +143,22 @@ describe('parseRequest', () => {
       });
     }
   }
+
+  it('takes the account a sign request names, and refuses one that is not an address', () => {
+    for (const type of SIGN_TYPES) {
+      const items = signPayload(type);
+      expect(parseRequest({ type, ...items, account: ADDRESS })).toStrictEqual({ type, ...items, account: ADDRESS });
+      // Absent, null and '' all mean "the page named no account": the worker falls back to the active one.
+      for (const account of [undefined, null, '']) {
+        expect(parseRequest({ type, ...items, account })).toStrictEqual({ type, ...items });
+      }
+      // A page controls this field, so anything that is not an address is refused
+      // rather than passed on to be resolved. An index in particular is not an address.
+      for (const account of [0, 1, '0', 'not-an-address', `${ADDRESS}0O`, 'l'.repeat(40), {}, [ADDRESS]]) {
+        expect(() => parseRequest({ type, ...items, account })).toThrow('Invalid account');
+      }
+    }
+  });
 
   it('rejects unknown and non-string types', () => {
     for (const input of [{ type: 'STEAL_KEYS' }, { type: 7 }, {}, null, 'UNLOCK', { type: 'unlock' }]) {

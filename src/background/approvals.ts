@@ -33,6 +33,8 @@ export const APPROVAL_TTL_MS = 5 * 60 * 1000;
 export const EXPIRED_MESSAGE = 'Approval expired — unlock and retry the dApp request';
 /** A transaction request whose cluster changed underneath it, pending or at Approve. */
 export const NETWORK_CHANGED_MESSAGE = 'Network changed';
+/** A signature request whose account the user moved off while it was waiting. */
+export const ACCOUNT_CHANGED_MESSAGE = 'Account changed';
 
 export type ApprovalResult =
   | { status: 'pending' }
@@ -327,6 +329,37 @@ export async function rejectForClusterChange(cluster: WalletSettings['cluster'])
     const requests = Object.values(pending).filter((entry) => !onCluster(entry, cluster));
     for (const request of requests) {
       await settle(PENDING_KEY, pending, request.id, { status: 'rejected', error: NETWORK_CHANGED_MESSAGE });
+    }
+    return requests;
+  });
+  await closeWindows(rejected);
+  return rejected.map((request) => request.id);
+}
+
+/**
+ * True when `request` can still be signed with `index` as the active account:
+ * connect always (it shares every account, not just the active one), and a
+ * signature request only when it is pinned to that account. A request that
+ * pinned nothing signs with whatever is active at Approve, which is exactly
+ * what an account change makes wrong, so it does not survive one either.
+ */
+export function onAccount(request: PendingApproval, index: number): boolean {
+  if (request.kind === 'connect') return true;
+  return request.accountAtEnqueue === index;
+}
+
+/**
+ * The active account changed: reject every pending signature request bound to
+ * another one and close its window. The approval was built for a key the user
+ * has just moved off — its preview, its balance diff and its `signerOk` all
+ * describe that key — so it is withdrawn rather than re-pointed. Returns the ids.
+ */
+export async function rejectForAccountChange(index: number): Promise<string[]> {
+  const rejected = await withLock(LOCK, async () => {
+    const pending = await readMap<PendingApproval>(PENDING_KEY);
+    const requests = Object.values(pending).filter((entry) => !onAccount(entry, index));
+    for (const request of requests) {
+      await settle(PENDING_KEY, pending, request.id, { status: 'rejected', error: ACCOUNT_CHANGED_MESSAGE });
     }
     return requests;
   });

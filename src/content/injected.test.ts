@@ -287,7 +287,8 @@ describe('signTransaction', () => {
     await tick();
     const posted = shim.posted.filter((entry) => entry.data.type === 'SIGN_TRANSACTION');
     expect(posted).toHaveLength(1);
-    expect(posted[0]!.data.payload).toEqual({ transactions: [[1, 2, 3], [4, 5]] });
+    // The account every input named travels with the batch; the worker resolves it.
+    expect(posted[0]!.data.payload).toEqual({ transactions: [[1, 2, 3], [4, 5]], account: TEST_ADDRESS });
 
     shim.reply({ success: true, signedTransactions: [[9, 9], [8]] });
     expect(await signing).toEqual([
@@ -308,6 +309,34 @@ describe('signTransaction', () => {
     await tick();
     shim.reply({ success: true, signedTransactions: [[9]] });
     await expect(signing).rejects.toThrow('Sign failed');
+  });
+
+  it('refuses a batch whose inputs name two different accounts, before posting anything', async () => {
+    const { shim, registered } = await loadProvider();
+    const wallet = registered[0]!;
+    // Two accounts this wallet really holds; one approval can only sign with one key.
+    const [first, second] = await connect(shim, wallet, [TEST_ADDRESS, OTHER_ADDRESS]);
+
+    await expect(
+      signTransactionFeature(wallet).signTransaction(
+        { account: first!, transaction: Uint8Array.from([1]) },
+        { account: second!, transaction: Uint8Array.from([2]) },
+      ),
+    ).rejects.toThrow('All inputs must use the same account');
+    await expect(
+      signMessageFeature(wallet).signMessage(
+        { account: first!, message: Uint8Array.from([1]) },
+        { account: second!, message: Uint8Array.from([2]) },
+      ),
+    ).rejects.toThrow('All inputs must use the same account');
+    expect(shim.posted.some((entry) => entry.data.type?.startsWith('SIGN_'))).toBe(false);
+
+    // The second account on its own is sent as the account to sign with.
+    const signing = signTransactionFeature(wallet).signTransaction({ account: second!, transaction: Uint8Array.from([3]) });
+    await tick();
+    expect(shim.lastRequest().payload).toEqual({ transactions: [[3]], account: OTHER_ADDRESS });
+    shim.reply({ success: true, signedTransactions: [[9]] });
+    await signing;
   });
 
   it('refuses an account this wallet does not have, before posting anything', async () => {
@@ -336,14 +365,15 @@ describe('signAndSendTransaction', () => {
       options: { commitment: 'confirmed', skipPreflight: true },
     });
     await tick();
-    expect(shim.lastRequest()).toMatchObject({
-      type: 'SIGN_AND_SEND_TRANSACTION',
-      payload: {
-        transactions: [[1, 2, 3]],
-        chain: DEVNET,
-        options: { commitment: 'confirmed', skipPreflight: true },
-      },
+    // Exactly these fields: the account the input named travels with the only arm
+    // that broadcasts, so dropping it cannot pass here.
+    expect(shim.lastRequest().payload).toEqual({
+      transactions: [[1, 2, 3]],
+      chain: DEVNET,
+      account: TEST_ADDRESS,
+      options: { commitment: 'confirmed', skipPreflight: true },
     });
+    expect(shim.lastRequest().type).toBe('SIGN_AND_SEND_TRANSACTION');
 
     const bytes = Array.from({ length: 64 }, (_, i) => i);
     shim.reply({ success: true, signatures: [bytes] });
@@ -380,7 +410,7 @@ describe('signMessage', () => {
       { account: account!, message: Uint8Array.from([111]) },
     );
     await tick();
-    expect(shim.lastRequest().payload).toEqual({ messages: [[104, 105], [111]] });
+    expect(shim.lastRequest().payload).toEqual({ messages: [[104, 105], [111]], account: TEST_ADDRESS });
 
     shim.reply({ success: true, signatures: [[1], [2]] });
     expect(await signing).toEqual([

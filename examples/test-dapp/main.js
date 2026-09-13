@@ -85,6 +85,23 @@ document.getElementById('signMessage').onclick = async () => {
   }
 };
 
+/** The message the second-account button signs; `e2e/dapp.spec.ts` verifies this exact text. */
+const SECOND_ACCOUNT_MESSAGE = 'hello from the second account';
+
+document.getElementById('signMessageSecond').onclick = async () => {
+  // The account input is what picks the signer: this asks the account the wallet is
+  // *not* on, so a signature made by the active one would be visibly wrong.
+  if (!wallet?.accounts[1]) return log('Add a second account in the wallet, then connect');
+  try {
+    const account = wallet.accounts[1];
+    const message = new TextEncoder().encode(SECOND_ACCOUNT_MESSAGE);
+    const [out] = await wallet.features['solana:signMessage'].signMessage({ account, message });
+    log({ account: account.address, signature: [...out.signature] });
+  } catch (error) {
+    log(error instanceof Error ? error.message : String(error));
+  }
+};
+
 /** Poll getSignatureStatuses every second for up to 30 s; false on timeout. */
 async function waitForConfirmation(connection, signature) {
   const deadline = Date.now() + 30_000;

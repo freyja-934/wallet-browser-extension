@@ -1,7 +1,9 @@
 import type { ApprovalResult } from '../background/approvals';
 import {
+  BASE58_ADDRESS,
   MAX_MESSAGE_BYTES,
   MAX_TRANSACTION_BYTES,
+  validateAccount,
   validateByteArray,
   validateByteArrays,
   validateChain,
@@ -43,10 +45,22 @@ export type WalletRequest =
   | { type: 'GET_ACCOUNTS' }
   | { type: 'WALLET_CONNECT'; silent?: boolean }
   | { type: 'WALLET_DISCONNECT' }
-  | { type: 'SIGN_MESSAGE'; messages: number[][] }
-  | { type: 'SIGN_TRANSACTION'; transactions: number[][]; chain?: KnownChain; options?: SendOptions }
-  | { type: 'SIGN_AND_SEND_TRANSACTION'; transactions: number[][]; chain?: KnownChain; options?: SendOptions }
-  | { type: 'PREVIEW_TRANSACTION'; transaction: number[] }
+  | { type: 'SIGN_MESSAGE'; messages: number[][]; account?: string }
+  | {
+      type: 'SIGN_TRANSACTION';
+      transactions: number[][];
+      chain?: KnownChain;
+      account?: string;
+      options?: SendOptions;
+    }
+  | {
+      type: 'SIGN_AND_SEND_TRANSACTION';
+      transactions: number[][];
+      chain?: KnownChain;
+      account?: string;
+      options?: SendOptions;
+    }
+  | { type: 'PREVIEW_TRANSACTION'; transaction: number[]; accountIndex?: number }
   | { type: 'GET_PENDING_REQUEST'; id: string }
   | { type: 'POLL_APPROVAL'; id: string }
   | { type: 'APPROVE_REQUEST'; id: string }
@@ -236,9 +250,7 @@ function requireAccountName(value: unknown, field: string): string {
   return trimmed;
 }
 
-/** Base58 with no 0/O/I/l, the alphabet Solana addresses use; 32 bytes encodes to 32-44 characters. */
-const BASE58_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
-/** A 64-byte signature in the same alphabet. */
+/** A 64-byte signature in the base58 alphabet `BASE58_ADDRESS` uses. */
 const BASE58_SIGNATURE = /^[1-9A-HJ-NP-Za-km-z]{64,88}$/;
 
 /** Absent, `null`, or `''` mean "not provided"; anything else must look like an address. */
@@ -388,9 +400,17 @@ export function parseRequest(input: unknown): WalletRequest {
       const accountIndex = optionalIndex(raw.accountIndex, 'accountIndex');
       return accountIndex === undefined ? { type, password } : { type, password, accountIndex };
     }
-    case 'SIGN_MESSAGE':
+    case 'SIGN_MESSAGE': {
       // Wallet Standard does not forbid signing an empty message.
-      return { type, messages: validateByteArrays(raw.messages, MAX_MESSAGE_BYTES, 'messages', true) };
+      const request: Extract<WalletRequest, { type: typeof type }> = {
+        type,
+        messages: validateByteArrays(raw.messages, MAX_MESSAGE_BYTES, 'messages', true),
+      };
+      // The page's own name for the signer, re-validated here: the worker trusts no page-side check.
+      const account = validateAccount(raw.account);
+      if (account !== undefined) request.account = account;
+      return request;
+    }
     case 'SIGN_TRANSACTION':
     case 'SIGN_AND_SEND_TRANSACTION': {
       // Validated again here even though the bridge already did: the worker trusts no page-side check.
@@ -403,12 +423,23 @@ export function parseRequest(input: unknown): WalletRequest {
       };
       const chain = validateChain(raw.chain);
       if (chain !== undefined) request.chain = chain;
+      const account = validateAccount(raw.account);
+      if (account !== undefined) request.account = account;
       const options = validateSendOptions(raw.options);
       if (options !== undefined) request.options = options;
       return request;
     }
-    case 'PREVIEW_TRANSACTION':
-      return { type, transaction: validateByteArray(raw.transaction, MAX_TRANSACTION_BYTES, 'transaction') };
+    case 'PREVIEW_TRANSACTION': {
+      // Extension pages only (`PAGE_ALLOWED_TYPES`), so the index is ours: the approval
+      // window previews for the account its request is pinned to, not the active one.
+      const request: Extract<WalletRequest, { type: typeof type }> = {
+        type,
+        transaction: validateByteArray(raw.transaction, MAX_TRANSACTION_BYTES, 'transaction'),
+      };
+      const accountIndex = optionalIndex(raw.accountIndex, 'accountIndex');
+      if (accountIndex !== undefined) request.accountIndex = accountIndex;
+      return request;
+    }
     case 'GET_PENDING_REQUEST':
     case 'POLL_APPROVAL':
     case 'APPROVE_REQUEST':

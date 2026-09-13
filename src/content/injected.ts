@@ -186,18 +186,28 @@ function asReply(value: unknown): WalletReply | undefined {
     return value instanceof Uint8Array ? value : new Uint8Array(value as ArrayBuffer);
   }
 
-  /** Every input must name one of this wallet's accounts and, when it names a chain, the same one. */
-  function checkInputs(inputs: readonly { account: WalletAccount; chain?: IdentifierString }[]): IdentifierString | undefined {
+  /**
+   * Every input must name one of this wallet's accounts, and the batch must agree
+   * on which one — one approval signs with one key. Returns the account address
+   * and the chain the inputs agreed on; the worker resolves the address itself.
+   */
+  function checkInputs(
+    inputs: readonly { account: WalletAccount; chain?: IdentifierString }[],
+  ): { account?: string; chain?: IdentifierString } {
     const known = new Set(accounts.map((account) => account.address));
+    let account: string | undefined;
     let chain: IdentifierString | undefined;
     for (const input of inputs) {
-      if (!known.has(input.account?.address)) throw new Error('Invalid account');
+      const address = input.account?.address;
+      if (!known.has(address)) throw new Error('Invalid account');
+      if (account !== undefined && account !== address) throw new Error('All inputs must use the same account');
+      account = address;
       if (input.chain !== undefined) {
         if (chain !== undefined && chain !== input.chain) throw new Error('All inputs must use the same chain');
         chain = input.chain;
       }
     }
-    return chain;
+    return { account, chain };
   }
 
   const OPTION_KEYS = ['skipPreflight', 'preflightCommitment', 'maxRetries', 'minContextSlot', 'commitment'] as const;
@@ -230,11 +240,13 @@ function asReply(value: unknown): WalletReply | undefined {
     return first;
   }
 
-  function withChainAndOptions(
+  function withRequestFields(
     payload: Record<string, unknown>,
-    chain: IdentifierString | undefined,
-    options: Record<string, unknown> | undefined,
+    account: string | undefined,
+    chain?: IdentifierString,
+    options?: Record<string, unknown>,
   ): Record<string, unknown> {
+    if (account !== undefined) payload.account = account;
     if (chain !== undefined) payload.chain = chain;
     if (options !== undefined) payload.options = options;
     return payload;
@@ -282,10 +294,10 @@ function asReply(value: unknown): WalletReply | undefined {
         signTransaction: async (...inputs) => {
           if (inputs.length === 0) return [];
           // One message, one approval window, N signed transactions in the same order.
-          const chain = checkInputs(inputs);
+          const { account, chain } = checkInputs(inputs);
           const options = sharedOptions(inputs);
           const transactions = inputs.map((input) => [...toBytes(input.transaction)]);
-          const response = await send('SIGN_TRANSACTION', withChainAndOptions({ transactions }, chain, options));
+          const response = await send('SIGN_TRANSACTION', withRequestFields({ transactions }, account, chain, options));
           const signed: unknown = response?.signedTransactions;
           if (!Array.isArray(signed) || signed.length !== inputs.length) {
             throw new Error(replyError(response, 'Sign failed'));
@@ -300,11 +312,11 @@ function asReply(value: unknown): WalletReply | undefined {
           if (inputs.length === 0) return [];
           // One per call: a batch broadcast is not atomic, and the worker refuses it with the same message.
           if (inputs.length > 1) throw new Error(SINGLE_SEND_MESSAGE);
-          const chain = checkInputs(inputs);
+          const { account, chain } = checkInputs(inputs);
           const transactions = inputs.map((input) => [...toBytes(input.transaction)]);
           const response = await send(
             'SIGN_AND_SEND_TRANSACTION',
-            withChainAndOptions({ transactions }, chain, pickOptions(inputs[0].options)),
+            withRequestFields({ transactions }, account, chain, pickOptions(inputs[0].options)),
           );
           const signatures: unknown = response?.signatures;
           if (!Array.isArray(signatures) || signatures.length !== inputs.length) {
@@ -317,9 +329,12 @@ function asReply(value: unknown): WalletReply | undefined {
         version: '1.0.0',
         signMessage: async (...inputs) => {
           if (inputs.length === 0) return [];
-          checkInputs(inputs);
+          const { account } = checkInputs(inputs);
           const messages = inputs.map((input) => toBytes(input.message));
-          const response = await send('SIGN_MESSAGE', { messages: messages.map((message) => [...message]) });
+          const response = await send(
+            'SIGN_MESSAGE',
+            withRequestFields({ messages: messages.map((message) => [...message]) }, account),
+          );
           const signatures: unknown = response?.signatures;
           if (!Array.isArray(signatures) || signatures.length !== inputs.length) {
             throw new Error(replyError(response, 'Sign failed'));

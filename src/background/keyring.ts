@@ -324,7 +324,14 @@ async function accountsFromSession(session: SessionPayload): Promise<WalletAccou
   return await generateAccountsFromSeed(seed, 1);
 }
 
-async function readStoredAccounts(): Promise<StoredAccounts | undefined> {
+/**
+ * The persisted account list and the account the user last chose. Names,
+ * addresses and a derivation index are public — no part of this comes from the
+ * session — so it reads the same whether the wallet is locked or open. That is
+ * what lets the router resolve the address a page names to an index without
+ * opening the vault; nothing here derives or exposes a key.
+ */
+export async function readStoredAccounts(): Promise<StoredAccounts | undefined> {
   return localGet<StoredAccounts>(ACCOUNTS_KEY);
 }
 

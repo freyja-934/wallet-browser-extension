@@ -139,7 +139,7 @@ export function ApprovalScreen() {
       const results: ItemPreview[] = [];
       for (const transaction of transactions) {
         try {
-          results.push(await extensionClient.previewTransaction(transaction));
+          results.push(await extensionClient.previewTransaction(transaction, request?.accountAtEnqueue));
         } catch (err) {
           results.push({ failed: true, error: err instanceof Error ? err.message : 'Preview failed' });
         }
@@ -183,6 +183,14 @@ export function ApprovalScreen() {
   // The account the site is told is active. A locked wallet reports none, so this is
   // undefined until the inline unlock; the row says so rather than guessing.
   const sharedAccount = accounts ? accountAt(accounts.accounts, accounts.activeAccountIndex) : undefined;
+  // For a signature, the account the request was pinned to at enqueue — the key that
+  // will actually sign, whatever the popup is showing now. A connect shares the active
+  // one, and so would a request that pinned nothing; an account change withdraws that
+  // request rather than letting this row go stale.
+  const signingAccount =
+    accounts && request?.accountAtEnqueue !== undefined
+      ? accountAt(accounts.accounts, request.accountAtEnqueue)
+      : sharedAccount;
   // Connecting shares every account in the wallet, not only the active one (see
   // `fulfillApproval`): when there is more than one, the screen has to say so.
   const sharedCount = accounts?.accounts.length ?? 0;
@@ -229,6 +237,18 @@ export function ApprovalScreen() {
               <CardContent className="space-y-2 text-sm">
                 <Row label="Origin" value={originHost || request.origin} />
                 <Row label="Type" value={KIND_LABEL[request.kind] || request.kind} />
+                {/* Which key is about to sign — or, for a connect, which account is named active. */}
+                <div className="flex justify-between gap-3">
+                  <span className="text-fg-2">Account</span>
+                  {signingAccount ? (
+                    <span className="text-right" data-testid="approval-account">
+                      <span className="text-fg-0">{signingAccount.name}</span>{' '}
+                      <AddressText address={signingAccount.address} />
+                    </span>
+                  ) : (
+                    <span className="text-right text-fg-2">Unlock to see which account</span>
+                  )}
+                </div>
                 {transactionCount > 1 && <Row label="Transactions" value={String(transactionCount)} />}
                 {request.chain && <Row label="Chain" value={request.chain} />}
                 {expired && (
@@ -245,24 +265,13 @@ export function ApprovalScreen() {
               <CardContent>
                 {/* Card does not forward attributes; the marker lives on this wrapper. */}
                 <div className="space-y-3 text-sm" data-testid="approval-connect">
-                  <div className="flex justify-between gap-3">
-                    <span className="text-fg-2">Account</span>
-                    {sharedAccount ? (
-                      <span className="text-right" data-testid="approval-connect-account">
-                        <span className="text-fg-0">{sharedAccount.name}</span>{' '}
-                        <AddressText address={sharedAccount.address} />
-                      </span>
-                    ) : (
-                      <span className="text-right text-fg-2">Unlock to see which account</span>
-                    )}
-                  </div>
                   <Row
                     label="Network"
                     value={cluster ? CLUSTER_LABEL[cluster] : 'Unknown'}
                   />
                   {sharedCount > 1 && (
                     <p className="text-xs text-fg-2">
-                      All {sharedCount} accounts in this wallet are shared, with this one named as active.
+                      All {sharedCount} accounts in this wallet are shared, with the one above named as active.
                     </p>
                   )}
                   <div className="space-y-1">
