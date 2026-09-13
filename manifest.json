@@ -36,8 +36,7 @@
   "homepage_url": "https://github.com/freyja-934/wallet-browser-extension",
   "permissions": [
     "storage",
-    "alarms",
-    "clipboardWrite"
+    "alarms"
   ],
   "host_permissions": [
     "https://solana-rpc.publicnode.com/*",
@@ -57,12 +56,6 @@
     "128": "icons/icon-128.png"
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'"
-  },
-  "web_accessible_resources": [
-    {
-      "resources": ["assets/*"],
-      "matches": ["http://localhost/*", "https://*/*"]
-    }
-  ]
+    "extension_pages": "script-src 'self'; object-src 'self'; img-src 'self' https: data:; media-src 'self'"
+  }
 }

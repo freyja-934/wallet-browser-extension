@@ -18,6 +18,8 @@ This page is the public copy for the Chrome Web Store. The same text ships in th
 - A custom RPC URL or Helius API key entered in Settings receives the same public addresses and signed transactions. Both values are stored only in `chrome.storage.local` on the device; Cinder never receives them
 - Public mint addresses to CoinGecko for USD prices (mainnet only)
 - dApp origins the user approves, which receive public addresses
+- Token and NFT images are loaded directly from whatever host the token's own metadata names (commonly IPFS or Arweave gateways, or a project's own server). Those hosts see the request and the device's IP address; Cinder does not choose them and does not proxy them
+- Opening a transaction in the explorer hands off to `https://solana.fm` in a new tab, which receives that transaction signature. Nothing is sent there unless the user clicks the link
 
 ## What we do not do
 
