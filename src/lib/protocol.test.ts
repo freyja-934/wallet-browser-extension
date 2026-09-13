@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_BATCH_ITEMS, MAX_MESSAGE_BYTES, MAX_REQUEST_BYTES, MAX_TRANSACTION_BYTES, SINGLE_SEND_MESSAGE } from './bridge';
 import { EXTENSION_MESSAGE_TYPES, type ExtensionMessageType } from './messages';
-import { MAX_HELIUS_KEY_LENGTH, parseRequest, PROTOCOL_COVERS_ALLOWLIST } from './protocol';
+import {
+  MAX_HELIUS_KEY_LENGTH,
+  parseRequest,
+  parseSendError,
+  PROTOCOL_COVERS_ALLOWLIST,
+  SEND_SIGNATURE_SEPARATOR,
+  SendError,
+} from './protocol';
 
 interface Case {
   valid: Record<string, unknown>;
@@ -70,6 +77,11 @@ const cases: Record<ExtensionMessageType, Case> = {
   SEND_TRANSFER: {
     valid: { to: 'HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk', amountSmallest: '5000', mint: 'So111' },
     malformed: { to: 'HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk', amountSmallest: '0.5' },
+    error: 'Invalid amountSmallest',
+  },
+  ESTIMATE_FEE: {
+    valid: { to: 'HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk', amountSmallest: '5000', mint: 'So111' },
+    malformed: { to: 'HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk', amountSmallest: '-1' },
     error: 'Invalid amountSmallest',
   },
 };
@@ -263,9 +275,47 @@ describe('parseRequest', () => {
     });
   });
 
-  it('requires a non-empty string recipient on SEND_TRANSFER', () => {
-    for (const to of ['', 5]) {
-      expect(() => parseRequest({ type: 'SEND_TRANSFER', to, amountSmallest: '1' })).toThrow('Invalid to');
+  it('requires a non-empty string recipient on SEND_TRANSFER and ESTIMATE_FEE', () => {
+    for (const type of ['SEND_TRANSFER', 'ESTIMATE_FEE'] as const) {
+      for (const to of ['', 5]) {
+        expect(() => parseRequest({ type, to, amountSmallest: '1' })).toThrow('Invalid to');
+      }
+    }
+  });
+
+  it('takes a base58 source token account on SEND_TRANSFER and ESTIMATE_FEE, and nothing else', () => {
+    const to = 'HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk';
+    const source = '9RfZwn2Prux6QesG1Noo4HzMEBv3rPndJ2bN2Wwd6a7p';
+    for (const type of ['SEND_TRANSFER', 'ESTIMATE_FEE'] as const) {
+      expect(parseRequest({ type, to, amountSmallest: '1', mint: 'So111', source })).toStrictEqual({
+        type,
+        to,
+        amountSmallest: '1',
+        mint: 'So111',
+        source,
+      });
+      // Absent, null, and '' all mean "the signer's own associated account".
+      for (const absent of [undefined, null, '']) {
+        expect(parseRequest({ type, to, amountSmallest: '1', source: absent })).toStrictEqual({
+          type,
+          to,
+          amountSmallest: '1',
+        });
+      }
+      for (const bad of ['not base58 at all', '0OIl0OIl0OIl0OIl0OIl0OIl0OIl0OIl', 'short', `${source}${source}`, 7]) {
+        expect(() => parseRequest({ type, to, amountSmallest: '1', source: bad })).toThrow('Invalid source');
+      }
+    }
+  });
+
+  it('validates ESTIMATE_FEE exactly like SEND_TRANSFER', () => {
+    expect(parseRequest({ type: 'ESTIMATE_FEE', to: 'x', amountSmallest: '1', mint: '' })).toStrictEqual({
+      type: 'ESTIMATE_FEE',
+      to: 'x',
+      amountSmallest: '1',
+    });
+    for (const amountSmallest of ['1e9', '0.5', '', 5]) {
+      expect(() => parseRequest({ type: 'ESTIMATE_FEE', to: 'x', amountSmallest })).toThrow('Invalid amountSmallest');
     }
   });
 
@@ -388,5 +438,32 @@ describe('parseRequest', () => {
       to: 'x',
       amountSmallest: '0',
     });
+  });
+});
+
+describe('SendError', () => {
+  const signature =
+    '5VERv8NMvzbJMEkV8xnrLkEaWRtSz9CosKDYjCJjBRnbJLgp8uirBgmQpjKhoR4tjF3ZpRzrFmBV6UjKdiSZkQUW';
+
+  it('carries the signature in the text, so the envelope needs no new field', () => {
+    const error = new SendError('expired', 'Transaction expired before confirmation; safe to retry', signature);
+    expect(error.message).toBe(`Transaction expired before confirmation; safe to retry${SEND_SIGNATURE_SEPARATOR}${signature}`);
+    expect(parseSendError(error.message)).toEqual({
+      message: 'Transaction expired before confirmation; safe to retry',
+      signature,
+    });
+  });
+
+  it('is just a message when there is no signature', () => {
+    const error = new SendError('broadcast-failed', 'Broadcast failed');
+    expect(error.message).toBe('Broadcast failed');
+    expect(error.signature).toBeUndefined();
+    expect(parseSendError(error.message)).toEqual({ message: 'Broadcast failed' });
+  });
+
+  it('leaves a line that only looks like a suffix alone', () => {
+    for (const raw of ['Insufficient balance', `Something · signature not-a-signature`, `Weird${SEND_SIGNATURE_SEPARATOR}`]) {
+      expect(parseSendError(raw)).toEqual({ message: raw });
+    }
   });
 });

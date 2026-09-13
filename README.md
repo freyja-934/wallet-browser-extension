@@ -65,7 +65,7 @@ just setup      # pnpm install
 just check      # tsc + lint + vitest run
 just ext        # build loadable extension
 just dapp       # http://localhost:5174 test dApp
-just e2e        # Playwright: import, unlock, dashboard, create, send review, settings, dApp
+just e2e        # Playwright: import, unlock, dashboard, create, send (confirms a 0.001 SOL devnet self-transfer), settings, dApp
 just store      # mainnet zip for Chrome Web Store (does not submit)
 ```
 
@@ -77,7 +77,8 @@ Privacy and terms: `docs/legal/` (also shipped as `legal/privacy.html` / `legal/
 
 - `just e2e` loads Cinder Wallet into Playwright's bundled Chromium (`channel: 'chromium'`), not branded Google Chrome 152 (which removed `--load-extension`).
 - First time: `pnpm exec playwright install chromium`
-- Coverage: import / unlock, dashboard tabs, create-new + seed quiz, Send → Review (does not click Confirm), settings auto-lock / export seed / change password, Receive toast stub, dApp connect (with `solana:devnet` in `chains`) / sign-message / sign-v0, two transactions in one call → one approval window and outputs in input order, cluster switch → `change` with re-stamped `chains`, wrong-chain refusal, transaction-as-message refusal, locked Connect → unlock inside the approval window, `signAndSend` reject, 0-lamport `signAndSend` approve with the fee shown as the SOL change, approval window close → reject, repeat and silent connect without a window, Settings → Connected sites → Revoke, `Not connected` for a stranger, lock → empty `change` event.
+- A full run spends 10000 lamports of the devnet fixture: two fee-only self-transfers (the dApp `signAndSend` approval and the popup send). Nothing leaves the address; top it up at https://faucet.solana.com when it runs low.
+- Coverage: import / unlock, dashboard tabs, create-new + seed quiz, Send → Review (junk address, Max as balance minus the priced fee, the decimals error, the fee row) and one confirmed 0.001 SOL self-transfer on devnet — the fixture sends to itself, so only the fee leaves it — settings auto-lock / export seed / change password, Receive toast stub, dApp connect (with `solana:devnet` in `chains`) / sign-message / sign-v0, two transactions in one call → one approval window and outputs in input order, cluster switch → `change` with re-stamped `chains`, wrong-chain refusal, transaction-as-message refusal, locked Connect → unlock inside the approval window, `signAndSend` reject, 0-lamport `signAndSend` approve with the fee shown as the SOL change, approval window close → reject, repeat and silent connect without a window, Settings → Connected sites → Revoke, `Not connected` for a stranger, lock → empty `change` event.
 
 ## Chrome click-through (after Load unpacked)
 

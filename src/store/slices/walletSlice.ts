@@ -1,6 +1,6 @@
 import { createAsyncThunk, createSlice, PayloadAction } from '@reduxjs/toolkit';
 import type { WalletAccountInfo } from '../../lib/messages';
-import { extensionClient } from '../../messaging/client';
+import { extensionClient, type TransferRequest } from '../../messaging/client';
 
 interface WalletState {
   isInitialized: boolean;
@@ -80,9 +80,9 @@ export const clearWalletData = createAsyncThunk('wallet/clearData', async () => 
 
 export const sendTransaction = createAsyncThunk(
   'wallet/sendTransaction',
-  async ({ to, amountSmallest, mint }: { to: string; amountSmallest: string; mint?: string }, { rejectWithValue }) => {
+  async ({ to, amountSmallest, mint, source }: TransferRequest, { rejectWithValue }) => {
     try {
-      const signature = await extensionClient.sendTransfer({ to, amountSmallest, mint });
+      const signature = await extensionClient.sendTransfer({ to, amountSmallest, mint, source });
       return { signature };
     } catch (error) {
       return rejectWithValue(error instanceof Error ? error.message : 'Transaction failed');

@@ -9,7 +9,7 @@ import { installChromeStub, STUB_EXTENSION_ID, uninstallChromeStub, type ChromeS
 import { TEST_ADDRESS, TEST_MNEMONIC, TEST_PASSWORD } from '../test/fixtures';
 import { installApprovalLifecycle, onWindowRemoved } from './approvals';
 import { resetKeyringForTests } from './keyring';
-import { CONFIRMATION_MARGIN_MS, CONFIRMATION_POLL_MS, CONFIRMATION_TIMEOUT_MS, handleMessage } from './router';
+import { CONFIRMATION_MARGIN_MS, CONFIRMATION_POLL_MS, CONFIRMATION_TIMEOUT_MS, handleMessage, SEND_IN_PROGRESS_MESSAGE } from './router';
 
 /** The RPC the router broadcasts through, replaced so a test can hold a broadcast open. */
 const rpc = vi.hoisted(() => ({
@@ -19,6 +19,7 @@ const rpc = vi.hoisted(() => ({
   getMultipleAccountsInfoAndContext: vi.fn<[unknown[]], Promise<{ context: { slot: number }; value: unknown[] }>>(),
   getAddressLookupTable: vi.fn<[unknown], Promise<{ value: unknown }>>(),
   simulateTransaction: vi.fn<[unknown, unknown], Promise<{ value: unknown }>>(),
+  sendTransfer: vi.fn<[unknown], Promise<string>>(),
 }));
 vi.mock('./transfers', () => ({
   getConnection: async () => ({
@@ -29,7 +30,8 @@ vi.mock('./transfers', () => ({
     getAddressLookupTable: rpc.getAddressLookupTable,
     simulateTransaction: rpc.simulateTransaction,
   }),
-  sendTransfer: async () => {
+  sendTransfer: (params: unknown) => rpc.sendTransfer(params),
+  estimateTransfer: async () => {
     throw new Error('not under test');
   },
 }));
@@ -50,6 +52,7 @@ beforeEach(() => {
   rpc.getMultipleAccountsInfoAndContext.mockReset();
   rpc.getAddressLookupTable.mockReset();
   rpc.simulateTransaction.mockReset();
+  rpc.sendTransfer.mockReset();
 });
 
 afterEach(() => {
@@ -1170,5 +1173,51 @@ describe('PREVIEW_TRANSACTION', () => {
     await createFixtureWallet();
     await handleMessage({ type: 'LOCK' }, popup, BASE);
     await expect(preview(selfTransfer())).rejects.toThrow('Wallet is locked');
+  });
+});
+
+describe('SEND_TRANSFER', () => {
+  const transfer = (to: string, amountSmallest = '1000', extra: Record<string, unknown> = {}) =>
+    handleMessage({ type: 'SEND_TRANSFER', to, amountSmallest, ...extra }, popup, BASE);
+
+  it('refuses a second send while one is still confirming, then allows the next', async () => {
+    await createFixtureWallet();
+    const confirming = deferred<string>();
+    rpc.sendTransfer.mockReturnValueOnce(confirming.promise);
+
+    const first = transfer(TEST_ADDRESS);
+    await vi.waitFor(() => expect(rpc.sendTransfer).toHaveBeenCalledTimes(1));
+    // A second Confirm — a double-click, or a reopened popup — must not sign again.
+    await expect(transfer(TEST_ADDRESS)).rejects.toThrow(SEND_IN_PROGRESS_MESSAGE);
+    expect(rpc.sendTransfer).toHaveBeenCalledTimes(1);
+
+    confirming.resolve(SIGNATURE);
+    expect(await first).toEqual({ signature: SIGNATURE });
+
+    rpc.sendTransfer.mockResolvedValueOnce(SIGNATURE);
+    expect(await transfer(TEST_ADDRESS)).toEqual({ signature: SIGNATURE });
+    expect(rpc.sendTransfer).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears the guard when the send fails', async () => {
+    await createFixtureWallet();
+    rpc.sendTransfer.mockRejectedValueOnce(new Error('Transaction expired before confirmation; safe to retry'));
+    await expect(transfer(TEST_ADDRESS)).rejects.toThrow('Transaction expired');
+
+    rpc.sendTransfer.mockResolvedValueOnce(SIGNATURE);
+    expect(await transfer(TEST_ADDRESS)).toEqual({ signature: SIGNATURE });
+  });
+
+  it('passes the token account the popup picked through to the worker', async () => {
+    await createFixtureWallet();
+    const mint = PublicKey.default.toBase58();
+    rpc.sendTransfer.mockResolvedValueOnce(SIGNATURE);
+    await transfer(TEST_ADDRESS, '5', { mint, source: TEST_ADDRESS });
+    expect(rpc.sendTransfer).toHaveBeenCalledWith({
+      to: TEST_ADDRESS,
+      amountSmallest: '5',
+      mint,
+      source: TEST_ADDRESS,
+    });
   });
 });

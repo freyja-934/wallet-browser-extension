@@ -1,11 +1,20 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 import { getCluster, type Cluster } from '../../config/constants';
 
+/** What the send modal opens on. Balances are integer smallest units (lamports or token base units) as decimal strings. */
 export type SendAsset = {
   mint?: string;
   symbol: string;
-  balance: number;
+  balanceSmallest: string;
   decimals: number;
+  /** Owning token program, base58; absent for SOL. */
+  programId?: string;
+  /**
+   * The token account this balance sits in, base58; absent for SOL. A wallet can
+   * hold several accounts of one mint, so the row the user clicked — not the
+   * mint — is what the send spends from.
+   */
+  source?: string;
 };
 
 interface UiState {

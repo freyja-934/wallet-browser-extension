@@ -1,5 +1,8 @@
 import type { ExtensionMessageType, WalletSettings } from '../lib/messages';
-import type { WalletRequestPayload, WalletResponses } from '../lib/protocol';
+import type { FeeEstimate, WalletRequestPayload, WalletResponses } from '../lib/protocol';
+
+/** What the popup names when it sends: `source` is the token account the row it picked holds. */
+export type TransferRequest = { to: string; amountSmallest: string; mint?: string; source?: string };
 
 type Envelope<T extends ExtensionMessageType> =
   | ({ success: true } & WalletResponses[T])
@@ -34,8 +37,11 @@ export const extensionClient = {
   exportSeed: async (password: string) => (await send('EXPORT_SEED', { password })).seedPhrase,
   exportPrivateKey: async (password: string, accountIndex: number) =>
     (await send('EXPORT_PRIVATE_KEY', { password, accountIndex })).privateKey,
-  sendTransfer: async (params: { to: string; amountSmallest: string; mint?: string }) =>
-    (await send('SEND_TRANSFER', params)).signature,
+  sendTransfer: async (params: TransferRequest) => (await send('SEND_TRANSFER', params)).signature,
+  estimateFee: async (params: TransferRequest): Promise<FeeEstimate> => {
+    const { feeLamports, rentExemptMin, recipient } = await send('ESTIMATE_FEE', params);
+    return { feeLamports, rentExemptMin, recipient };
+  },
   getPendingRequest: async (id: string) => (await send('GET_PENDING_REQUEST', { id })).request,
   approveRequest: async (id: string) => {
     await send('APPROVE_REQUEST', { id });
