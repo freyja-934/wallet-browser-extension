@@ -13,6 +13,23 @@ import { Keypair, PublicKey, SystemProgram, Transaction, type AccountInfo, type 
 import bs58 from 'bs58';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SendError } from '../lib/protocol';
+import { installChromeStub, uninstallChromeStub } from '../test/chrome-stub';
+
+/**
+ * The only door to an endpoint: `getConnection` resolves every RPC through
+ * `readyConnection`, so a spy here is how "never reached an endpoint" is
+ * checked. Every other test in this file passes its own `io`, which never
+ * reaches this.
+ */
+const rotate = vi.hoisted(() => ({
+  readyConnection: vi.fn(async () => {
+    throw new Error('no endpoint under test');
+  }),
+}));
+vi.mock('../lib/rpc-rotate', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/rpc-rotate')>()),
+  readyConnection: rotate.readyConnection,
+}));
 import {
   CONFIRM_POLL_MS,
   CONFIRM_TIMEOUT_MS,
@@ -580,5 +597,27 @@ describe('confirmation races', () => {
     // The RPC said nothing, so the id comes from the signature the wallet put on the transaction.
     expect(error.signature).toBe(bs58.encode(broadcast(rpc).signature!));
     expect(rpc.getSignatureStatuses).not.toHaveBeenCalled();
+  });
+});
+
+describe('the default io', () => {
+  // Production passes no `io`: the signer comes from the keyring and the
+  // connection from settings, both of which need `chrome.*`.
+  beforeEach(() => {
+    installChromeStub();
+  });
+
+  afterEach(() => {
+    uninstallChromeStub();
+  });
+
+  it('refuses to price or send while the wallet is locked, before reaching an endpoint', async () => {
+    rotate.readyConnection.mockClear();
+    // No session, so no keypair.
+    await expect(estimateTransfer(sol('1'))).rejects.toThrow('Wallet is locked');
+    await expect(sendTransfer(sol('1'))).rejects.toThrow('Wallet is locked');
+    // And `defaultIo` asks for the signer first, so neither call ever resolved a
+    // connection, let alone talked to one: the refusal is not a network round trip.
+    expect(rotate.readyConnection).not.toHaveBeenCalled();
   });
 });

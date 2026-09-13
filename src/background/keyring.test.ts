@@ -1,6 +1,7 @@
 import { Keypair } from '@solana/web3.js';
 import bs58 from 'bs58';
 import { Buffer } from 'buffer';
+import nacl from 'tweetnacl';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CURRENT_VAULT_VERSION, V1_KDF, type EncryptedData } from '../lib/encryption-simple';
 import type { WalletAccountInfo } from '../lib/messages';
@@ -16,13 +17,16 @@ import {
   createWallet,
   exportPrivateKey,
   exportSeed,
+  getKeypair,
   getPublicState,
   getSettings,
   lock,
+  registerAutoLock,
   renameAccount,
   resetKeyringForTests,
   setBuildHeliusApiKeyForTests,
   setLockHooks,
+  signMessage,
   switchAccount,
   touchActivity,
   unlock,
@@ -612,5 +616,93 @@ describe('concurrent account changes', () => {
     expect(state.accounts).toHaveLength(3);
     expect(state.accounts[0]?.name).toBe('Savings');
     expect(state.accounts.map((account) => account.index)).toEqual([0, 1, 2]);
+  });
+});
+
+describe('signing keys', () => {
+  it('derives the account asked for, signs with it, and refuses once locked', async () => {
+    await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
+    await addAccount();
+    const second = (await fixtureAccounts(2))[1]!;
+
+    // The active account by default; any other only when it is named.
+    expect((await getKeypair()).publicKey.toBase58()).toBe(TEST_ADDRESS);
+    expect((await getKeypair(1)).publicKey.toBase58()).toBe(second.address);
+
+    // A real ed25519 signature, verifiable against the address the popup shows.
+    const message = new TextEncoder().encode('cinder wallet test message');
+    const signature = await signMessage(message);
+    expect(signature).toHaveLength(64);
+    expect(nacl.sign.detached.verify(message, signature, bs58.decode(TEST_ADDRESS))).toBe(true);
+    // ...and the second account signs as itself, not as the active one.
+    const other = await signMessage(message, 1);
+    expect(other).not.toEqual(signature);
+    expect(nacl.sign.detached.verify(message, other, bs58.decode(second.address))).toBe(true);
+
+    await lock();
+    await expect(getKeypair()).rejects.toThrow('Wallet is locked');
+    await expect(signMessage(message)).rejects.toThrow('Wallet is locked');
+  });
+});
+
+describe('the auto-lock alarm', () => {
+  it('locks the wallet when cinder-autolock fires, and ignores every other alarm', async () => {
+    await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
+    registerAutoLock();
+
+    // The listener does not await its `lock()`; one macrotask drains the whole
+    // chain, since nothing in it waits on a timer.
+    const settled = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+    chromeStub.alarms.onAlarm.emit({ name: 'some-other-alarm' });
+    await settled();
+    expect((await getPublicState()).isLocked).toBe(false);
+
+    chromeStub.alarms.onAlarm.emit({ name: 'cinder-autolock' });
+    await settled();
+    expect((await getPublicState()).isLocked).toBe(true);
+    expect(chromeStub.storage.session.snapshot()).not.toHaveProperty('cinder_session');
+  });
+});
+
+describe('a session written before the seed rewrite', () => {
+  it('is upgraded to a seed on the next read, and the phrase leaves session storage', async () => {
+    await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
+    // What builds before the rewrite left behind: the phrase itself, in session storage.
+    await chromeStub.storage.session.set({
+      cinder_session: { mnemonic: TEST_MNEMONIC, activeAccountIndex: 0 },
+    });
+
+    const state = await getPublicState();
+    expect(state.isLocked).toBe(false);
+    expect(state.accounts[0]?.address).toBe(TEST_ADDRESS);
+
+    const session = chromeStub.storage.session.snapshot().cinder_session as {
+      seedB64?: string;
+      mnemonic?: string;
+    };
+    expect(session.mnemonic).toBeUndefined();
+    expect(session.seedB64).toBe((await mnemonicToSeedBuffer(TEST_MNEMONIC)).toString('base64'));
+    // Not just off that one key: the phrase is nowhere in session storage any more.
+    expect(JSON.stringify(chromeStub.storage.session.snapshot())).not.toContain('abandon');
+    // And the upgraded session still signs for the same account.
+    expect((await getKeypair()).publicKey.toBase58()).toBe(TEST_ADDRESS);
+  });
+});
+
+describe('the one-time key migration', () => {
+  it('is retried after a failed read rather than pinned as a failure forever', async () => {
+    await chromeStub.storage.local.set({ lumen_settings: { cluster: 'devnet' } });
+    resetKeyringForTests();
+    const get = vi.spyOn(chromeStub.storage.local, 'get');
+    get.mockImplementationOnce(async () => {
+      throw new Error('storage offline');
+    });
+
+    await expect(getSettings()).rejects.toThrow('storage offline');
+    // The next access starts the migration again instead of re-throwing the pinned failure.
+    expect((await getSettings()).cluster).toBe('devnet');
+    expect(chromeStub.storage.local.snapshot()).not.toHaveProperty('lumen_settings');
+    get.mockRestore();
   });
 });

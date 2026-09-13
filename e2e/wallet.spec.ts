@@ -1,5 +1,9 @@
+import { CHAIN_TIMEOUT_MS } from './devnet';
 import { expect, test } from './fixtures';
-import { importWallet, openPopup, TEST_ADDRESS, TEST_MNEMONIC, TEST_PASSWORD } from './popup';
+import { importAndUnlock, importWallet, openPopup, TEST_ADDRESS, TEST_MNEMONIC, TEST_PASSWORD } from './popup';
+
+/** A funded devnet address that is not the fixture wallet; nothing is sent to it here. */
+const UNUSED = 'So11111111111111111111111111111111111111112';
 
 test('import then reopen shows Unlock, not Create', async ({ context, extensionId }) => {
   const created = await openPopup(context, extensionId);
@@ -62,4 +66,71 @@ test('a second create is refused rather than replacing the wallet', async ({ con
   // Same wallet as before, after a fresh read of worker state.
   await page.reload();
   await expect(page.getByTestId('header-address')).toHaveText(short);
+});
+
+test('the Send sheet keeps keyboard focus inside it and hands it back on Escape', async ({ context, extensionId }) => {
+  test.setTimeout(120_000);
+  const popup = await importAndUnlock(context, extensionId);
+
+  /** Where focus is: whether it is inside the sheet, and which control it is on. */
+  const focus = () =>
+    popup.evaluate(() => {
+      const element = document.activeElement as HTMLElement | null;
+      const sheet = document.querySelector('[role="dialog"]');
+      return {
+        inside: Boolean(element && sheet?.contains(element)),
+        at: element?.getAttribute('data-testid') ?? element?.getAttribute('aria-label') ?? element?.tagName ?? '',
+      };
+    });
+
+  await popup.getByTestId('open-send').click();
+  await expect(popup.getByTestId('send-recipient')).toBeVisible();
+
+  // Opening moves focus into the sheet, onto its first control.
+  expect(await focus()).toEqual({ inside: true, at: 'Close' });
+
+  // Shift+Tab from the first control wraps to the last one in the sheet...
+  await popup.keyboard.press('Shift+Tab');
+  const last = await focus();
+  expect(last.inside).toBe(true);
+  expect(last.at).not.toBe('Close');
+
+  // ...and Tab from the last control comes back round to the first.
+  await popup.keyboard.press('Tab');
+  expect(await focus()).toEqual({ inside: true, at: 'Close' });
+
+  // Walking the whole sheet never lands on the dashboard behind it.
+  const walked: string[] = [];
+  for (let step = 0; step < 10; step += 1) {
+    await popup.keyboard.press('Tab');
+    const at = await focus();
+    expect(at.inside).toBe(true);
+    walked.push(at.at);
+  }
+  expect(walked).toContain('send-recipient');
+  expect(walked).toContain('send-amount');
+  // It came round again rather than running out of controls.
+  expect(walked).toContain('Close');
+
+  // Stepping to Review unmounts the control that had focus, so the sheet takes
+  // it again: focus lands on the review step rather than falling to the body.
+  await expect(popup.getByTestId('send-available')).not.toHaveText('\u2014', { timeout: CHAIN_TIMEOUT_MS });
+  await popup.getByTestId('send-recipient').fill(UNUSED);
+  await popup.getByTestId('send-amount').fill('0.001');
+  await popup.getByTestId('send-ack').check();
+  await popup.getByTestId('send-continue').click();
+  await expect(popup.getByTestId('send-review')).toBeVisible();
+  const onReview = await popup.evaluate(() => {
+    const element = document.activeElement as HTMLElement | null;
+    const sheet = document.querySelector('[role="dialog"]');
+    return { inside: Boolean(element && sheet?.contains(element)), at: element?.textContent?.trim() ?? '' };
+  });
+  expect(onReview).toEqual({ inside: true, at: 'Back' });
+
+  // Escape closes the sheet and gives focus back to the button that opened it.
+  await popup.keyboard.press('Escape');
+  await expect(popup.getByTestId('send-review')).toHaveCount(0);
+  await expect
+    .poll(() => popup.evaluate(() => document.activeElement?.getAttribute('data-testid') ?? ''), { timeout: 5_000 })
+    .toBe('open-send');
 });

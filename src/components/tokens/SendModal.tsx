@@ -23,6 +23,14 @@ import { AmountInput } from './AmountInput';
 const SOL_KEY = 'SOL';
 /** How long an estimate counts as fresh: stepping between Amount and Review inside this window does not re-ask the worker. */
 const FEE_STALE_MS = 15_000;
+/**
+ * A fee read is worth a second and a third try: one RPC blip must not leave
+ * Review priced at "Unavailable" for good. Three attempts, 400 ms then 800 ms
+ * apart — about a second of waiting on top of the round trips, so the estimate
+ * still lands while the user is reading the pane.
+ */
+const FEE_RETRY_ATTEMPTS = 2;
+const feeRetryDelay = (attempt: number) => 400 * 2 ** attempt;
 
 /** The asset the modal is on: the selector's choice resolved against the balances query. */
 interface Selected {
@@ -99,7 +107,13 @@ export function SendModal() {
   const cluster = settings?.cluster ?? getCluster();
   const { accounts, activeAccountIndex } = useAppSelector((state) => state.wallet);
   const address = accountAt(accounts, activeAccountIndex)?.address;
-  const { data, isPending: balancesPending, isError: balancesError } = useBalances(address);
+  const {
+    data,
+    isPending: balancesPending,
+    isError: balancesError,
+    isFetching: balancesFetching,
+    refetch: refetchBalances,
+  } = useBalances(address);
   const invalidate = useInvalidateWalletData();
   const tokens = useMemo(() => data?.tokens ?? [], [data]);
 
@@ -188,7 +202,8 @@ export function SendModal() {
     enabled: showSendModal && step === 'amount' && !!address && !selected.mint,
     queryFn: () => extensionClient.estimateFee({ to: recipientState.valid ? recipient.trim() : address!, amountSmallest: '1' }),
     staleTime: FEE_STALE_MS,
-    retry: false,
+    retry: FEE_RETRY_ATTEMPTS,
+    retryDelay: feeRetryDelay,
   });
 
   // The Review figures: the exact message the send will broadcast, priced by the worker.
@@ -204,7 +219,8 @@ export function SendModal() {
         source: selected.source,
       }),
     staleTime: FEE_STALE_MS,
-    retry: false,
+    retry: FEE_RETRY_ATTEMPTS,
+    retryDelay: feeRetryDelay,
   });
 
   const clearAttempt = () => {
@@ -289,7 +305,7 @@ export function SendModal() {
     : null;
 
   return (
-    <Modal isOpen={showSendModal} onClose={handleClose}>
+    <Modal isOpen={showSendModal} onClose={handleClose} focusKey={step}>
       {step === 'amount' && (
         <>
           <ModalHeader onClose={handleClose}>Send {selected.symbol}</ModalHeader>
@@ -305,9 +321,20 @@ export function SendModal() {
                 ))}
               </Select>
               {balancesError && (
-                <p className="mt-1 text-xs text-ui-danger" data-testid="send-balance-error">
-                  Could not load your balance. Refresh before sending.
-                </p>
+                <div className="mt-1 flex items-start justify-between gap-3">
+                  <p className="text-xs text-ui-danger" data-testid="send-balance-error">
+                    Could not load your balance. Refresh before sending.
+                  </p>
+                  <SecondaryButton
+                    type="button"
+                    className="h-8 shrink-0 px-4 text-xs"
+                    onClick={() => void refetchBalances()}
+                    disabled={balancesFetching}
+                    data-testid="send-balance-retry"
+                  >
+                    Retry
+                  </SecondaryButton>
+                </div>
               )}
             </div>
 
@@ -371,9 +398,20 @@ export function SendModal() {
                   </div>
                   <Row k="Network fee" v={feeLine} testId="send-fee" />
                   {estimate.isError && (
-                    <p className="text-xs text-ui-danger">
-                      Could not estimate the fee: {friendlyError(errorMessage(estimate.error, 'RPC did not answer')).headline}
-                    </p>
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="text-xs text-ui-danger">
+                        Could not estimate the fee: {friendlyError(errorMessage(estimate.error, 'RPC did not answer')).headline}
+                      </p>
+                      <SecondaryButton
+                        type="button"
+                        className="h-8 shrink-0 px-4 text-xs"
+                        onClick={() => void estimate.refetch()}
+                        disabled={estimate.isFetching}
+                        data-testid="send-fee-retry"
+                      >
+                        Retry
+                      </SecondaryButton>
+                    </div>
                   )}
                   {recipientInfo && !recipientInfo.exists && (
                     <p className="text-xs text-fg-2" data-testid="send-creates-account">
