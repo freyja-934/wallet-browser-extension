@@ -1,8 +1,12 @@
 import {
+  AddressLookupTableAccount,
+  Message,
   MessageV0,
   PublicKey,
   SystemProgram,
+  Transaction,
   TransactionInstruction,
+  TransactionMessage,
   VersionedTransaction,
 } from '@solana/web3.js';
 import {
@@ -24,7 +28,15 @@ import {
   createTransferInstruction,
 } from '@solana/spl-token';
 import { describe, expect, it } from 'vitest';
-import { collectWarnings, decodeInstruction, deserializeTransaction, getInstructions } from './tx-preview';
+import {
+  collectWarnings,
+  decodeInstruction,
+  deserializeTransaction,
+  getInstructions,
+  isTransactionMessage,
+  lookupTableKeys,
+  requiredSigners,
+} from './tx-preview';
 
 const a = PublicKey.unique();
 const b = PublicKey.unique();
@@ -266,5 +278,135 @@ describe('v0 messages', () => {
     const thaw = createThawAccountInstruction(a, mint, b);
     expect(thaw.data[0]).toBe(11);
     expect(decode(thaw)).toMatchObject({ label: 'Thaw token account', warnings: [] });
+  });
+});
+
+describe('deserializeTransaction', () => {
+  it('returns a VersionedTransaction for legacy wire bytes as well as v0', () => {
+    const payer = PublicKey.unique();
+    const legacy = new Transaction({ feePayer: payer, recentBlockhash: PublicKey.default.toBase58() }).add(
+      SystemProgram.transfer({ fromPubkey: payer, toPubkey: b, lamports: 1 }),
+    );
+    const tx = deserializeTransaction(legacy.serialize({ requireAllSignatures: false }));
+    expect(tx).toBeInstanceOf(VersionedTransaction);
+    expect(tx.message.version).toBe('legacy');
+    expect(getInstructions(tx).map(decodeInstruction).map((ix) => ix.label)).toEqual(['Transfer SOL']);
+    expect(() => deserializeTransaction(Uint8Array.from([1, 2, 3]))).toThrow();
+  });
+});
+
+describe('lookup tables', () => {
+  const payer = PublicKey.unique();
+  const tableKey = PublicKey.unique();
+  const table = new AddressLookupTableAccount({
+    key: tableKey,
+    state: { deactivationSlot: 0n, lastExtendedSlot: 0, lastExtendedSlotStartIndex: 0, addresses: [c, b] },
+  });
+  /** A v0 transfer whose recipient `b` is table entry 1, compiled through the table. */
+  function withTable(): VersionedTransaction {
+    const message = new TransactionMessage({
+      payerKey: payer,
+      recentBlockhash: PublicKey.default.toBase58(),
+      instructions: [SystemProgram.transfer({ fromPubkey: payer, toPubkey: b, lamports: 1 })],
+    }).compileToV0Message([table]);
+    expect(message.addressTableLookups).toHaveLength(1);
+    return deserializeTransaction(new VersionedTransaction(message).serialize());
+  }
+
+  it('lists the tables a v0 message needs and none for legacy', () => {
+    expect(lookupTableKeys(withTable()).map((key) => key.toBase58())).toEqual([tableKey.toBase58()]);
+    const legacy = MessageV0.compile({
+      payerKey: payer,
+      recentBlockhash: PublicKey.default.toBase58(),
+      instructions: [SystemProgram.transfer({ fromPubkey: payer, toPubkey: b, lamports: 1 })],
+    });
+    expect(lookupTableKeys(new VersionedTransaction(legacy))).toEqual([]);
+  });
+
+  it('resolves the instruction once the table is supplied', () => {
+    const tx = withTable();
+    const [ix] = getInstructions(tx, [table]);
+    expect('unreadable' in ix).toBe(false);
+    const decoded = decodeInstruction(ix);
+    expect(decoded.label).toBe('Transfer SOL');
+    expect((ix as TransactionInstruction).keys.map((key) => key.pubkey.toBase58())).toEqual([payer.toBase58(), b.toBase58()]);
+    expect((ix as TransactionInstruction).keys[1].isWritable).toBe(true);
+    expect((ix as TransactionInstruction).keys[1].isSigner).toBe(false);
+    expect(collectWarnings([decoded])).toEqual([]);
+  });
+
+  it('is unreadable without the table, or with the wrong table, but only for instructions that use it', () => {
+    const tx = withTable();
+    expect(getInstructions(tx).map(decodeInstruction).map((ix) => ix.label)).toEqual(['Unreadable instruction']);
+    const other = new AddressLookupTableAccount({ key: PublicKey.unique(), state: { ...table.state } });
+    expect(getInstructions(tx, [other]).map(decodeInstruction).map((ix) => ix.label)).toEqual(['Unreadable instruction']);
+
+    // Two instructions, the first static-only: it still reads when the table is missing.
+    const message = new TransactionMessage({
+      payerKey: payer,
+      recentBlockhash: PublicKey.default.toBase58(),
+      instructions: [
+        SystemProgram.transfer({ fromPubkey: payer, toPubkey: payer, lamports: 1 }),
+        SystemProgram.transfer({ fromPubkey: payer, toPubkey: b, lamports: 1 }),
+      ],
+    }).compileToV0Message([table]);
+    const two = new VersionedTransaction(message);
+    expect(getInstructions(two).map(decodeInstruction).map((ix) => ix.label)).toEqual(['Transfer SOL', 'Unreadable instruction']);
+    expect(getInstructions(two, [table]).map(decodeInstruction).map((ix) => ix.label)).toEqual(['Transfer SOL', 'Transfer SOL']);
+  });
+});
+
+describe('requiredSigners', () => {
+  it('returns the static keys the header covers, for legacy and v0', () => {
+    const payer = PublicKey.unique();
+    const v0 = MessageV0.compile({
+      payerKey: payer,
+      recentBlockhash: PublicKey.default.toBase58(),
+      instructions: [SystemProgram.transfer({ fromPubkey: payer, toPubkey: b, lamports: 1 })],
+    });
+    expect(requiredSigners(new VersionedTransaction(v0)).map((key) => key.toBase58())).toEqual([payer.toBase58()]);
+
+    // A second signer: `a` must sign as the source of the second transfer.
+    const legacy = Message.compile({
+      payerKey: payer,
+      recentBlockhash: PublicKey.default.toBase58(),
+      instructions: [
+        SystemProgram.transfer({ fromPubkey: payer, toPubkey: b, lamports: 1 }),
+        SystemProgram.transfer({ fromPubkey: a, toPubkey: b, lamports: 1 }),
+      ],
+    });
+    const signers = requiredSigners(new VersionedTransaction(legacy)).map((key) => key.toBase58());
+    expect(signers).toHaveLength(2);
+    expect(signers).toContain(payer.toBase58());
+    expect(signers).toContain(a.toBase58());
+    expect(signers).not.toContain(b.toBase58());
+  });
+});
+
+describe('isTransactionMessage', () => {
+  const payer = PublicKey.unique();
+  const instructions = [SystemProgram.transfer({ fromPubkey: payer, toPubkey: b, lamports: 1 })];
+
+  it('is true for a serialized legacy or v0 message', () => {
+    const legacy = Message.compile({ payerKey: payer, recentBlockhash: PublicKey.default.toBase58(), instructions });
+    expect(isTransactionMessage(legacy.serialize())).toBe(true);
+    const v0 = MessageV0.compile({ payerKey: payer, recentBlockhash: PublicKey.default.toBase58(), instructions });
+    expect(isTransactionMessage(v0.serialize())).toBe(true);
+  });
+
+  it('is false for text, an empty message, random bytes, and a whole signed transaction', () => {
+    expect(isTransactionMessage(new TextEncoder().encode('hello from lumen test dapp'))).toBe(false);
+    expect(isTransactionMessage(new TextEncoder().encode('Sign in to dapp.example\nNonce: 12345'))).toBe(false);
+    expect(isTransactionMessage(new Uint8Array(0))).toBe(false);
+    expect(isTransactionMessage(Uint8Array.from([1, 2, 3]))).toBe(false);
+    expect(isTransactionMessage(new Uint8Array(200))).toBe(false);
+    const v0 = MessageV0.compile({ payerKey: payer, recentBlockhash: PublicKey.default.toBase58(), instructions });
+    expect(isTransactionMessage(new VersionedTransaction(v0).serialize())).toBe(false);
+  });
+
+  it('is false when the bytes parse but do not round-trip, since no valid signature could cover them', () => {
+    const legacy = Message.compile({ payerKey: payer, recentBlockhash: PublicKey.default.toBase58(), instructions });
+    const trailing = Buffer.concat([legacy.serialize(), Buffer.from([0])]);
+    expect(isTransactionMessage(trailing)).toBe(false);
   });
 });

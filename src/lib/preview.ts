@@ -38,7 +38,7 @@ export const UNREADABLE_TRANSACTION_WARNING: PreviewWarning = {
  * warnings for the user to read before deciding.
  */
 export async function buildPreview(bytes: Uint8Array, simulate: Simulate): Promise<PreviewResult> {
-  let tx: Transaction | VersionedTransaction;
+  let tx: VersionedTransaction;
   let instructions: DecodedInstruction[];
   let warnings: PreviewWarning[];
   try {
