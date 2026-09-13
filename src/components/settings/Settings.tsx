@@ -357,7 +357,12 @@ export function Settings() {
         <CardContent className="space-y-4">
           <h3 className="text-[11px] uppercase tracking-[0.16em] text-fg-2">Backup</h3>
           <SettingRow title="Show seed phrase" description="Requires your password" onClick={() => setShowSeedPhrase(true)} testId="settings-show-seed" />
-          <SettingRow title="Export private key" description="Current account only" onClick={() => setShowPrivateKey(true)} />
+          <SettingRow
+            title="Export private key"
+            description="The account selected in the header"
+            onClick={() => setShowPrivateKey(true)}
+            testId="settings-show-key"
+          />
         </CardContent>
       </Card>
 
@@ -489,7 +494,9 @@ export function Settings() {
           <>
             <ModalHeader>Password required</ModalHeader>
             <ModalContent className="space-y-3">
-              <p className="text-sm text-fg-2">Export key for {accounts[activeAccountIndex]?.name}</p>
+              <p className="text-sm text-fg-2" data-testid="settings-key-account">
+                Export key for {accounts[activeAccountIndex]?.name}
+              </p>
               <PasswordField value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" onKeyDown={(e) => e.key === 'Enter' && handleExportPrivateKey()} />
             </ModalContent>
             <ModalFooter>

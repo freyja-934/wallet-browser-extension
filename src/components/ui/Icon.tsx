@@ -66,6 +66,7 @@ const paths: Record<string, ReactNode> = {
   ),
   activity: <path d="M4 14l4-4 3 3 5-6 4 4" />,
   chevron: <path d="M9 6l6 6-6 6" />,
+  plus: <path d="M12 5v14M5 12h14" />,
 };
 
 export type IconName = keyof typeof paths;
