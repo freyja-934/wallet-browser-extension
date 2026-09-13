@@ -9,6 +9,12 @@ export type SendAsset = {
   decimals: number;
   /** Owning token program, base58; absent for SOL. */
   programId?: string;
+  /**
+   * The token account this balance sits in, base58; absent for SOL. A wallet can
+   * hold several accounts of one mint, so the row the user clicked — not the
+   * mint — is what the send spends from.
+   */
+  source?: string;
 };
 
 interface UiState {

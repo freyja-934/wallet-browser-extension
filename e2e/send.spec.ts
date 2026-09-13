@@ -80,7 +80,8 @@ test('Amount with more decimals than SOL has is refused', async ({ context, exte
   await expect(popup.getByTestId('send-amount-error')).toHaveText('Use at most 9 decimal places');
   await expect(popup.getByTestId('send-continue')).toBeDisabled();
 
-  await popup.getByTestId('send-amount').fill('0.123456789');
+  // One lamport: the finest amount SOL has, and the parser takes it.
+  await popup.getByTestId('send-amount').fill('0.000000001');
   await expect(popup.getByTestId('send-amount-error')).toHaveCount(0);
   await expect(popup.getByTestId('send-continue')).toBeEnabled();
 });
@@ -93,7 +94,10 @@ test('Sending to the wallet itself costs exactly the fee', async ({ context, ext
 
   await openSend(popup);
   const before = BigInt(await connection.getBalance(owner, 'confirmed'));
-  expect(before).toBeGreaterThan(1_000_000n + FEE_LAMPORTS);
+  // The fixture must keep the 0.001 SOL it sends itself, the fee, and enough to stay
+  // rent-exempt — the worker refuses a send that would leave it between zero and the minimum.
+  const rent = BigInt(await connection.getMinimumBalanceForRentExemption(0));
+  expect(before).toBeGreaterThan(1_000_000n + FEE_LAMPORTS + rent);
 
   await popup.getByTestId('send-recipient').fill(TEST_ADDRESS);
   await popup.getByTestId('send-amount').fill('0.001');
@@ -103,6 +107,8 @@ test('Sending to the wallet itself costs exactly the fee', async ({ context, ext
   await expect(popup.getByTestId('send-fee')).toContainText(/[\d.]+ SOL/, { timeout: 30_000 });
   // The wallet exists, so no account gets created and nothing warns.
   await expect(popup.getByTestId('send-creates-account')).toHaveCount(0);
+  // Whatever the cluster charges today, the balance has to drop by exactly what Review promised.
+  const fee = lamportsIn(await popup.getByTestId('send-fee').innerText());
   await expect(popup.getByTestId('send-confirm')).toBeEnabled();
   await popup.getByTestId('send-confirm').click();
 
@@ -111,5 +117,5 @@ test('Sending to the wallet itself costs exactly the fee', async ({ context, ext
   // A self-transfer moves nothing; only the fee leaves, so the run can repeat.
   await expect
     .poll(async () => BigInt(await connection.getBalance(owner, 'confirmed')), { timeout: 30_000 })
-    .toBe(before - FEE_LAMPORTS);
+    .toBe(before - fee);
 });

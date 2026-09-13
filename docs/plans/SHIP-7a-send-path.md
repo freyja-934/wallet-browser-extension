@@ -35,6 +35,14 @@ Make popup sends correct end to end: integer units from the balance to the wire,
 - `getFeeForMessage` needs a compiled message with a recent blockhash; the estimate fetches one and discards it, the send fetches its own.
 - Token-2022 mints with transfer fees or transfer hooks may still fail on-chain; the error path surfaces the on-chain message.
 
+## Deviations
+
+Recorded as the steps landed, and after the review of the branch.
+
+1. **Step 1 also touched `src/lib/messages.ts` and `src/lib/protocol.test.ts`.** `ESTIMATE_FEE` is a new message type, so it had to join `EXTENSION_MESSAGE_TYPES` (the allowlist the sender gate and `parseRequest` read) and the per-type case table in `protocol.test.ts`, which is exhaustive by construction.
+2. **Step 3 confirms a real send.** The plan said Review only; the e2e now clicks Confirm on a 0.001 SOL transfer from the devnet fixture **to itself**, so only the fee (5000 lamports) leaves and the run repeats forever. A full `just e2e` spends 10000 lamports counting the dApp `signAndSend` case. Without it nothing proved the broadcast and confirmation path end to end.
+3. **Review-driven follow-ups** (applied after the three steps landed): the confirmation loop polls the recent status window and takes one `searchTransactionHistory` look before declaring a blockhash expired; expiry, timeout, and broadcast failures throw a typed `SendError` whose signature reaches the popup through the error text; the router refuses a second `SEND_TRANSFER` while one is confirming; `SEND_TRANSFER` / `ESTIMATE_FEE` carry the selected row's token account as `source` (verified against the signer and the mint before it is spent), and the modal keys its selector by token account rather than mint; a token estimate reports the recipient's *token* account and prices token-account rent; a token send to a token account is blocked rather than warned; the PDA warning is computed in the popup so it does not depend on the estimate; and a failed send stays on Review with its signature and an explorer link, with Confirm one-shot until Back.
+
 ## Parking lot
 
 - Confirming popup sends through the SHIP-6 balance diff before signing.

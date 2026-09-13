@@ -190,6 +190,7 @@ export function TokenList() {
                     balanceSmallest: token.amount,
                     decimals: token.decimals,
                     programId: token.programId,
+                    source: token.tokenAccount,
                   }),
                 )
               }
