@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
+import { accountAt } from '../../lib/messages';
 import { useBalances, usePrices, useTokenNames } from '../../hooks/useWalletQueries';
 import { errorMessage } from '../../lib/errors';
 import { displayTokenAmount } from '../../lib/parse-history';
@@ -43,7 +44,7 @@ export function TokenList() {
   const dispatch = useAppDispatch();
   const { accounts, activeAccountIndex } = useAppSelector((state) => state.wallet);
   const { hideSmallBalances, isRefreshing } = useAppSelector((state) => state.ui);
-  const address = accounts[activeAccountIndex]?.address;
+  const address = accountAt(accounts, activeAccountIndex)?.address;
   const { data, isError, error, refetch } = useBalances(address);
   // On-chain names arrive after balances; until then, and if they never do, a token shows its short mint.
   const { data: names } = useTokenNames(data?.tokens ?? []);

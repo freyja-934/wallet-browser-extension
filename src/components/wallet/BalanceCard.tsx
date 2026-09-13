@@ -1,3 +1,4 @@
+import { accountAt } from '../../lib/messages';
 import { useBalances, usePrices } from '../../hooks/useWalletQueries';
 import { errorMessage } from '../../lib/errors';
 import { formatLamports } from '../../lib/units';
@@ -24,7 +25,7 @@ function usdTotal(balances: WalletBalances | undefined, prices: WalletPrices | u
 export function BalanceCard() {
   const { accounts, activeAccountIndex } = useAppSelector((state) => state.wallet);
   const cluster = useAppSelector((state) => state.ui.cluster);
-  const address = accounts[activeAccountIndex]?.address;
+  const address = accountAt(accounts, activeAccountIndex)?.address;
   const balances = useBalances(address);
   const prices = usePrices(balances.data?.tokens.map((token) => token.mint) ?? []);
 

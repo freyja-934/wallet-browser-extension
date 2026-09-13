@@ -172,17 +172,44 @@ test('add a second account, switch to it, rename it, and switch back', async ({ 
   await popup.getByTestId('account-rename-input').press('Enter');
   await expect(switcher).toContainText('Savings');
 
+  // Only Enter commits a rename: clicking away abandons the draft, and an empty
+  // one leaves edit mode rather than sticking there with nothing to submit.
+  await popup.getByTestId('account-rename').nth(1).click();
+  await popup.getByTestId('account-rename-input').fill('Scratch');
+  await popup.getByTestId('account-rename-input').blur();
+  await expect(popup.getByTestId('account-rename-input')).toHaveCount(0);
+  await expect(popup.getByTestId('account-option').nth(1)).toContainText('Savings');
+  await popup.getByTestId('account-rename').nth(1).click();
+  await popup.getByTestId('account-rename-input').fill('');
+  await popup.getByTestId('account-rename-input').press('Enter');
+  await expect(popup.getByTestId('account-rename-input')).toHaveCount(0);
+  await expect(popup.getByTestId('account-option').nth(1)).toContainText('Savings');
+
   // The list is still open behind the rename, so the switch back is one click.
   await popup.getByTestId('account-option').nth(0).click();
   await expect(switcher).toContainText('Account 1');
   await expect(popup.getByTestId('header-address')).toHaveText(firstAddress);
 
-  // Both accounts, and the new name, survive a lock and unlock.
+  // Both accounts, and the new name, survive a lock and unlock — on the account
+  // the user was actually on when the wallet locked.
   await popup.getByLabel('Lock wallet').click();
   await popup.getByTestId('unlock-password').fill(TEST_PASSWORD);
   await popup.getByTestId('unlock-submit').click();
   await expect(popup.getByTestId('open-receive')).toBeVisible();
+  await expect(switcher).toContainText('Account 1');
+  await expect(popup.getByTestId('header-address')).toHaveText(firstAddress);
   await switcher.click();
   await expect(popup.getByTestId('account-option')).toHaveCount(2);
   await expect(popup.getByTestId('account-option').nth(1)).toContainText('Savings');
+
+  // And the same the other way round: locked while on the second account, the
+  // unlock comes back there rather than quietly moving to the first address.
+  await popup.getByTestId('account-option').nth(1).click();
+  await expect(switcher).toContainText('Savings');
+  await popup.getByLabel('Lock wallet').click();
+  await popup.getByTestId('unlock-password').fill(TEST_PASSWORD);
+  await popup.getByTestId('unlock-submit').click();
+  await expect(popup.getByTestId('open-receive')).toBeVisible();
+  await expect(switcher).toContainText('Savings');
+  await expect(popup.getByTestId('header-address')).toHaveText(secondAddress);
 });

@@ -133,4 +133,50 @@ describe('walletSlice', () => {
       expect(walletSlice).not.toHaveProperty(name);
     }
   });
+
+  /**
+   * The names above are the thunks that used to carry a secret; a new one would
+   * be called something else and walk past that list. So this one asks the
+   * module what it exports: every thunk is dispatched with a sentinel string
+   * where its argument goes, and the sentinel must not turn up in what the store
+   * keeps (payloads, state) or in anything the popup then says to the worker.
+   * A thunk that carries a password does both, whatever it is named.
+   *
+   * `meta.arg` is the one place excluded, and only because Redux Toolkit stamps
+   * it on every thunk's actions whether the thunk reads it or not — which is the
+   * whole reason no thunk may be handed a secret in the first place.
+   */
+  it('no exported thunk forwards its argument, whatever the thunk is called', async () => {
+    await createFixtureWallet();
+    const store = makeStore();
+    const SENTINEL = 'sentinel-not-a-real-secret-0a1b2c';
+
+    const sentToWorker: unknown[] = [];
+    const toRouter = chromeStub.runtime.sendMessage;
+    chromeStub.runtime.sendMessage = async (message: unknown) => {
+      sentToWorker.push(message);
+      return toRouter(message as never);
+    };
+
+    // Whatever the module exports that looks like a thunk, by shape, not by name.
+    const thunks = Object.values(walletSlice as Record<string, unknown>).filter(
+      (value) => typeof value === 'function' && typeof (value as { typePrefix?: unknown }).typePrefix === 'string',
+    ) as Array<(arg: unknown) => never>;
+    // If the module ever stops exporting thunks, this test has stopped testing anything.
+    expect(thunks.length).toBeGreaterThan(0);
+
+    for (const thunk of thunks) {
+      await store.dispatch(thunk(SENTINEL));
+    }
+
+    const recorded = actions.map((action) => ({
+      type: action.type,
+      payload: (action as { payload?: unknown }).payload,
+      error: (action as { error?: unknown }).error,
+    }));
+    const seen = JSON.stringify({ recorded, state: store.getState(), sentToWorker });
+    expect(seen).not.toContain(SENTINEL);
+    // The worker was actually spoken to, so the check above had something to look at.
+    expect(sentToWorker.length).toBeGreaterThanOrEqual(thunks.length);
+  });
 });

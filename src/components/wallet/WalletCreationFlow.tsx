@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
+import { errorMessage } from '../../lib/errors';
 import { generateSeedPhrase } from '../../lib/wallet';
 import { extensionClient } from '../../messaging/client';
 import { initializeWallet } from '../../store/slices/walletSlice';
@@ -19,6 +20,11 @@ export function WalletCreationFlow({ onComplete }: { onComplete?: () => void }) 
   const [currentStep, setCurrentStep] = useState<FlowStep>('choice');
   const [seedPhrase, setSeedPhrase] = useState('');
   const [isImported, setIsImported] = useState(false);
+  /** A create is in flight: the password screen's submit stays disabled until it settles. */
+  const [busy, setBusy] = useState(false);
+
+  // The phrase does not outlive the flow: closing the popup mid-onboarding drops it.
+  useEffect(() => () => setSeedPhrase(''), []);
 
   const handleCreateNew = () => {
     const { mnemonic } = generateSeedPhrase(12);
@@ -40,20 +46,40 @@ export function WalletCreationFlow({ onComplete }: { onComplete?: () => void }) 
   /**
    * The worker is told the phrase directly: a Redux action carrying a mnemonic
    * would sit in the store's action history (and any devtools attached to it).
-   * The phrase lives in this component's state and nowhere else, and is dropped
-   * as soon as the vault exists; Redux only ever learns the public state.
+   * The phrase lives in this component's state and nowhere else; Redux only ever
+   * learns the public state.
+   *
+   * It is held in a local const for the whole call and cleared only once the
+   * flow has finished. Clearing it early made a retry after any failure here
+   * send an empty phrase, which the worker read as "generate a fresh one" — a
+   * wallet the user had already written down, replaced by one nobody had seen.
+   * Reading the state back is a separate try for the same reason: the vault
+   * exists by then, and a failed read is not a failed create.
    */
   const handlePasswordCreate = async (password: string) => {
+    if (busy) return;
+    const phrase = seedPhrase;
+    setBusy(true);
     try {
-      await extensionClient.createWallet(password, seedPhrase);
-      setSeedPhrase('');
-      await dispatch(initializeWallet()).unwrap();
-      toast.success(isImported ? 'Wallet imported' : 'Wallet created');
-      setCurrentStep('complete');
-      onComplete?.();
-    } catch {
-      toast.error('Failed to create wallet. Please try again.');
+      await extensionClient.createWallet(password, phrase);
+    } catch (error) {
+      setBusy(false);
+      toast.error(errorMessage(error, 'Failed to create wallet. Please try again.'));
+      return;
     }
+
+    let refreshed = true;
+    try {
+      await dispatch(initializeWallet()).unwrap();
+    } catch {
+      refreshed = false;
+    }
+    setSeedPhrase('');
+    setCurrentStep('complete');
+    setBusy(false);
+    if (refreshed) toast.success(isImported ? 'Wallet imported' : 'Wallet created');
+    else toast.error('Wallet created. Reopen the popup to continue.');
+    onComplete?.();
   };
 
   const handleBack = () => {
@@ -113,7 +139,7 @@ export function WalletCreationFlow({ onComplete }: { onComplete?: () => void }) 
       case 'import-seed':
         return <SeedPhraseImport onImport={handleImportSeed} onBack={handleBack} />;
       case 'create-password':
-        return <PasswordCreate onSubmit={handlePasswordCreate} onBack={handleBack} />;
+        return <PasswordCreate onSubmit={handlePasswordCreate} onBack={handleBack} busy={busy} />;
       default:
         return null;
     }

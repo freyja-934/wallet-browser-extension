@@ -6,7 +6,7 @@ import { SETTINGS_QUERY_KEY, syncSettings, useSettings, useUpdateSettings } from
 import { useInvalidateWalletData } from '../../hooks/useWalletQueries';
 import { errorMessage } from '../../lib/errors';
 import { validatePasswordStrength } from '../../lib/encryption-simple';
-import { DEFAULT_SETTINGS } from '../../lib/messages';
+import { accountAt, DEFAULT_SETTINGS } from '../../lib/messages';
 import { originPatternFor, parseHttpsUrl, saveRpcSettings, type RpcProbeResult, type SaveRpcOutcome } from '../../lib/rpc-save';
 import { extensionClient } from '../../messaging/client';
 import { clearWalletData, initializeWallet } from '../../store/slices/walletSlice';
@@ -83,7 +83,7 @@ export function Settings() {
   const hideSmallBalances = settings?.hideSmallBalances ?? reduxHideSmallBalances;
   const cluster = settings?.cluster ?? reduxCluster;
   const autoLockMinutes = settings?.autoLockTimeout ?? DEFAULT_SETTINGS.autoLockTimeout;
-  const address = accounts[activeAccountIndex]?.address;
+  const address = accountAt(accounts, activeAccountIndex)?.address;
   const invalidate = useInvalidateWalletData();
   const [showSeedPhrase, setShowSeedPhrase] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
@@ -168,8 +168,9 @@ export function Settings() {
     try {
       setSeedPhrase(await extensionClient.exportSeed(password));
       setPassword('');
-    } catch {
-      toast.error('Invalid password');
+    } catch (error) {
+      // The worker's own words: a vault this build cannot read is not a typo in the password.
+      toast.error(errorMessage(error, 'Invalid password'));
       setPassword('');
     }
   };
@@ -202,8 +203,8 @@ export function Settings() {
     try {
       setPrivateKey(await extensionClient.exportPrivateKey(password, activeAccountIndex));
       setPassword('');
-    } catch {
-      toast.error('Invalid password');
+    } catch (error) {
+      toast.error(errorMessage(error, 'Invalid password'));
       setPassword('');
     }
   };
@@ -495,7 +496,7 @@ export function Settings() {
             <ModalHeader>Password required</ModalHeader>
             <ModalContent className="space-y-3">
               <p className="text-sm text-fg-2" data-testid="settings-key-account">
-                Export key for {accounts[activeAccountIndex]?.name}
+                Export key for {accountAt(accounts, activeAccountIndex)?.name}
               </p>
               <PasswordField value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" onKeyDown={(e) => e.key === 'Enter' && handleExportPrivateKey()} />
             </ModalContent>

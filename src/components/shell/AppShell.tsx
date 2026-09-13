@@ -5,6 +5,7 @@ import { useSettings } from '../../hooks/useSettings';
 import { hideSettings, setActiveView, showSettings } from '../../store/slices/uiSlice';
 import { lockWallet } from '../../store/slices/walletSlice';
 import { useAppDispatch, useAppSelector } from '../../store/store';
+import { accountAt } from '../../lib/messages';
 import { AccountSwitcher } from '../wallet/AccountSwitcher';
 import { PopupFrame } from '../ui/Atmosphere';
 import { IconButton } from '../ui/Button';
@@ -19,7 +20,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const cluster = settings?.cluster ?? reduxCluster;
   // The endpoint that gets the first try; shown on hover so a custom URL is visible at a glance.
   const primaryRpcHost = new URL(rpcUrlsFor(cluster, settings ?? {})[0]).host;
-  const activeAccount = accounts[activeAccountIndex];
+  // The active account by its own index; the list's order is not its identity.
+  const activeAccount = accountAt(accounts, activeAccountIndex);
   const atmosphere = !showSettingsModal && activeView === 'tokens' ? 'video' : 'still';
 
   const handleCopy = async () => {

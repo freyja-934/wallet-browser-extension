@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import toast from 'react-hot-toast';
 import { errorMessage } from '../../lib/errors';
-import { MAX_ACCOUNT_NAME_LENGTH } from '../../lib/messages';
+import { accountAt, MAX_ACCOUNT_NAME_LENGTH } from '../../lib/messages';
 import { extensionClient } from '../../messaging/client';
 import { initializeWallet } from '../../store/slices/walletSlice';
 import { useAppDispatch, useAppSelector } from '../../store/store';
@@ -23,12 +23,17 @@ export function AccountSwitcher() {
   const [renaming, setRenaming] = useState<number | null>(null);
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
-  const active = accounts[activeAccountIndex];
+  // By the account's own index, not its position in the list.
+  const active = accountAt(accounts, activeAccountIndex);
 
   if (!active) return null;
 
   const run = async (action: () => Promise<unknown>, fallback: string): Promise<boolean> => {
-    if (busy) return false;
+    // Say so rather than swallowing the click: an unexplained no-op reads as a broken button.
+    if (busy) {
+      toast.error('One change at a time — still finishing the last one');
+      return false;
+    }
     setBusy(true);
     try {
       await action();
@@ -42,9 +47,14 @@ export function AccountSwitcher() {
     }
   };
 
+  const cancelRename = () => {
+    setRenaming(null);
+    setDraft('');
+  };
+
   const close = () => {
     setOpen(false);
-    setRenaming(null);
+    cancelRename();
   };
 
   const handleSwitch = async (index: number) => {
@@ -61,12 +71,15 @@ export function AccountSwitcher() {
     }
   };
 
+  /** Enter commits. An empty draft is not a rename: leave edit mode rather than trapping the user in it. */
   const handleRename = async (index: number) => {
     const name = draft.trim();
-    if (!name) return;
+    if (!name) {
+      cancelRename();
+      return;
+    }
     if (await run(() => extensionClient.renameAccount(index, name), 'Could not rename that account')) {
-      setRenaming(null);
-      setDraft('');
+      cancelRename();
     }
   };
 
@@ -107,9 +120,11 @@ export function AccountSwitcher() {
                     onChange={(e) => setDraft(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') void handleRename(account.index);
-                      if (e.key === 'Escape') setRenaming(null);
+                      if (e.key === 'Escape') cancelRename();
                     }}
-                    onBlur={() => void handleRename(account.index)}
+                    // Clicking away abandons the edit; only Enter commits it, so
+                    // a half-typed name never becomes the account's name by accident.
+                    onBlur={cancelRename}
                     data-testid="account-rename-input"
                     className="h-9 flex-1 rounded-xl border border-white/15 bg-black/40 px-2 text-xs text-fg-0 focus:outline-none focus:shadow-focus"
                   />

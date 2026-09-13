@@ -36,3 +36,30 @@ test('paste import normalises spacing and case', async ({ context, extensionId }
   // The same wallet the clean phrase produces, not a different derivation.
   await expect(page.getByText(`${TEST_ADDRESS.slice(0, 4)}\u2026${TEST_ADDRESS.slice(-4)}`)).toBeVisible();
 });
+
+test('a second create is refused rather than replacing the wallet', async ({ context, extensionId }) => {
+  test.setTimeout(90_000);
+  const page = await openPopup(context, extensionId);
+  await importWallet(page);
+  const short = `${TEST_ADDRESS.slice(0, 4)}\u2026${TEST_ADDRESS.slice(-4)}`;
+  await expect(page.getByTestId('header-address')).toHaveText(short);
+
+  // The shape the onboarding retry used to send: the same CREATE_WALLET round
+  // trip the popup makes, with no phrase — which the worker would once have read
+  // as "generate a fresh one" and written over the wallet just imported.
+  const refused = await page.evaluate(
+    (password) => chrome.runtime.sendMessage({ type: 'CREATE_WALLET', password }),
+    TEST_PASSWORD,
+  );
+  expect(refused).toMatchObject({ success: false, error: 'Wallet already exists' });
+  // With a phrase too: an existing vault is never replaced in place.
+  const refusedWithPhrase = await page.evaluate(
+    ([password, seedPhrase]) => chrome.runtime.sendMessage({ type: 'CREATE_WALLET', password, seedPhrase }),
+    [TEST_PASSWORD, TEST_MNEMONIC],
+  );
+  expect(refusedWithPhrase).toMatchObject({ success: false, error: 'Wallet already exists' });
+
+  // Same wallet as before, after a fresh read of worker state.
+  await page.reload();
+  await expect(page.getByTestId('header-address')).toHaveText(short);
+});

@@ -56,6 +56,24 @@ The stored blob is:
 - `changePassword` rewrites the vault at the current version and enforces
   `validatePasswordStrength` on the new password, the same check the create
   screen applies (the old rule was "at least 8 characters" in the popup only).
+  `createWallet` enforces the same rule, and refuses outright when a vault
+  already exists: an empty phrase means "generate one", so a create against a
+  live vault would replace a wallet its owner has written down with one nobody
+  has seen. Starting over goes through Clear all wallet data.
+- **Which account is active is public state, and persists.** It is stored beside
+  the public account list in `cinder_accounts`, not only in the session, so a
+  lock no longer moves the user back to the first account on unlock; the session
+  copy stays the live value, and an unlock with no session falls back to the
+  stored index, clamped to an account that still exists. A stored index names an
+  account's derivation index, never its position in the list.
+- **Proving the password is not unlocking.** `exportSeed`, `exportPrivateKey`
+  and `changePassword` work from the payload they just decrypted and refresh the
+  session only when one was already open; on a locked wallet they answer and
+  leave it locked, with no session, no auto-lock alarm, and no `onUnlocked`.
+- A blob whose `version` this build does not know, or whose `kdf` it does not
+  understand, is refused with `Unsupported vault format` before any derivation,
+  and that message reaches the unlock screen and Settings unchanged. Only an
+  actual decrypt or parse failure is reported as `Invalid password`.
 
 ## Consequences
 
@@ -64,7 +82,8 @@ The stored blob is:
   derivation, averaged over five runs. Low-end hardware is several times slower;
   budget up to about 1 s there. Unlock, export, and change-password each derive
   the key once (`unlockWithPayload` exists so export and change-password do not
-  decrypt twice), and the unlock button shows a spinner while it runs.
+  decrypt twice), and the unlock button reads `Unlocking…` and is disabled while
+  it runs, so the wait is visible without a separate spinner.
 - An unlock that migrates pays for one extra derivation — once, ever.
 - A vault written by this build cannot be read by an older build. That is the
   point of the version field, and there is no downgrade path.
