@@ -60,8 +60,9 @@ export const extensionClient = {
   rejectRequest: async (id: string, reason?: string) => {
     await send('REJECT_REQUEST', { id, reason });
   },
-  previewTransaction: async (transaction: number[]) =>
-    (await send('PREVIEW_TRANSACTION', { transaction })).preview,
+  /** `accountIndex` previews for the account a pending approval is pinned to, not the active one. */
+  previewTransaction: async (transaction: number[], accountIndex?: number) =>
+    (await send('PREVIEW_TRANSACTION', { transaction, accountIndex })).preview,
   getConnectedSites: async () => (await send('GET_CONNECTED_SITES', {})).sites,
   revokeSite: async (origin: string) => {
     await send('REVOKE_SITE', { origin });

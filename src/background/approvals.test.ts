@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { PAGE_TIMEOUT_MS } from '../lib/messages';
 import { installChromeStub, STUB_EXTENSION_ID, uninstallChromeStub, type ChromeStub } from '../test/chrome-stub';
 import {
+  ACCOUNT_CHANGED_MESSAGE,
   APPROVAL_TTL_MS,
   cancelApproval,
   claimApproval,
@@ -10,11 +11,13 @@ import {
   getApprovalResult,
   getPending,
   installApprovalLifecycle,
+  onAccount,
   onCluster,
   onTabRemoved,
   onWindowRemoved,
   rejectAll,
   rejectApproval,
+  rejectForAccountChange,
   rejectForClusterChange,
   rejectForOrigin,
   settleClaimed,
@@ -173,6 +176,51 @@ describe('onCluster / rejectForClusterChange', () => {
     const id = await enqueueApproval('signTransaction', A, { transactions: [[1]], chain: 'solana:mainnet' });
     await claimApproval(id);
     expect(await rejectForClusterChange('devnet')).toEqual([]);
+    await expect(getApprovalResult(id)).resolves.toEqual({ status: 'pending' });
+  });
+});
+
+describe('onAccount / rejectForAccountChange', () => {
+  it('a signature request follows the account it was pinned to at enqueue', () => {
+    const base = { id: 'x', origin: A, createdAt: 0, deadline: 1 };
+    const sign = { ...base, kind: 'signTransaction' as const, transactions: [[1]] };
+    expect(onAccount({ ...sign, accountAtEnqueue: 0 }, 0)).toBe(true);
+    expect(onAccount({ ...sign, accountAtEnqueue: 0 }, 1)).toBe(false);
+    expect(onAccount({ ...sign, accountAtEnqueue: 3 }, 3)).toBe(true);
+    // A request that pinned nothing signs with whatever is active at Approve, and the
+    // window named the account that was active when it rendered: a change invalidates it.
+    expect(onAccount(sign, 1)).toBe(false);
+    expect(onAccount(sign, 0)).toBe(false);
+    expect(onAccount({ ...base, kind: 'signMessage', messages: [[1]], accountAtEnqueue: 0 }, 1)).toBe(false);
+    // Connect shares every account, so the active one moving does not invalidate it.
+    expect(onAccount({ ...base, kind: 'connect', accountAtEnqueue: 0 }, 1)).toBe(true);
+  });
+
+  it('rejects the pending signatures bound to another account and closes their windows', async () => {
+    const message = await enqueueApproval('signMessage', A, { messages: [[1]], accountAtEnqueue: 0 });
+    const transaction = await enqueueApproval('signTransaction', B, { transactions: [[1]], accountAtEnqueue: 0 });
+    const stillMine = await enqueueApproval('signMessage', 'https://c.example', { messages: [[1]], accountAtEnqueue: 1 });
+    // Pinned to nothing: it would sign with whatever is active, so it goes too.
+    const unpinned = await enqueueApproval('signMessage', 'https://e.example', { messages: [[1]] });
+    const connect = await enqueueApproval('connect', 'https://d.example');
+    const [messageWindow, transactionWindow, , unpinnedWindow] = chromeStub.windows.created();
+
+    expect(await rejectForAccountChange(1)).toEqual([message, transaction, unpinned]);
+    await expect(getApprovalResult(unpinned)).resolves.toEqual({ status: 'rejected', error: ACCOUNT_CHANGED_MESSAGE });
+    await expect(getApprovalResult(message)).resolves.toEqual({ status: 'rejected', error: ACCOUNT_CHANGED_MESSAGE });
+    await expect(getApprovalResult(transaction)).resolves.toEqual({ status: 'rejected', error: ACCOUNT_CHANGED_MESSAGE });
+    await expect(getApprovalResult(stillMine)).resolves.toEqual({ status: 'pending' });
+    await expect(getApprovalResult(connect)).resolves.toEqual({ status: 'pending' });
+    expect(chromeStub.windows.removed()).toEqual([messageWindow.id, transactionWindow.id, unpinnedWindow.id]);
+    // Switching back is the same rule the other way round: now it is the other one that goes.
+    expect(await rejectForAccountChange(0)).toEqual([stillMine]);
+    await expect(getApprovalResult(connect)).resolves.toEqual({ status: 'pending' });
+  });
+
+  it('leaves a claimed request alone', async () => {
+    const id = await enqueueApproval('signMessage', A, { messages: [[1]], accountAtEnqueue: 0 });
+    await claimApproval(id);
+    expect(await rejectForAccountChange(1)).toEqual([]);
     await expect(getApprovalResult(id)).resolves.toEqual({ status: 'pending' });
   });
 });

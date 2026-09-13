@@ -10,6 +10,8 @@ import {
 import { DAP_MESSAGE_TYPES, EXTENSION_MESSAGE_TYPES } from './messages';
 
 const ORIGIN = 'https://dapp.example';
+/** A valid base58 Solana address: the public devnet fixture. */
+const ADDRESS = 'HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk';
 
 describe('buildRuntimeMessage', () => {
   it('ignores a type smuggled in the payload', () => {
@@ -65,6 +67,36 @@ describe('buildRuntimeMessage', () => {
         transactions: [[1]],
       });
     }
+  });
+
+  it('carries the account each sign type names, and only when it is an address', () => {
+    for (const [type, items] of [
+      ['SIGN_MESSAGE', { messages: [[1]] }],
+      ['SIGN_TRANSACTION', { transactions: [[1]] }],
+      ['SIGN_AND_SEND_TRANSACTION', { transactions: [[1]] }],
+    ] as const) {
+      expect(buildRuntimeMessage(type, { ...items, account: ADDRESS }, ORIGIN)).toStrictEqual({
+        type,
+        origin: ORIGIN,
+        ...items,
+        account: ADDRESS,
+      });
+      // No account named is the field left off entirely, not a null on the wire.
+      for (const account of [undefined, null, '']) {
+        expect(buildRuntimeMessage(type, { ...items, account }, ORIGIN)).toStrictEqual({ type, origin: ORIGIN, ...items });
+      }
+      // The page controls this; a derivation index dressed up as one is not an address.
+      for (const account of [1, '1', 'not-an-address', {}]) {
+        expect(() => buildRuntimeMessage(type, { ...items, account }, ORIGIN)).toThrow('Invalid account');
+      }
+      // Copied field by field: an account beside a smuggled type still builds the outer type.
+      expect(buildRuntimeMessage(type, { ...items, account: ADDRESS, type: 'EXPORT_SEED' }, ORIGIN).type).toBe(type);
+    }
+    // A type that takes no account drops it.
+    expect(buildRuntimeMessage('WALLET_CONNECT', { account: ADDRESS }, ORIGIN)).toStrictEqual({
+      type: 'WALLET_CONNECT',
+      origin: ORIGIN,
+    });
   });
 
   it('allows an empty message but never an empty transaction or an empty batch', () => {

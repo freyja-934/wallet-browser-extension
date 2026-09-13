@@ -87,7 +87,7 @@ Then the three certifications, all of which are true here: data is not sold to t
 - **https://api.coingecko.com/*** — Mainnet USD prices only.
 - **optional_host_permissions https://*/*** — Not held at install. Chrome asks for it at the moment the user saves a custom RPC URL in Settings, and the grant is narrowed to that one URL's origin; it is dropped again if the endpoint fails its health probe. A user who never enters an RPC URL is never asked.
 - **Host access / content scripts on https://*/* and http://localhost/*** — Inject Wallet Standard so sites can request connect and sign. No data is sent until the user approves.
-- **Content security policy** — `script-src 'self'; object-src 'self'; img-src 'self' https: data:; media-src 'self'`. `img-src` allows https because token and NFT artwork is fetched from whatever host a token's own metadata names. `media-src 'self'` is deliberate: the only media the extension plays is its own background still, and playing remote NFT audio or video is out of scope, so no remote media can load.
+- **Content security policy** — `script-src 'self'; object-src 'self'; img-src 'self' https: data:; media-src 'self'`. `img-src` allows https because token and NFT artwork is fetched from whatever host a token's own metadata names. `media-src 'self'` is deliberate: the only media the extension plays is its own bundled background video and its poster image, and playing remote NFT audio or video is out of scope, so no remote media can load.
 
 ## Single purpose
 

@@ -27,6 +27,7 @@ import {
   getPublicState,
   getSettings,
   lock,
+  readStoredAccounts,
   renameAccount,
   signMessage,
   switchAccount,
@@ -44,6 +45,7 @@ import {
   NETWORK_CHANGED_MESSAGE,
   onCluster,
   rejectApproval,
+  rejectForAccountChange,
   rejectForClusterChange,
   rejectForOrigin,
   settleClaimed,
@@ -125,6 +127,51 @@ async function assertChain(chain: string | undefined): Promise<WalletSettings['c
   return cluster;
 }
 
+/** A page named an address that is not one of this wallet's accounts. */
+export const UNKNOWN_ACCOUNT_MESSAGE = 'Cinder does not have that account';
+
+/**
+ * Which account a signature request is bound to, resolved once when it is
+ * enqueued.
+ *
+ * The page names an address, never an index: it is looked up in the wallet's own
+ * account list here, so nothing page-controlled can reach `getKeypair`. An
+ * address this wallet does not hold is refused rather than signed by whichever
+ * account happens to be active.
+ *
+ * A locked wallet still resolves. `getPublicState` reports no accounts while
+ * locked, but the list itself is public and survives a lock on disk, so the
+ * address is checked against `cinder_accounts` instead: a request that arrives
+ * as the auto-lock fires still queues, pinned, for the window to unlock inline,
+ * and an address this wallet does not hold is still refused. Only a wallet with
+ * no stored list at all leaves the request unpinned.
+ */
+async function resolveSigner(address: string | undefined): Promise<number | undefined> {
+  const state = await getPublicState();
+  if (!state.isLocked) {
+    if (address === undefined) return state.activeAccountIndex;
+    const account = state.accounts.find((entry) => entry.address === address);
+    if (!account) throw new Error(UNKNOWN_ACCOUNT_MESSAGE);
+    return account.index;
+  }
+  const stored = await readStoredAccounts();
+  const accounts = stored?.accounts ?? [];
+  if (accounts.length === 0) {
+    // Nothing to resolve against: refuse a name rather than guess at it, and
+    // leave an unnamed request to the keyring's own fallback.
+    if (address !== undefined) throw new Error('Wallet is locked');
+    return undefined;
+  }
+  if (address !== undefined) {
+    const account = accounts.find((entry) => entry.address === address);
+    if (!account) throw new Error(UNKNOWN_ACCOUNT_MESSAGE);
+    return account.index;
+  }
+  // The selection a lock did not throw away — the same index `unlock` restores.
+  const active = accounts.find((entry) => entry.index === stored?.activeAccountIndex) ?? accounts[0];
+  return active?.index;
+}
+
 /** One arm of the worker's surface: the request that type carries, answered with the response it maps to. */
 type Handler<T extends ExtensionMessageType> = (
   request: Extract<WalletRequest, { type: T }>,
@@ -143,12 +190,14 @@ async function enqueueSignApproval(
 ): Promise<{ pendingId: string }> {
   await requireConnected(origin);
   const clusterAtEnqueue = await assertChain(request.chain);
+  const accountAtEnqueue = await resolveSigner(request.account);
   const kind = request.type === 'SIGN_AND_SEND_TRANSACTION' ? 'signAndSendTransaction' : 'signTransaction';
   const extra: Partial<PendingApproval> = {
     ...frame,
     transactions: request.transactions.map((transaction) => [...transaction]),
     clusterAtEnqueue,
   };
+  if (accountAtEnqueue !== undefined) extra.accountAtEnqueue = accountAtEnqueue;
   if (request.chain !== undefined) extra.chain = request.chain;
   if (request.options !== undefined) extra.options = { ...request.options };
   return { pendingId: await enqueueApproval(kind, origin, extra) };
@@ -181,7 +230,13 @@ const handlers: { [T in ExtensionMessageType]: Handler<T> } = {
   LOCK: async () => ({ state: await lock() }),
   CLEAR_WALLET: async () => ({ state: await clearWallet() }),
   SWITCH_ACCOUNT: async (request) => {
+    const before = (await getPublicState()).activeAccountIndex;
     const state = await switchAccount(request.index);
+    if (state.activeAccountIndex !== before) {
+      // A signature waiting for Approve was built for the account the user has
+      // just moved off: it is withdrawn rather than signed by the new one.
+      await rejectForAccountChange(state.activeAccountIndex);
+    }
     await sendToConnected('accountsChanged', await snapshot());
     return { state };
   },
@@ -236,13 +291,16 @@ const handlers: { [T in ExtensionMessageType]: Handler<T> } = {
     if (request.messages.some((message) => isTransactionMessage(Uint8Array.from(message)))) {
       throw new Error('Refusing to sign a transaction as a message');
     }
+    const accountAtEnqueue = await resolveSigner(request.account);
     const messages = request.messages.map((message) => [...message]);
+    const extra: Partial<PendingApproval> = { ...frame, messages };
+    if (accountAtEnqueue !== undefined) extra.accountAtEnqueue = accountAtEnqueue;
     // One approval for the whole batch: the window shows every item, the page gets every signature.
-    return { pendingId: await enqueueApproval('signMessage', origin, { ...frame, messages }) };
+    return { pendingId: await enqueueApproval('signMessage', origin, extra) };
   },
   SIGN_TRANSACTION: enqueueSignApproval,
   SIGN_AND_SEND_TRANSACTION: enqueueSignApproval,
-  PREVIEW_TRANSACTION: async (request) => previewTransaction(Uint8Array.from(request.transaction)),
+  PREVIEW_TRANSACTION: async (request) => previewTransaction(Uint8Array.from(request.transaction), request.accountIndex),
   GET_PENDING_REQUEST: async (request) => ({ request: await getPending(request.id) }),
   POLL_APPROVAL: async (request, caller) => getApprovalResult(request.id, ownRequestOrigin(caller)),
   APPROVE_REQUEST: async (request) => {
@@ -352,17 +410,21 @@ export async function fulfillApproval(request: PendingApproval): Promise<Record<
       cluster,
     };
   }
+  // The account the approval was built for, never whichever one is active now.
+  // Absent only for a request enqueued while locked, where the keyring falls
+  // back to the active account exactly as it did before.
+  const signer = request.accountAtEnqueue;
   if (request.kind === 'signMessage') {
     const signatures: number[][] = [];
     for (const message of request.messages ?? []) {
-      signatures.push([...(await signMessage(Uint8Array.from(message)))]);
+      signatures.push([...(await signMessage(Uint8Array.from(message), signer))]);
     }
     return { signatures };
   }
   // Every item in the order the page gave them; the outputs line up with the inputs.
   const signed: Uint8Array[] = [];
   for (const transaction of request.transactions ?? []) {
-    signed.push(await signTransactionBytes(Uint8Array.from(transaction)));
+    signed.push(await signTransactionBytes(Uint8Array.from(transaction), signer));
   }
   if (request.kind === 'signAndSendTransaction') {
     const connection = await getConnection();
@@ -429,8 +491,8 @@ async function waitForCommitment(
 }
 
 /** `VersionedTransaction.deserialize` accepts legacy wire bytes too, so there is one path. */
-async function signTransactionBytes(bytes: Uint8Array): Promise<Uint8Array> {
-  const keypair = await getKeypair();
+async function signTransactionBytes(bytes: Uint8Array, accountIndex?: number): Promise<Uint8Array> {
+  const keypair = await getKeypair(accountIndex);
   const tx = VersionedTransaction.deserialize(bytes);
   tx.sign([keypair]);
   return tx.serialize();
@@ -465,13 +527,20 @@ function mintDecimals(mints: PublicKey[], infos: (AccountInfo<Buffer> | null)[])
  * older state. `buildPreview` always reads accounts before it simulates, so the
  * slot travels between the two deps here and the pure pipeline is unchanged.
  */
-export async function previewTransaction(bytes: Uint8Array): Promise<{ preview: PreviewResult }> {
+export async function previewTransaction(
+  bytes: Uint8Array,
+  accountIndex?: number,
+): Promise<{ preview: PreviewResult }> {
   const state = await getPublicState();
-  const active = accountAt(state.accounts, state.activeAccountIndex)?.address;
-  if (state.isLocked || !active) throw new Error('Wallet is locked');
+  if (state.isLocked) throw new Error('Wallet is locked');
+  // The approval window asks for the account its request is pinned to, so `signerOk`
+  // and the balance diff describe the key that will actually sign; everything else
+  // previews for the active account.
+  const owner = accountAt(state.accounts, accountIndex ?? state.activeAccountIndex)?.address;
+  if (!owner) throw new Error('No such account');
   let preStateSlot: number | undefined;
   const preview = await buildPreview(bytes, {
-    owner: new PublicKey(active),
+    owner: new PublicKey(owner),
     fetchLookupTables: async (keys) => {
       const connection = await getConnection();
       const tables = await Promise.all(keys.map((key) => connection.getAddressLookupTable(key)));

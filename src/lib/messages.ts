@@ -157,6 +157,14 @@ export interface PendingApproval {
    * no chain this is what its transaction was built for; a cluster change rejects it.
    */
   clusterAtEnqueue?: WalletSettings['cluster'];
+  /**
+   * The derivation index of the account this signature request is bound to,
+   * resolved once at enqueue from the address the page named — or from the
+   * active account when it named none. Absent only when there was no stored
+   * account list to resolve against, in which case the request is withdrawn
+   * rather than re-pointed if the active account moves.
+   */
+  accountAtEnqueue?: number;
   options?: SendOptions;
 }
 

@@ -31,10 +31,74 @@ own pull request, and the plan it shipped against is the detailed record.
   top takes the keyboard, wraps Tab within itself, and Escape closes it alone.
 - **SHIP-10** — `pnpm exec vitest run --coverage` enforces a 94 percent lines
   threshold over `src/background/**`, `src/content/**` and `src/lib/**` — the
-  code with real logic behind it. The suite measures 94.73 percent, so the gate
+  code with real logic behind it. The suite measures 94.78 percent, so the gate
   is a ratchet and not an aspiration. It is deliberately not part of
   `just check`, which is run narrow (`just test <file>`) too often for a
   whole-suite threshold; wiring coverage into CI is an owner decision.
+
+- **SHIP-11** — The approval window's Connect screen names the account and the
+  cluster the site is being connected to, and spells out what the site will and
+  will not be able to do.
+- **SHIP-13** — CI builds the Chrome Web Store zip on every pull request and
+  push and uploads it as an artifact; the recipe's own guards fail the job if a
+  key-shaped literal ever reaches the bundle.
+- **SHIP-13** — `docs/store/screenshots/README.md` records which cluster each
+  listing image came from and why, and the rule that every composed image is
+  read against its own caption before it is committed.
+- **SHIP-13 follow-up** — `scripts/probe-mainnet-rpcs.mjs` re-runs the keyless
+  mainnet field from a real `chrome-extension://` origin, because curl does not
+  enforce CORS and passes endpoints a browser refuses.
+
+### Changed
+
+- **SHIP-11** — A simulation error is rendered as the runtime's own words with
+  an explanation, instead of a JSON-quoted string.
+- **SHIP-11** — The example dApp talks to publicnode on mainnet, matching what
+  the extension itself defaults to.
+- **SHIP-12** — The whole store screenshot set was retaken from the real
+  extension rather than mocked, along with the listing copy and the README.
+- **SHIP-13** — The end-to-end job is opt-in (`workflow_dispatch`) rather than
+  part of the pull-request gate: it drives a real extension against public
+  devnet, which rate-limits GitHub-hosted runners hard enough that the job's
+  result was decided by the faucet rather than by the code. `just e2e` remains
+  the strict local gate.
+
+### Fixed
+
+- **SHIP-11** — An end-to-end test that needs a funded fixture skips with the
+  address, the balance and the shortfall instead of failing. The fixture is a
+  public address that bots sweep, so an empty one is a faucet fact and not a
+  wallet bug.
+- **SHIP-13** — CI could not run at all. `pnpm/action-setup` was given a
+  `version` that `package.json`'s `packageManager` already pins, and on Node 20
+  jsdom's undici could not load, so three component-test files never started
+  while the summary still printed every test green and the job failed with no
+  named failure. CI runs Node 24.
+- **SHIP-13** — The primary store screenshot promised live prices above a
+  Devnet capture showing no balance. The set is rebuilt from a keyless,
+  store-equivalent build, each shot taken on the cluster that makes its own
+  caption true.
+
+### Security
+
+- **SHIP-14** — A signature is made by the account the request names. The
+  Wallet Standard `account` input is carried through the bridge and the
+  protocol, resolved to a derivation index against the wallet's own accounts
+  inside the service worker (a page names an address, never an index), and
+  pinned to the pending approval as `accountAtEnqueue`; the preview, the
+  `signerOk` check and the balance diff are all built for that account, and it
+  is the key that signs. An address this wallet does not hold is refused rather
+  than signed for by whichever account happened to be active, inputs that name
+  two different accounts are refused, and switching the active account while an
+  approval is waiting rejects it instead of re-pointing it at the new key.
+
+### Changed
+
+- **SHIP-14** — dApp surface: a site that passed `accounts[1]` to
+  `signMessage`, `signTransaction` or `signAndSendTransaction` and silently
+  received `accounts[0]`'s signature now receives `accounts[1]`'s. The approval
+  window names the signing account on every signature request, not only on
+  connect.
 
 ## [0.3.0] — 2026-09-12
 

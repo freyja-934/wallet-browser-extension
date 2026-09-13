@@ -1,7 +1,12 @@
 import type { BrowserContext, Page } from '@playwright/test';
+import bs58 from 'bs58';
+import nacl from 'tweetnacl';
 import { CHAIN_TIMEOUT_MS, rentExemptMinimum, skipUnlessFixtureHolds } from './devnet';
 import { expect, test } from './fixtures';
 import { importAndUnlock, TEST_ADDRESS, TEST_PASSWORD } from './popup';
+
+/** The text `#signMessageSecond` signs in `examples/test-dapp/main.js`. */
+const SECOND_ACCOUNT_MESSAGE = 'hello from the second account';
 
 /** What one signature costs on devnet; a `signAndSend` through the dApp pays exactly this. */
 const FEE_LAMPORTS = 5_000n;
@@ -67,9 +72,12 @@ test('Connect, sign message, and sign v0 transfer', async ({ context, extensionI
   // The most-seen screen in a wallet: it has to say which account is being shared,
   // on which cluster, and what connecting does and does not permit.
   const connectApproval = await openApproval(context, () => dapp.locator('#connect').click(), dapp);
+  // The account row is shared with every signature approval now; the connect card
+  // keeps the cluster and what the grant does and does not permit.
+  const connectAccount = connectApproval.getByTestId('approval-account');
+  await expect(connectAccount).toContainText('Account 1');
+  await expect(connectAccount).toContainText(`${TEST_ADDRESS.slice(0, 4)}…${TEST_ADDRESS.slice(-4)}`);
   const connectDetail = connectApproval.getByTestId('approval-connect');
-  await expect(connectDetail).toContainText('Account 1');
-  await expect(connectDetail).toContainText(`${TEST_ADDRESS.slice(0, 4)}…${TEST_ADDRESS.slice(-4)}`);
   await expect(connectDetail).toContainText('Solana Devnet');
   await expect(connectDetail).toContainText('separate approval');
   await connectApproval.getByTestId('approval-approve').click();
@@ -88,6 +96,49 @@ test('Connect, sign message, and sign v0 transfer', async ({ context, extensionI
   }
   await signTx.getByTestId('approval-approve').click();
   await expect(dapp.locator('#log')).toContainText('signedBytes', { timeout: CHAIN_TIMEOUT_MS });
+});
+
+test('a message asked of a second, non-active account is signed by that account', async ({
+  context,
+  extensionId,
+}) => {
+  // A signature over a message is free, so this case runs whatever the fixture holds.
+  test.setTimeout(180_000);
+  const popup = await importAndUnlock(context, extensionId);
+
+  // A second account, with the wallet still on the first: `accounts[1]` is the one
+  // the dApp will name, and `accounts[0]` is the one that would sign if the name
+  // were thrown away.
+  const switcher = popup.getByTestId('account-switcher');
+  await switcher.click();
+  await popup.getByTestId('account-add').click();
+  await expect(popup.getByTestId('account-option')).toHaveCount(2);
+  await switcher.click();
+  await expect(switcher).toContainText('Account 1');
+
+  const dapp = await context.newPage();
+  await dapp.goto('http://localhost:5174/');
+  await expect(dapp.locator('#log')).toContainText('registered Cinder Wallet', { timeout: 15_000 });
+  await approveNext(context, () => dapp.locator('#connect').click(), dapp);
+  await expect(dapp.locator('#log')).toContainText(/"accounts":\s*\[\s*"/, { timeout: 15_000 });
+
+  const approval = await openApproval(context, () => dapp.locator('#signMessageSecond').click(), dapp);
+  // Every signature approval names the key about to sign, and this one is not the active account.
+  const account = approval.getByTestId('approval-account');
+  await expect(account).toContainText('Account 2');
+  await expect(account).not.toContainText(`${TEST_ADDRESS.slice(0, 4)}…${TEST_ADDRESS.slice(-4)}`);
+  await approval.getByTestId('approval-approve').click();
+
+  await expect(dapp.locator('#log')).toContainText('"signature"', { timeout: 15_000 });
+  const logged = JSON.parse(await dapp.locator('#log').innerText()) as { account: string; signature: number[] };
+  expect(logged.account).not.toBe(TEST_ADDRESS);
+
+  const message = new TextEncoder().encode(SECOND_ACCOUNT_MESSAGE);
+  const signature = Uint8Array.from(logged.signature);
+  // The account the page named made this signature...
+  expect(nacl.sign.detached.verify(message, signature, bs58.decode(logged.account))).toBe(true);
+  // ...and the account the wallet is on did not.
+  expect(nacl.sign.detached.verify(message, signature, bs58.decode(TEST_ADDRESS))).toBe(false);
 });
 
 test('locked Connect unlocks inside the approval window, then signAndSend can be rejected', async ({

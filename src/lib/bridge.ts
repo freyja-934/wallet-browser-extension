@@ -29,6 +29,11 @@ export interface RuntimeMessage {
   transactions?: number[][];
   messages?: number[][];
   chain?: KnownChain;
+  /**
+   * The address the page's inputs named as the signer. Page-controlled, so it is
+   * a name for the worker to resolve against its own accounts — never an index.
+   */
+  account?: string;
   options?: SendOptions;
   /** `connect({ silent: true })`: never prompt; answer with what the site may already see. */
   silent?: boolean;
@@ -85,6 +90,20 @@ export function validateChain(value: unknown): KnownChain | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== 'string' || !KNOWN_CHAINS.includes(value)) throw new Error('Invalid chain');
   return value as KnownChain;
+}
+
+/** Base58 with no 0/O/I/l, the alphabet Solana addresses use; 32 bytes encodes to 32-44 characters. */
+export const BASE58_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+
+/**
+ * Absent, `null` or `''` means "the page named no account". Otherwise something
+ * shaped like a Solana address; whether this wallet actually holds it is the
+ * worker's decision, made against its own account list.
+ */
+export function validateAccount(value: unknown): string | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (typeof value !== 'string' || !BASE58_ADDRESS.test(value)) throw new Error('Invalid account');
+  return value;
 }
 
 function requireNonNegativeInteger(value: unknown, field: string): number {
@@ -152,13 +171,24 @@ export function buildRuntimeMessage(type: unknown, payload: unknown, origin: str
       };
       const chain = validateChain(input.chain);
       if (chain !== undefined) message.chain = chain;
+      // Copied field by field, like every other one: a payload never sets `type` or `origin`.
+      const account = validateAccount(input.account);
+      if (account !== undefined) message.account = account;
       const options = validateSendOptions(input.options);
       if (options !== undefined) message.options = options;
       return message;
     }
-    case 'SIGN_MESSAGE':
+    case 'SIGN_MESSAGE': {
       // Wallet Standard does not forbid signing an empty message.
-      return { type, origin, messages: validateByteArrays(input.messages, MAX_MESSAGE_BYTES, 'messages', true) };
+      const message: RuntimeMessage = {
+        type,
+        origin,
+        messages: validateByteArrays(input.messages, MAX_MESSAGE_BYTES, 'messages', true),
+      };
+      const account = validateAccount(input.account);
+      if (account !== undefined) message.account = account;
+      return message;
+    }
     case 'WALLET_CONNECT':
       return input.silent === true ? { type, origin, silent: true } : { type, origin };
     case 'WALLET_DISCONNECT':
