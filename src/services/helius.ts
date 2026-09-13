@@ -263,6 +263,7 @@ export interface NFTPage {
   nftsUnavailable?: boolean;
 }
 
+/** One row of history, as the popup reads it. Only what the screen shows: no raw instructions, no event payloads. */
 export interface Transaction {
   signature: string;
   timestamp: number;
@@ -270,17 +271,10 @@ export interface Transaction {
   status: 'success' | 'failed';
   fee: number;
   feePayer: string;
-  instructions: any[];
-  events: TransactionEvent[];
   tokenTransfers?: TokenTransfer[];
   nativeTransfers?: NativeTransfer[];
   /** The signature is real but its details could not be fetched: no direction, amount, or counterparty is known. */
   detailsUnavailable?: true;
-}
-
-export interface TransactionEvent {
-  type: string;
-  data: any;
 }
 
 export interface TokenTransfer {
@@ -295,6 +289,24 @@ export interface NativeTransfer {
   from: string;
   to: string;
   amount: number;
+}
+
+/**
+ * One row of Helius's enhanced-transactions response, as this file reads it.
+ * Only the fields the mapper touches are named, each as the widest type the
+ * API could actually send; the transfer arrays are handed to
+ * `normalizeHeliusTransfers`, which does its own per-field checking. Anything
+ * else the endpoint returns is ignored rather than typed.
+ */
+interface HeliusEnhancedTransaction {
+  signature?: unknown;
+  timestamp?: unknown;
+  type?: unknown;
+  err?: unknown;
+  fee?: unknown;
+  feePayer?: unknown;
+  nativeTransfers?: Array<Record<string, unknown>>;
+  tokenTransfers?: Array<Record<string, unknown>>;
 }
 
 interface DasAssetsPage<Item> {
@@ -501,18 +513,16 @@ class HeliusService {
       if (type) url += `&type=${type}`;
       const response = await fetch(url);
       if (response.ok) {
-        const data = await response.json();
-        return data.map((tx: any) => {
+        const data = (await response.json()) as HeliusEnhancedTransaction[];
+        return data.map((tx) => {
           const transfers = normalizeHeliusTransfers(tx);
           return {
-            signature: tx.signature,
-            timestamp: tx.timestamp * 1000,
-            type: tx.type,
-            status: tx.err ? 'failed' : 'success',
-            fee: tx.fee,
-            feePayer: tx.feePayer,
-            instructions: tx.instructions,
-            events: tx.events || [],
+            signature: String(tx.signature ?? ''),
+            timestamp: Number(tx.timestamp ?? 0) * 1000,
+            type: String(tx.type ?? 'UNKNOWN'),
+            status: tx.err ? ('failed' as const) : ('success' as const),
+            fee: Number(tx.fee ?? 0),
+            feePayer: String(tx.feePayer ?? ''),
             tokenTransfers: transfers.tokenTransfers,
             nativeTransfers: transfers.nativeTransfers,
           };

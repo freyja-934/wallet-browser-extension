@@ -36,8 +36,6 @@ function row(signature: string, owner: string): ChainTransaction {
     status: 'success',
     fee: 0,
     feePayer: owner,
-    instructions: [],
-    events: [],
     nativeTransfers: [],
     tokenTransfers: [],
     detailsUnavailable: true,

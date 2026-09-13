@@ -135,10 +135,6 @@ export async function generateAccountsFromSeed(
   return accounts;
 }
 
-export function getWordList(): string[] {
-  return bip39.wordlists.english;
-}
-
 export function isValidWord(word: string): boolean {
   return bip39.wordlists.english.includes(word.toLowerCase());
 }
