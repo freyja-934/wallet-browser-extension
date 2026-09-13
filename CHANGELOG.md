@@ -102,8 +102,11 @@ own pull request, and the plan it shipped against is the detailed record.
 
 ## [0.3.0] — 2026-09-12
 
-Nine remediation phases over 0.2.0, the first Chrome Web Store build. The tag
-`v0.3.0` and the GitHub release are cut from this commit.
+Nine remediation phases over 0.2.0, the first Chrome Web Store build. The
+`v0.3.0` tag and the GitHub release are still to be cut; `git tag -l` is empty
+today, and cutting them is an owner action (SHIP-0 item 4's neighbourhood).
+Everything under Unreleased above has landed on `main` since, so a release cut
+now should carry a version of its own rather than reuse this one.
 
 ### Security
 
