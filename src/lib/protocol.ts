@@ -119,10 +119,9 @@ export type RecipientInfo = {
 };
 
 /**
- * The `ESTIMATE_FEE` response: lamports as decimal strings. Type aliases, so the
- * router's `Record<string, unknown>` accepts them. `rentExemptMin` is what the
- * account this send may have to create costs: a bare system account for SOL, a
- * token account of the mint's own program for a token send.
+ * The `ESTIMATE_FEE` response: lamports as decimal strings. `rentExemptMin` is
+ * what the account this send may have to create costs: a bare system account
+ * for SOL, a token account of the mint's own program for a token send.
  */
 export type FeeEstimate = {
   feeLamports: string;
@@ -184,6 +183,14 @@ export const PROTOCOL_COVERS_ALLOWLIST: [MissingRequest, ExtraRequest, MissingRe
 
 const THEMES: readonly WalletSettings['theme'][] = ['light', 'dark', 'system'];
 const CLUSTERS: readonly WalletSettings['cluster'][] = ['mainnet-beta', 'devnet'];
+
+/**
+ * Membership test that narrows `value` to the list's own element type, so a
+ * validated literal reaches the request without a cast back onto it.
+ */
+function isOneOf<T extends string>(list: readonly T[], value: unknown): value is T {
+  return typeof value === 'string' && list.some((allowed) => allowed === value);
+}
 
 function invalid(field: string): never {
   throw new Error(`Invalid ${field}`);
@@ -278,8 +285,8 @@ function requireHeliusApiKey(value: unknown, field: string): string {
 }
 
 function requireRpcUrlCluster(value: unknown, field: string): WalletSettings['cluster'] {
-  if (typeof value !== 'string' || !(CLUSTERS as readonly string[]).includes(value)) invalid(field);
-  return value as WalletSettings['cluster'];
+  if (!isOneOf(CLUSTERS, value)) invalid(field);
+  return value;
 }
 
 function requireSettings(value: unknown): Partial<WalletSettings> {
@@ -298,8 +305,8 @@ function requireSettings(value: unknown): Partial<WalletSettings> {
         out.preferredCurrency = requireString(raw, field);
         break;
       case 'theme':
-        if (typeof raw !== 'string' || !(THEMES as readonly string[]).includes(raw)) invalid(field);
-        out.theme = raw as WalletSettings['theme'];
+        if (!isOneOf(THEMES, raw)) invalid(field);
+        out.theme = raw;
         break;
       case 'hideSmallBalances':
         if (typeof raw !== 'boolean') invalid(field);
@@ -310,8 +317,8 @@ function requireSettings(value: unknown): Partial<WalletSettings> {
         out.smallBalanceThreshold = raw;
         break;
       case 'cluster':
-        if (typeof raw !== 'string' || !(CLUSTERS as readonly string[]).includes(raw)) invalid(field);
-        out.cluster = raw as WalletSettings['cluster'];
+        if (!isOneOf(CLUSTERS, raw)) invalid(field);
+        out.cluster = raw;
         break;
       case 'rpcUrl':
         out.rpcUrl = requireRpcUrl(raw, field);

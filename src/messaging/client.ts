@@ -1,8 +1,12 @@
 import type { ExtensionMessageType, WalletSettings } from '../lib/messages';
 import type { FeeEstimate, WalletRequestPayload, WalletResponses } from '../lib/protocol';
 
-/** What the popup names when it sends: `source` is the token account the row it picked holds. */
-export type TransferRequest = { to: string; amountSmallest: string; mint?: string; source?: string };
+/**
+ * What the popup names when it sends: `source` is the token account the row it
+ * picked holds. Derived from the protocol, so the popup and the worker cannot
+ * drift apart on the fields a transfer carries.
+ */
+export type TransferRequest = WalletRequestPayload<'SEND_TRANSFER'>;
 
 type Envelope<T extends ExtensionMessageType> =
   | ({ success: true } & WalletResponses[T])
@@ -15,7 +19,11 @@ async function send<T extends ExtensionMessageType>(
   if (typeof chrome === 'undefined' || !chrome.runtime?.sendMessage) {
     throw new Error('Not running as an extension');
   }
-  const response = (await chrome.runtime.sendMessage({ type, ...payload })) as Envelope<T> | undefined;
+  // `sendMessage` is generic in its reply, so this annotation is what the call
+  // is instantiated with rather than a cast on the way out. It is an assumption
+  // about the worker, not a check: nothing validates the envelope at runtime
+  // beyond the `success` test below.
+  const response: Envelope<T> | undefined = await chrome.runtime.sendMessage({ type, ...payload });
   if (!response?.success) {
     throw new Error(response?.error || 'Request failed');
   }

@@ -180,18 +180,32 @@ export function activityFromParsedTx(tx: ParsedTxInput, owner: string): Activity
   return { type, nativeTransfers, tokenTransfers: tokens };
 }
 
+/** The rows of one transfer list, or none at all: an HTTP body can carry anything. */
+function transferRows(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) return [];
+  return value.filter((row): row is Record<string, unknown> => row !== null && typeof row === 'object');
+}
+
+/**
+ * The transfers of one enhanced-transaction row. Both lists come off an HTTP
+ * body nothing has checked, so a missing, non-array, or non-object entry is
+ * dropped rather than read.
+ */
 export function normalizeHeliusTransfers(tx: {
-  nativeTransfers?: Array<Record<string, unknown>>;
-  tokenTransfers?: Array<Record<string, unknown>>;
+  nativeTransfers?: unknown;
+  tokenTransfers?: unknown;
 }): { nativeTransfers: NativeTransfer[]; tokenTransfers: TokenTransfer[] } {
   return {
-    nativeTransfers: (tx.nativeTransfers ?? []).map((row) => ({
+    nativeTransfers: transferRows(tx.nativeTransfers).map((row) => ({
       from: asString(row.fromUserAccount ?? row.from),
       to: asString(row.toUserAccount ?? row.to),
       amount: asLamports(row.amount),
     })),
-    tokenTransfers: (tx.tokenTransfers ?? []).map((row) => {
-      const raw = row.rawTokenAmount as { tokenAmount?: unknown; decimals?: unknown } | undefined;
+    tokenTransfers: transferRows(tx.tokenTransfers).map((row) => {
+      const rawAmount = row.rawTokenAmount;
+      const raw = (rawAmount !== null && typeof rawAmount === 'object' ? rawAmount : undefined) as
+        | { tokenAmount?: unknown; decimals?: unknown }
+        | undefined;
       return {
         mint: asString(row.mint),
         from: asString(row.fromUserAccount ?? row.from),

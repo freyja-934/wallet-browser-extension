@@ -1,4 +1,5 @@
 import type { BrowserContext, Page } from '@playwright/test';
+import { CHAIN_TIMEOUT_MS } from './devnet';
 import { expect, test } from './fixtures';
 import { importAndUnlock, TEST_PASSWORD } from './popup';
 
@@ -13,7 +14,9 @@ async function openApproval(
   while (Date.now() < deadline) {
     for (const page of context.pages()) {
       if (page.url().includes('approve.html')) {
-        await expect(page.getByTestId('approval-approve')).toBeEnabled({ timeout: 15_000 });
+        // Approve stays disabled until every preview has settled, and a preview is a
+        // simulation against devnet: this wait is a network round trip, not a render.
+        await expect(page.getByTestId('approval-approve')).toBeEnabled({ timeout: CHAIN_TIMEOUT_MS });
         return page;
       }
     }
@@ -21,7 +24,7 @@ async function openApproval(
       if (seen.has(page)) continue;
       try {
         await page.waitForURL(/approve\.html/, { timeout: 500 });
-        await expect(page.getByTestId('approval-approve')).toBeEnabled({ timeout: 15_000 });
+        await expect(page.getByTestId('approval-approve')).toBeEnabled({ timeout: CHAIN_TIMEOUT_MS });
         return page;
       } catch {
         /* still loading */
@@ -39,7 +42,7 @@ async function approveNext(context: BrowserContext, action: () => Promise<void>,
 }
 
 test('Connect, sign message, and sign v0 transfer', async ({ context, extensionId }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   await importAndUnlock(context, extensionId);
 
   const dapp = await context.newPage();
@@ -57,17 +60,17 @@ test('Connect, sign message, and sign v0 transfer', async ({ context, extensionI
   const signTx = await openApproval(context, () => dapp.locator('#signTx').click(), dapp);
   const preview = signTx.getByTestId('approval-preview');
   if (await preview.isVisible().catch(() => false)) {
-    await expect(preview).toContainText(/Simulation|failed|succeeded/i);
+    await expect(preview).toContainText(/Simulation|failed|succeeded/i, { timeout: CHAIN_TIMEOUT_MS });
   }
   await signTx.getByTestId('approval-approve').click();
-  await expect(dapp.locator('#log')).toContainText('signedBytes', { timeout: 30_000 });
+  await expect(dapp.locator('#log')).toContainText('signedBytes', { timeout: CHAIN_TIMEOUT_MS });
 });
 
 test('locked Connect unlocks inside the approval window, then signAndSend can be rejected', async ({
   context,
   extensionId,
 }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   const popup = await importAndUnlock(context, extensionId);
 
   const dapp = await context.newPage();
@@ -83,7 +86,7 @@ test('locked Connect unlocks inside the approval window, then signAndSend can be
   await expect(approval.getByTestId('approval-approve')).toBeDisabled();
   await approval.getByTestId('unlock-password').fill(TEST_PASSWORD);
   await approval.getByTestId('unlock-submit').click();
-  await expect(approval.getByTestId('approval-approve')).toBeEnabled({ timeout: 15_000 });
+  await expect(approval.getByTestId('approval-approve')).toBeEnabled({ timeout: CHAIN_TIMEOUT_MS });
   await approval.getByTestId('approval-approve').click();
   await expect(dapp.locator('#log')).toContainText(/"accounts":\s*\[\s*"/, { timeout: 15_000 });
   expect(context.pages().filter((page) => page.url().includes('index.html'))).toHaveLength(1);
@@ -95,7 +98,8 @@ test('locked Connect unlocks inside the approval window, then signAndSend can be
 });
 
 test('signAndSend approve broadcasts a 0-lamport self-transfer', async ({ context, extensionId }) => {
-  test.setTimeout(120_000);
+  // Simulation, broadcast and confirmation, each against devnet.
+  test.setTimeout(240_000);
   await importAndUnlock(context, extensionId);
 
   const dapp = await context.newPage();
@@ -107,23 +111,25 @@ test('signAndSend approve broadcasts a 0-lamport self-transfer', async ({ contex
 
   // The simulated balance change of a 0-lamport self-transfer is exactly the fee, named as such.
   const sendApproval = await openApproval(context, () => dapp.locator('#signAndSend').click(), dapp);
-  await expect(sendApproval.getByTestId('approval-preview')).toHaveText('Simulation succeeded');
+  await expect(sendApproval.getByTestId('approval-preview')).toHaveText('Simulation succeeded', {
+    timeout: CHAIN_TIMEOUT_MS,
+  });
   const solRow = sendApproval.getByTestId('balance-diff-sol');
-  await expect(solRow).toBeVisible();
+  await expect(solRow).toBeVisible({ timeout: CHAIN_TIMEOUT_MS });
   await expect(solRow).toHaveAttribute('data-sign', 'negative');
   await expect(sendApproval.getByTestId('balance-diff-sol-delta')).toHaveText('-0.000005 SOL');
   await expect(solRow).toContainText('network fee');
   await expect(sendApproval.getByTestId('approval-approve')).toHaveText('Approve');
   await sendApproval.getByTestId('approval-approve').click();
-  await expect(dapp.locator('#log')).toContainText('"signature"', { timeout: 45_000 });
+  await expect(dapp.locator('#log')).toContainText('"signature"', { timeout: 90_000 });
   await expect(dapp.locator('#log')).not.toContainText(/reject|denied|User rejected/i);
   // 64 raw bytes (not the digits of a base58 string) and a signature the cluster confirms.
   await expect(dapp.locator('#log')).toContainText('"signatureLength": 64');
-  await expect(dapp.locator('#log')).toContainText('"confirmed": true', { timeout: 60_000 });
+  await expect(dapp.locator('#log')).toContainText('"confirmed": true', { timeout: 90_000 });
 });
 
 test('closing the approval window rejects the request within 2 s', async ({ context, extensionId }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   await importAndUnlock(context, extensionId);
 
   const dapp = await context.newPage();
@@ -140,7 +146,7 @@ test('a connected site connects again without a window; a silent connect never p
   context,
   extensionId,
 }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   await importAndUnlock(context, extensionId);
 
   const dapp = await context.newPage();
@@ -175,7 +181,7 @@ test('a connected site connects again without a window; a silent connect never p
 });
 
 test('revoking in Settings makes the next connect prompt again', async ({ context, extensionId }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   const popup = await importAndUnlock(context, extensionId);
 
   const dapp = await context.newPage();
@@ -203,7 +209,7 @@ test('revoking in Settings makes the next connect prompt again', async ({ contex
 });
 
 test('signMessage from a never-connected origin is rejected without a window', async ({ context, extensionId }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   await importAndUnlock(context, extensionId);
 
   const dapp = await context.newPage();
@@ -216,7 +222,7 @@ test('signMessage from a never-connected origin is rejected without a window', a
 });
 
 test('locking the wallet empties the connected page’s accounts', async ({ context, extensionId }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   const popup = await importAndUnlock(context, extensionId);
 
   const dapp = await context.newPage();
@@ -234,7 +240,7 @@ test('locking the wallet empties the connected page’s accounts', async ({ cont
 });
 
 test('closing the dApp tab withdraws its request and closes the approval window', async ({ context, extensionId }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   await importAndUnlock(context, extensionId);
 
   const dapp = await context.newPage();
@@ -252,7 +258,7 @@ test('revoking a site while its request is pending rejects it; a late Approve is
   context,
   extensionId,
 }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   const popup = await importAndUnlock(context, extensionId);
 
   const dapp = await context.newPage();
@@ -283,7 +289,7 @@ test('locking underneath an open approval asks for the password again, then show
   context,
   extensionId,
 }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   const popup = await importAndUnlock(context, extensionId);
 
   const dapp = await context.newPage();
@@ -347,7 +353,7 @@ async function postToBridge(
 }
 
 test('a page cannot override the bridged message type', async ({ context, extensionId }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   await importAndUnlock(context, extensionId);
 
   const dapp = await context.newPage();
@@ -382,7 +388,7 @@ test('two transactions in one signTransaction call open one approval and come ba
   context,
   extensionId,
 }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   await importAndUnlock(context, extensionId);
 
   const dapp = await context.newPage();
@@ -397,7 +403,7 @@ test('two transactions in one signTransaction call open one approval and come ba
   await expect(approval.getByText('Transaction 2 of 2')).toBeVisible();
   await approval.getByTestId('approval-approve').click();
 
-  await expect(dapp.locator('#log')).toContainText('"signedCount": 2', { timeout: 30_000 });
+  await expect(dapp.locator('#log')).toContainText('"signedCount": 2', { timeout: CHAIN_TIMEOUT_MS });
   // The outputs line up with the inputs: the 1-lamport transfer first, then the 2-lamport one.
   await expect(dapp.locator('#log')).toContainText(/"lamports":\s*\[\s*1,\s*2\s*\]/);
   // No second window ever opened for the second transaction.
@@ -407,7 +413,7 @@ test('two transactions in one signTransaction call open one approval and come ba
 });
 
 test("switching the cluster in Settings re-stamps a connected page's chains", async ({ context, extensionId }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   const popup = await importAndUnlock(context, extensionId);
 
   const dapp = await context.newPage();
@@ -436,7 +442,7 @@ test("switching the cluster in Settings re-stamps a connected page's chains", as
 });
 
 test('a chain the wallet is not on is refused with the Settings hint, without a window', async ({ context, extensionId }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   await importAndUnlock(context, extensionId);
 
   const dapp = await context.newPage();
@@ -451,7 +457,7 @@ test('a chain the wallet is not on is refused with the Settings hint, without a 
 });
 
 test('signMessage over serialized transaction bytes is refused before a window opens', async ({ context, extensionId }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   await importAndUnlock(context, extensionId);
 
   const dapp = await context.newPage();

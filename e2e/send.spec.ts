@@ -1,5 +1,6 @@
 import { Connection, PublicKey, clusterApiUrl } from '@solana/web3.js';
 import type { Page } from '@playwright/test';
+import { CHAIN_TIMEOUT_MS, devnetPrecondition } from './devnet';
 import { expect, test } from './fixtures';
 import { importAndUnlock, TEST_ADDRESS } from './popup';
 
@@ -23,10 +24,12 @@ function lamportsIn(line: string): bigint {
 async function openSend(popup: Page): Promise<void> {
   await popup.getByTestId('open-send').click();
   // The balance query must settle before Continue can enable, so wait for a real figure.
-  await expect(popup.getByTestId('send-available')).not.toHaveText('—', { timeout: 30_000 });
+  await expect(popup.getByTestId('send-available')).not.toHaveText('—', { timeout: CHAIN_TIMEOUT_MS });
 }
 
 test('Send rejects junk address then reaches Review with a fee', async ({ context, extensionId }) => {
+  // The balance and the fee estimate are both devnet round trips.
+  test.setTimeout(120_000);
   const popup = await importAndUnlock(context, extensionId);
 
   await openSend(popup);
@@ -41,12 +44,14 @@ test('Send rejects junk address then reaches Review with a fee', async ({ contex
 
   await expect(popup.getByTestId('send-review')).toBeVisible();
   await expect(popup.getByTestId('send-review')).toContainText('0.001 SOL');
-  await expect(popup.getByTestId('send-fee')).toContainText(/[\d.]+ SOL/, { timeout: 30_000 });
+  await expect(popup.getByTestId('send-fee')).toContainText(/[\d.]+ SOL/, { timeout: CHAIN_TIMEOUT_MS });
   expect(lamportsIn(await popup.getByTestId('send-fee').innerText())).toBe(FEE_LAMPORTS);
   await expect(popup.getByRole('button', { name: 'Confirm' })).toBeVisible();
 });
 
 test('Max sends the balance minus the fee', async ({ context, extensionId }) => {
+  // The balance and the fee estimate are both devnet round trips.
+  test.setTimeout(120_000);
   const popup = await importAndUnlock(context, extensionId);
 
   await openSend(popup);
@@ -64,13 +69,15 @@ test('Max sends the balance minus the fee', async ({ context, extensionId }) => 
   await popup.getByTestId('send-continue').click();
 
   await expect(popup.getByTestId('send-review')).toBeVisible();
-  await expect(popup.getByTestId('send-fee')).toContainText(/[\d.]+ SOL/, { timeout: 30_000 });
+  await expect(popup.getByTestId('send-fee')).toContainText(/[\d.]+ SOL/, { timeout: CHAIN_TIMEOUT_MS });
   const fee = lamportsIn(await popup.getByTestId('send-fee').innerText());
   await expect(popup.getByTestId('send-review')).toContainText(`${typed} SOL`);
   expect(toLamports(typed)).toBe(available - fee);
 });
 
 test('Amount with more decimals than SOL has is refused', async ({ context, extensionId }) => {
+  // The balance and the fee estimate are both devnet round trips.
+  test.setTimeout(120_000);
   const popup = await importAndUnlock(context, extensionId);
 
   await openSend(popup);
@@ -87,16 +94,23 @@ test('Amount with more decimals than SOL has is refused', async ({ context, exte
 });
 
 test('Sending to the wallet itself costs exactly the fee', async ({ context, extensionId }) => {
-  test.setTimeout(150_000);
+  // Balance, estimate, broadcast, confirmation, then the balance again: five devnet round trips.
+  test.setTimeout(240_000);
   const connection = new Connection(clusterApiUrl('devnet'), 'confirmed');
   const owner = new PublicKey(TEST_ADDRESS);
   const popup = await importAndUnlock(context, extensionId);
 
   await openSend(popup);
-  const before = BigInt(await connection.getBalance(owner, 'confirmed'));
+  const before = BigInt(
+    await devnetPrecondition('getBalance', () => connection.getBalance(owner, 'confirmed')),
+  );
   // The fixture must keep the 0.001 SOL it sends itself, the fee, and enough to stay
   // rent-exempt — the worker refuses a send that would leave it between zero and the minimum.
-  const rent = BigInt(await connection.getMinimumBalanceForRentExemption(0));
+  const rent = BigInt(
+    await devnetPrecondition('getMinimumBalanceForRentExemption', () =>
+      connection.getMinimumBalanceForRentExemption(0),
+    ),
+  );
   expect(before).toBeGreaterThan(1_000_000n + FEE_LAMPORTS + rent);
 
   await popup.getByTestId('send-recipient').fill(TEST_ADDRESS);
@@ -104,18 +118,23 @@ test('Sending to the wallet itself costs exactly the fee', async ({ context, ext
   await popup.getByTestId('send-ack').check();
   await popup.getByTestId('send-continue').click();
 
-  await expect(popup.getByTestId('send-fee')).toContainText(/[\d.]+ SOL/, { timeout: 30_000 });
+  await expect(popup.getByTestId('send-fee')).toContainText(/[\d.]+ SOL/, { timeout: CHAIN_TIMEOUT_MS });
   // The wallet exists, so no account gets created and nothing warns.
   await expect(popup.getByTestId('send-creates-account')).toHaveCount(0);
   // Whatever the cluster charges today, the balance has to drop by exactly what Review promised.
   const fee = lamportsIn(await popup.getByTestId('send-fee').innerText());
-  await expect(popup.getByTestId('send-confirm')).toBeEnabled();
+  await expect(popup.getByTestId('send-confirm')).toBeEnabled({ timeout: CHAIN_TIMEOUT_MS });
   await popup.getByTestId('send-confirm').click();
 
-  await expect(popup.getByText(/Transaction sent/)).toBeVisible({ timeout: 60_000 });
+  // Signed, broadcast, and confirmed by the worker before the toast appears.
+  await expect(popup.getByText(/Transaction sent/)).toBeVisible({ timeout: 90_000 });
 
   // A self-transfer moves nothing; only the fee leaves, so the run can repeat.
   await expect
-    .poll(async () => BigInt(await connection.getBalance(owner, 'confirmed')), { timeout: 30_000 })
+    .poll(
+      async () =>
+        BigInt(await devnetPrecondition('getBalance', () => connection.getBalance(owner, 'confirmed'))),
+      { timeout: 90_000 },
+    )
     .toBe(before - fee);
 });

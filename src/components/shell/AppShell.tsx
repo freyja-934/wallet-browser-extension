@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import toast from 'react-hot-toast';
-import { labelFor, rpcUrlsFor } from '../../config/constants';
+import { getCluster, labelFor, rpcUrlsFor } from '../../config/constants';
 import { useSettings } from '../../hooks/useSettings';
 import { hideSettings, setActiveView, showSettings } from '../../store/slices/uiSlice';
 import { lockWallet } from '../../store/slices/walletSlice';
@@ -15,9 +15,9 @@ import { Icon, type IconName } from '../ui/Icon';
 export function AppShell({ children }: { children: ReactNode }) {
   const dispatch = useAppDispatch();
   const { accounts, activeAccountIndex } = useAppSelector((state) => state.wallet);
-  const { activeView, showSettingsModal, cluster: reduxCluster } = useAppSelector((state) => state.ui);
+  const { activeView, showSettingsModal } = useAppSelector((state) => state.ui);
   const { data: settings } = useSettings();
-  const cluster = settings?.cluster ?? reduxCluster;
+  const cluster = settings?.cluster ?? getCluster();
   // The endpoint that gets the first try; shown on hover so a custom URL is visible at a glance.
   const primaryRpcHost = new URL(rpcUrlsFor(cluster, settings ?? {})[0]).host;
   // The active account by its own index; the list's order is not its identity.

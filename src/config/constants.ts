@@ -1,3 +1,4 @@
+import pkg from '../../package.json';
 import type { WalletSettings } from '../lib/messages';
 
 const rawNetwork = (import.meta.env.VITE_NETWORK as string | undefined) || 'mainnet-beta';
@@ -29,10 +30,6 @@ export function getCluster(): Cluster {
 
 export function labelFor(cluster: Cluster): string {
   return cluster === 'devnet' ? 'Devnet' : 'Mainnet';
-}
-
-export function getNetworkLabel(): string {
-  return labelFor(getCluster());
 }
 
 export function publicRpcUrlsFor(cluster: Cluster): readonly string[] {
@@ -97,26 +94,10 @@ export const API_ENDPOINTS = {
   COINGECKO_TOKEN_PRICE: 'https://api.coingecko.com/api/v3/simple/token_price/solana',
 };
 
-export const NATIVE_SOL_MINT = '11111111111111111111111111111111';
-export const WRAPPED_SOL_MINT = 'So11111111111111111111111111111111111111112';
-
-export const AUTO_LOCK_OPTIONS = [
-  { value: 5, label: '5 minutes' },
-  { value: 15, label: '15 minutes' },
-  { value: 30, label: '30 minutes' },
-  { value: 60, label: '1 hour' },
-  { value: 1440, label: '1 day' },
-  { value: 0, label: 'Never' },
-];
-
-export const SUPPORTED_CURRENCIES = [
-  { code: 'USD', symbol: '$', name: 'US Dollar' },
-  { code: 'EUR', symbol: '€', name: 'Euro' },
-  { code: 'GBP', symbol: '£', name: 'British Pound' },
-  { code: 'JPY', symbol: '¥', name: 'Japanese Yen' },
-  { code: 'CNY', symbol: '¥', name: 'Chinese Yuan' },
-];
-
-export const DEFAULT_COMMITMENT = 'confirmed';
 export const WALLET_NAME = 'Cinder Wallet';
-export const WALLET_VERSION = '0.2.0';
+/**
+ * The app version the popup shows, read from `package.json`. Nothing at build
+ * time copies it into `manifest.json`, which carries its own literal;
+ * `version.test.ts` is what keeps the two from drifting apart.
+ */
+export const WALLET_VERSION: string = pkg.version;

@@ -144,6 +144,18 @@ describe('normalizeHeliusTransfers', () => {
       decimals: 6,
     });
   });
+
+  it('reads nothing out of a body whose transfer fields are not arrays of objects', () => {
+    // What an HTTP body can actually carry: a string, an object, a list of junk.
+    const result = normalizeHeliusTransfers({
+      nativeTransfers: 'rate limited',
+      tokenTransfers: { message: 'nope' },
+    });
+
+    expect(result).toEqual({ nativeTransfers: [], tokenTransfers: [] });
+    expect(normalizeHeliusTransfers({})).toEqual({ nativeTransfers: [], tokenTransfers: [] });
+    expect(normalizeHeliusTransfers({ nativeTransfers: [null, 7, 'x'] }).nativeTransfers).toEqual([]);
+  });
 });
 
 describe('displayTokenAmount', () => {

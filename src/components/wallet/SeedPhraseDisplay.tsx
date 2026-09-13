@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import toast from 'react-hot-toast';
 import { Banner, StepHeader, StepScreen } from '../ui/EmptyState';
 import { GhostButton, PrimaryButton, SecondaryButton } from '../ui/Button';
@@ -16,14 +16,9 @@ export function SeedPhraseDisplay({
   onBack?: () => void;
 }) {
   const [isBlurred, setIsBlurred] = useState(true);
-  const [hasViewed, setHasViewed] = useState(false);
   const [attested, setAttested] = useState(false);
   const [confirmCopy, setConfirmCopy] = useState(false);
   const words = seedPhrase.split(' ');
-
-  useEffect(() => {
-    if (!isBlurred) setHasViewed(true);
-  }, [isBlurred]);
 
   return (
     <>
@@ -38,7 +33,8 @@ export function SeedPhraseDisplay({
           {onContinue && (
             <PrimaryButton
               onClick={onContinue}
-              disabled={isNewWallet && (!hasViewed || isBlurred || !attested)}
+              // Revealing is one-way, so the cover being off is "has seen the phrase".
+              disabled={isNewWallet && (isBlurred || !attested)}
               className="ml-auto min-w-[140px]"
               data-testid="seed-continue"
             >

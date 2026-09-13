@@ -159,29 +159,6 @@ export async function decrypt(
 }
 
 /**
- * Encrypts a string and returns encrypted string
- */
-export async function encryptString(
-  data: string,
-  password: string
-): Promise<string> {
-  const encrypted = await encrypt(data, password);
-  return JSON.stringify(encrypted);
-}
-
-/**
- * Decrypts a string encrypted with encryptString
- */
-export async function decryptString(
-  encryptedString: string,
-  password: string
-): Promise<string> {
-  const encrypted = JSON.parse(encryptedString) as EncryptedData;
-  const decrypted = await decrypt(encrypted, password);
-  return new TextDecoder().decode(decrypted);
-}
-
-/**
  * Validates password strength
  */
 export function validatePasswordStrength(password: string): {
@@ -224,26 +201,4 @@ export function validatePasswordStrength(password: string): {
     score: Math.min(score, 5),
     feedback
   };
-}
-
-/**
- * Clears sensitive data from memory
- */
-export function clearMemory(data: Uint8Array): void {
-  crypto.getRandomValues(data);
-  data.fill(0);
-}
-
-/**
- * Generates a secure session key
- */
-export async function generateSessionKey(): Promise<CryptoKey> {
-  return crypto.subtle.generateKey(
-    {
-      name: 'AES-GCM',
-      length: 256
-    },
-    true,
-    ['encrypt', 'decrypt']
-  );
 }

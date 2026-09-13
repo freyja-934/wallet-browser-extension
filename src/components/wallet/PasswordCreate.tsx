@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { useEffect, useState, type FormEvent } from 'react';
+import { useMemo, useState, type FormEvent } from 'react';
 import { validatePasswordStrength } from '../../lib/encryption-simple';
 import { Banner, StepHeader } from '../ui/EmptyState';
 import { GhostButton, PrimaryButton } from '../ui/Button';
@@ -21,20 +21,13 @@ export function PasswordCreate({
 }) {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [passwordStrength, setPasswordStrength] = useState<ReturnType<typeof validatePasswordStrength>>({
-    isValid: false,
-    score: 0,
-    feedback: [],
-  });
   const [errors, setErrors] = useState<string[]>([]);
-
-  useEffect(() => {
-    if (password) {
-      setPasswordStrength(validatePasswordStrength(password));
-    } else {
-      setPasswordStrength({ isValid: false, score: 0, feedback: [] });
-    }
-  }, [password]);
+  // Strength is a function of the password, so it is computed here rather than
+  // mirrored into state by an effect: an empty field scores nothing and says nothing.
+  const passwordStrength = useMemo(
+    () => (password ? validatePasswordStrength(password) : { isValid: false, score: 0, feedback: [] }),
+    [password],
+  );
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();

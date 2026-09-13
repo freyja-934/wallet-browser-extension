@@ -43,7 +43,7 @@ function App() {
     const init = async () => {
       try {
         await dispatch(initializeWallet()).unwrap();
-        await syncSettings(queryClient, dispatch);
+        await syncSettings(queryClient);
       } catch (error) {
         console.error('Failed to initialize wallet:', error);
       } finally {

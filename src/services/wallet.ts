@@ -1,4 +1,3 @@
-import { PublicKey } from '@solana/web3.js';
 import type { TokenNames } from '../lib/token-metadata';
 import { coinGeckoService, type TokenPrice } from './coingecko';
 import { heliusService, type TokenBalance, type TokenNameRef } from './helius';
@@ -51,19 +50,6 @@ class WalletService {
   /** Names for the tokens DAS left unnamed, keyed by mint; see `heliusService.getTokenNames`. */
   async getTokenNames(tokens: TokenNameRef[]): Promise<Record<string, TokenNames>> {
     return heliusService.getTokenNames(tokens);
-  }
-
-  async estimateFee(): Promise<number> {
-    return 5000;
-  }
-
-  isValidAddress(address: string): boolean {
-    try {
-      new PublicKey(address);
-      return true;
-    } catch {
-      return false;
-    }
   }
 }
 
