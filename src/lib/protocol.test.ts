@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_MESSAGE_BYTES, MAX_TRANSACTION_BYTES } from './bridge';
+import { MAX_BATCH_ITEMS, MAX_MESSAGE_BYTES, MAX_REQUEST_BYTES, MAX_TRANSACTION_BYTES, SINGLE_SEND_MESSAGE } from './bridge';
 import { EXTENSION_MESSAGE_TYPES, type ExtensionMessageType } from './messages';
 import { MAX_HELIUS_KEY_LENGTH, parseRequest, PROTOCOL_COVERS_ALLOWLIST } from './protocol';
 
@@ -40,12 +40,16 @@ const cases: Record<ExtensionMessageType, Case> = {
     malformed: { password: 'pw', accountIndex: -1 },
     error: 'Invalid accountIndex',
   },
-  SIGN_MESSAGE: { valid: { message: [1, 2, 3] }, malformed: { message: [256] }, error: 'Invalid message' },
-  SIGN_TRANSACTION: { valid: { transaction: [1] }, malformed: { transaction: [] }, error: 'Invalid transaction' },
+  SIGN_MESSAGE: { valid: { messages: [[1, 2, 3]] }, malformed: { messages: [[256]] }, error: 'Invalid messages' },
+  SIGN_TRANSACTION: {
+    valid: { transactions: [[1]], chain: 'solana:devnet' },
+    malformed: { transactions: [] },
+    error: 'Invalid transactions',
+  },
   SIGN_AND_SEND_TRANSACTION: {
-    valid: { transaction: [0, 255] },
-    malformed: { transaction: 'AQ==' },
-    error: 'Invalid transaction',
+    valid: { transactions: [[0, 255]], chain: 'solana:mainnet', options: { skipPreflight: true, commitment: 'confirmed' } },
+    malformed: { transactions: 'AQ==' },
+    error: 'Invalid transactions',
   },
   PREVIEW_TRANSACTION: {
     valid: { transaction: [7] },
@@ -138,11 +142,112 @@ describe('parseRequest', () => {
     expect(() => parseRequest({ type: 'CREATE_WALLET', password: 42 })).toThrow('Invalid password');
   });
 
-  it('accepts an empty SIGN_MESSAGE and rejects one over the byte cap', () => {
-    expect(parseRequest({ type: 'SIGN_MESSAGE', message: [] })).toStrictEqual({ type: 'SIGN_MESSAGE', message: [] });
-    expect(() => parseRequest({ type: 'SIGN_MESSAGE', message: new Array(MAX_MESSAGE_BYTES + 1).fill(0) })).toThrow(
-      'Invalid message',
+  it('accepts an empty SIGN_MESSAGE item and rejects one over the byte cap', () => {
+    expect(parseRequest({ type: 'SIGN_MESSAGE', messages: [[]] })).toStrictEqual({ type: 'SIGN_MESSAGE', messages: [[]] });
+    expect(() => parseRequest({ type: 'SIGN_MESSAGE', messages: [new Array(MAX_MESSAGE_BYTES + 1).fill(0)] })).toThrow(
+      'Invalid messages',
     );
+    // The singular fields of the old protocol are not read.
+    expect(() => parseRequest({ type: 'SIGN_MESSAGE', message: [1] })).toThrow('Invalid messages');
+    expect(() => parseRequest({ type: 'SIGN_TRANSACTION', transaction: [1] })).toThrow('Invalid transactions');
+  });
+
+  it('accepts 1 to MAX_BATCH_ITEMS items per sign request and nothing outside that', () => {
+    const full = Array.from({ length: MAX_BATCH_ITEMS }, (_, i) => [i + 1]);
+    expect(parseRequest({ type: 'SIGN_TRANSACTION', transactions: full })).toStrictEqual({
+      type: 'SIGN_TRANSACTION',
+      transactions: full,
+    });
+    expect(parseRequest({ type: 'SIGN_MESSAGE', messages: full })).toStrictEqual({ type: 'SIGN_MESSAGE', messages: full });
+    const over = [...full, [1]];
+    expect(() => parseRequest({ type: 'SIGN_TRANSACTION', transactions: over })).toThrow('At most 10 transactions per request');
+    for (const type of ['SIGN_TRANSACTION', 'SIGN_AND_SEND_TRANSACTION'] as const) {
+      expect(() => parseRequest({ type, transactions: [] })).toThrow('Invalid transactions');
+      expect(() => parseRequest({ type, transactions: [[]] })).toThrow('Invalid transactions');
+      expect(() => parseRequest({ type, transactions: [new Array(MAX_TRANSACTION_BYTES + 1).fill(0)] })).toThrow(
+        'Invalid transactions',
+      );
+    }
+    expect(() => parseRequest({ type: 'SIGN_TRANSACTION', transactions: [[1], 'x'] })).toThrow('Invalid transactions');
+    expect(() => parseRequest({ type: 'SIGN_MESSAGE', messages: over })).toThrow('At most 10 messages per request');
+    expect(() => parseRequest({ type: 'SIGN_MESSAGE', messages: [] })).toThrow('Invalid messages');
+    // PREVIEW_TRANSACTION still takes one transaction.
+    expect(() => parseRequest({ type: 'PREVIEW_TRANSACTION', transactions: [[1]] })).toThrow('Invalid transaction');
+  });
+
+  it('takes exactly one transaction on SIGN_AND_SEND_TRANSACTION', () => {
+    expect(parseRequest({ type: 'SIGN_AND_SEND_TRANSACTION', transactions: [[1]] })).toStrictEqual({
+      type: 'SIGN_AND_SEND_TRANSACTION',
+      transactions: [[1]],
+    });
+    expect(() => parseRequest({ type: 'SIGN_AND_SEND_TRANSACTION', transactions: [[1], [2]] })).toThrow(SINGLE_SEND_MESSAGE);
+    const many = Array.from({ length: MAX_BATCH_ITEMS + 1 }, (_, i) => [i + 1]);
+    expect(() => parseRequest({ type: 'SIGN_AND_SEND_TRANSACTION', transactions: many })).toThrow(SINGLE_SEND_MESSAGE);
+    // A second item that is not even a byte array is refused for its count first.
+    expect(() => parseRequest({ type: 'SIGN_AND_SEND_TRANSACTION', transactions: [[1], 'x'] })).toThrow(SINGLE_SEND_MESSAGE);
+  });
+
+  it('caps a batch at MAX_REQUEST_BYTES in total', () => {
+    const item = new Array(MAX_MESSAGE_BYTES).fill(0);
+    expect(MAX_MESSAGE_BYTES * 5).toBeGreaterThan(MAX_REQUEST_BYTES);
+    expect(() => parseRequest({ type: 'SIGN_MESSAGE', messages: [item, item, item, item, item] })).toThrow('Request too large');
+    expect(parseRequest({ type: 'SIGN_MESSAGE', messages: [item, item, item, item] }).type).toBe('SIGN_MESSAGE');
+    // Ten full-size transactions are well within it.
+    const tx = new Array(MAX_TRANSACTION_BYTES).fill(0);
+    expect(parseRequest({ type: 'SIGN_TRANSACTION', transactions: Array.from({ length: MAX_BATCH_ITEMS }, () => tx) }).type).toBe(
+      'SIGN_TRANSACTION',
+    );
+  });
+
+  it('accepts the four Solana chain ids on a sign request, drops an absent one, and refuses others', () => {
+    for (const chain of ['solana:mainnet', 'solana:devnet', 'solana:testnet', 'solana:localnet']) {
+      expect(parseRequest({ type: 'SIGN_AND_SEND_TRANSACTION', transactions: [[1]], chain })).toStrictEqual({
+        type: 'SIGN_AND_SEND_TRANSACTION',
+        transactions: [[1]],
+        chain,
+      });
+    }
+    for (const chain of [undefined, null]) {
+      expect(parseRequest({ type: 'SIGN_TRANSACTION', transactions: [[1]], chain })).toStrictEqual({
+        type: 'SIGN_TRANSACTION',
+        transactions: [[1]],
+      });
+    }
+    for (const chain of ['solana:mainnet-beta', 'devnet', '', 1, {}]) {
+      expect(() => parseRequest({ type: 'SIGN_TRANSACTION', transactions: [[1]], chain })).toThrow('Invalid chain');
+    }
+    // A chain means nothing on a message.
+    expect(parseRequest({ type: 'SIGN_MESSAGE', messages: [[1]], chain: 'solana:devnet' })).toStrictEqual({
+      type: 'SIGN_MESSAGE',
+      messages: [[1]],
+    });
+  });
+
+  it('validates send options field by field and drops empty or unknown ones', () => {
+    const options = { skipPreflight: false, preflightCommitment: 'finalized', maxRetries: 0, minContextSlot: 42, commitment: 'processed' };
+    expect(parseRequest({ type: 'SIGN_AND_SEND_TRANSACTION', transactions: [[1]], options: { ...options, extra: 1 } })).toStrictEqual({
+      type: 'SIGN_AND_SEND_TRANSACTION',
+      transactions: [[1]],
+      options,
+    });
+    for (const empty of [{}, { extra: 1 }, undefined, null]) {
+      expect(parseRequest({ type: 'SIGN_TRANSACTION', transactions: [[1]], options: empty })).toStrictEqual({
+        type: 'SIGN_TRANSACTION',
+        transactions: [[1]],
+      });
+    }
+    const bad: Array<[unknown, string]> = [
+      [{ skipPreflight: 1 }, 'Invalid options.skipPreflight'],
+      [{ preflightCommitment: 'now' }, 'Invalid options.preflightCommitment'],
+      [{ maxRetries: '3' }, 'Invalid options.maxRetries'],
+      [{ minContextSlot: -1 }, 'Invalid options.minContextSlot'],
+      [{ commitment: 'confirm' }, 'Invalid options.commitment'],
+      ['confirmed', 'Invalid options'],
+      [[], 'Invalid options'],
+    ];
+    for (const [options, message] of bad) {
+      expect(() => parseRequest({ type: 'SIGN_AND_SEND_TRANSACTION', transactions: [[1]], options })).toThrow(message);
+    }
   });
 
   it('only accepts a non-negative integer below the hardened-derivation limit as an index', () => {

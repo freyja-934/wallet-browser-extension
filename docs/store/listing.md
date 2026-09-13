@@ -26,6 +26,8 @@ You can create or import a wallet, send SOL and tokens, view NFTs, and connect t
 
 Use Mainnet only with funds you can afford to lose. Devnet is for testing.
 
+Requires Chrome 111 or later (the Wallet Standard provider is a MAIN-world content script).
+
 ## Screenshots
 
 Upload from `docs/store/screenshots/` (real popup, 1280×800, full bleed). Store allows 5:

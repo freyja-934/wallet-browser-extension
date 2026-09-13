@@ -1,9 +1,12 @@
 import {
   ComputeBudgetProgram,
+  MessageAccountKeys,
   SystemProgram,
-  Transaction,
   TransactionInstruction,
+  VersionedMessage,
   VersionedTransaction,
+  type AddressLookupTableAccount,
+  type PublicKey,
 } from '@solana/web3.js';
 import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from '@solana/spl-token';
 
@@ -29,7 +32,7 @@ export interface PreviewWarning {
   message: string;
 }
 
-/** A compiled instruction whose accounts this preview cannot resolve (lookup tables arrive later). */
+/** A compiled instruction whose accounts this preview cannot resolve (a lookup table it could not fetch, or a malformed message). */
 export interface UnreadableInstruction {
   unreadable: true;
   reason: string;
@@ -66,44 +69,93 @@ const TOKEN_INSTRUCTIONS: Record<number, { label: string; warning?: string }> = 
   15: { label: 'Burn tokens (checked)' },
 };
 
-export function deserializeTransaction(bytes: Uint8Array): Transaction | VersionedTransaction {
+/** `VersionedTransaction.deserialize` accepts legacy wire bytes as well as v0, so there is one path. */
+export function deserializeTransaction(bytes: Uint8Array): VersionedTransaction {
+  return VersionedTransaction.deserialize(bytes);
+}
+
+/**
+ * The keys a message can address: the static keys, plus the lookup-table
+ * entries once the tables are supplied. A v0 message whose tables are missing
+ * (or that names a table we were not given) falls back to its static keys, so
+ * only the instructions that reach into a table read as unreadable.
+ */
+export function resolveAccountKeys(
+  tx: VersionedTransaction,
+  lookupTables?: AddressLookupTableAccount[],
+): MessageAccountKeys {
+  const message = tx.message;
+  if (message.version === 'legacy') return message.getAccountKeys();
+  if (message.addressTableLookups.length === 0) return message.getAccountKeys();
   try {
-    return VersionedTransaction.deserialize(bytes);
+    return message.getAccountKeys({ addressLookupTableAccounts: lookupTables ?? [] });
   } catch {
-    return Transaction.from(bytes);
+    return new MessageAccountKeys(message.staticAccountKeys);
   }
 }
 
-export function getInstructions(tx: Transaction | VersionedTransaction): PreviewInstruction[] {
-  if (tx instanceof VersionedTransaction) {
-    return TransactionMessageCompat(tx);
-  }
-  return tx.instructions;
+/** The lookup tables a v0 message references (none for legacy), for the caller to fetch. */
+export function lookupTableKeys(tx: VersionedTransaction): PublicKey[] {
+  return tx.message.addressTableLookups.map((lookup) => lookup.accountKey);
 }
 
-function TransactionMessageCompat(tx: VersionedTransaction): PreviewInstruction[] {
+export function getInstructions(
+  tx: VersionedTransaction,
+  lookupTables?: AddressLookupTableAccount[],
+): PreviewInstruction[] {
   try {
     const message = tx.message;
-    const keys = message.staticAccountKeys;
+    const keys = resolveAccountKeys(tx, lookupTables);
     return message.compiledInstructions.map((ix): PreviewInstruction => {
-      // Indexes past the static keys point into address lookup tables, which we do not fetch yet.
-      const indexes = [ix.programIdIndex, ...ix.accountKeyIndexes];
-      if (indexes.some((index) => index >= keys.length)) {
+      const programId = keys.get(ix.programIdIndex);
+      const accounts = ix.accountKeyIndexes.map((index) => keys.get(index));
+      // A key still missing after resolution points into a table we could not read.
+      if (!programId || accounts.some((key) => key === undefined)) {
         return { unreadable: true, reason: UNREADABLE_REASON };
       }
-      return {
-        programId: keys[ix.programIdIndex],
-        keys: ix.accountKeyIndexes.map((index) => ({
-          pubkey: keys[index],
-          isSigner: message.isAccountSigner(index),
-          isWritable: message.isAccountWritable(index),
+      return new TransactionInstruction({
+        programId,
+        keys: accounts.map((pubkey, i) => ({
+          pubkey: pubkey!,
+          isSigner: message.isAccountSigner(ix.accountKeyIndexes[i]),
+          isWritable: message.isAccountWritable(ix.accountKeyIndexes[i]),
         })),
         data: Buffer.from(ix.data),
-      };
+      });
     });
   } catch {
     return [{ unreadable: true, reason: UNREADABLE_REASON }];
   }
+}
+
+/** The accounts whose signatures the message requires: the first `numRequiredSignatures` static keys. */
+export function requiredSigners(tx: VersionedTransaction): PublicKey[] {
+  const message = tx.message;
+  return message.staticAccountKeys.slice(0, message.header.numRequiredSignatures);
+}
+
+/**
+ * True when `bytes` are exactly a serialized transaction message (legacy or v0):
+ * they parse, and the parsed message serializes back to the same bytes. The
+ * runtime verifies a transaction's signatures over the re-serialized message,
+ * so this is precisely the case where an ed25519 signature over `bytes` would
+ * also be a valid transaction signature. The signMessage guard.
+ */
+export function isTransactionMessage(bytes: Uint8Array): boolean {
+  let again: Uint8Array;
+  try {
+    // Both steps may throw: web3.js re-serializes into a packet-sized buffer, so a
+    // message it cannot fit back into 1232 bytes cannot be a valid transaction message.
+    const message: VersionedMessage = VersionedMessage.deserialize(bytes);
+    again = message.serialize();
+  } catch {
+    return false;
+  }
+  if (again.length !== bytes.length) return false;
+  for (let i = 0; i < bytes.length; i += 1) {
+    if (again[i] !== bytes[i]) return false;
+  }
+  return true;
 }
 
 export function decodeInstruction(ix: PreviewInstruction): DecodedInstruction {
@@ -152,8 +204,4 @@ export function collectWarnings(instructions: DecodedInstruction[]): PreviewWarn
     }
   }
   return warnings;
-}
-
-export function isVersioned(tx: Transaction | VersionedTransaction): tx is VersionedTransaction {
-  return tx instanceof VersionedTransaction;
 }

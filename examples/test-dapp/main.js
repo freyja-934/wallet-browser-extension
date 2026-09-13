@@ -3,6 +3,7 @@ import bs58 from 'bs58';
 import {
   Connection,
   PublicKey,
+  SystemInstruction,
   SystemProgram,
   TransactionMessage,
   VersionedTransaction,
@@ -15,6 +16,8 @@ const rpcUrl = onDevnet
   ? 'https://api.devnet.solana.com'
   : 'https://api.mainnet-beta.solana.com';
 const clusterChain = onDevnet ? 'solana:devnet' : 'solana:mainnet';
+/** The chain this build is not on: the wallet must refuse it with a Settings hint. */
+const otherChain = onDevnet ? 'solana:mainnet' : 'solana:devnet';
 
 const logEl = document.getElementById('log');
 const log = (value) => {
@@ -26,9 +29,12 @@ let wallet = null;
 const register = (registered) => {
   if (registered.name !== 'Cinder Wallet') return log(`registered ${registered.name}`);
   wallet = registered;
-  // Lock, disconnect, revoke, account and cluster changes arrive here as `change`.
+  // Lock, disconnect, revoke, account and cluster changes arrive here as `change`;
+  // a cluster change re-stamps every account's `chains`, so those are logged too.
   wallet.features['standard:events'].on('change', ({ accounts }) => {
-    if (accounts) log({ event: 'change', accounts: accounts.map((account) => account.address) });
+    if (accounts) {
+      log({ event: 'change', accounts: accounts.map((account) => account.address), chains: accounts[0]?.chains ?? [] });
+    }
   });
   log(`registered ${registered.name}`);
 };
@@ -42,7 +48,8 @@ document.getElementById('connect').onclick = async () => {
   if (!wallet) return log('No Cinder Wallet yet — load the extension, then refresh this page.');
   try {
     const { accounts } = await wallet.features['standard:connect'].connect();
-    log({ accounts: accounts.map((account) => account.address) });
+    // `chains` follows the wallet's active cluster; wallet-adapter refuses to send otherwise.
+    log({ accounts: accounts.map((account) => account.address), chains: accounts[0]?.chains ?? [] });
   } catch (error) {
     log(error instanceof Error ? error.message : String(error));
   }
@@ -88,7 +95,7 @@ async function waitForConfirmation(connection, signature) {
   return false;
 }
 
-async function buildSelfTransfer(account) {
+async function buildSelfTransfer(account, lamports = 0) {
   const address = account.address;
   const pubkey = new PublicKey(address);
   const connection = new Connection(rpcUrl, 'confirmed');
@@ -98,7 +105,7 @@ async function buildSelfTransfer(account) {
   const ix = SystemProgram.transfer({
     fromPubkey: pubkey,
     toPubkey: pubkey,
-    lamports: 0,
+    lamports,
   });
   const message = new TransactionMessage({
     payerKey: pubkey,
@@ -140,6 +147,66 @@ document.getElementById('signAndSend').onclick = async () => {
     const connection = new Connection(rpcUrl, 'confirmed');
     const confirmed = await waitForConfirmation(connection, signature);
     log({ signatureLength: out.signature.length, signature, confirmed });
+  } catch (error) {
+    log(error instanceof Error ? error.message : String(error));
+  }
+};
+
+/** The lamports of the one transfer in a signed self-transfer, so the outputs' order is observable. */
+function transferLamports(signedTransaction) {
+  const tx = VersionedTransaction.deserialize(signedTransaction);
+  const [ix] = TransactionMessage.decompile(tx.message).instructions;
+  return Number(SystemInstruction.decodeTransfer(ix).lamports);
+}
+
+document.getElementById('signAll').onclick = async () => {
+  if (!wallet?.accounts[0]) return log('Connect first');
+  try {
+    // Two transactions, one call: the wallet opens one approval window and answers both in
+    // order. They transfer 1 and 2 lamports so the order of the outputs can be checked.
+    const [first, second] = await Promise.all([
+      buildSelfTransfer(wallet.accounts[0], 1),
+      buildSelfTransfer(wallet.accounts[0], 2),
+    ]);
+    const outs = await wallet.features['solana:signTransaction'].signTransaction(
+      { account: wallet.accounts[0], transaction: first.serialize(), chain: clusterChain },
+      { account: wallet.accounts[0], transaction: second.serialize(), chain: clusterChain },
+    );
+    log({
+      signedCount: outs.length,
+      signedBytes: outs.map((out) => out.signedTransaction.length),
+      lamports: outs.map((out) => transferLamports(out.signedTransaction)),
+    });
+  } catch (error) {
+    log(error instanceof Error ? error.message : String(error));
+  }
+};
+
+document.getElementById('signWrongChain').onclick = async () => {
+  if (!wallet?.accounts[0]) return log('Connect first');
+  try {
+    const tx = await buildSelfTransfer(wallet.accounts[0]);
+    await wallet.features['solana:signTransaction'].signTransaction({
+      account: wallet.accounts[0],
+      transaction: tx.serialize(),
+      chain: otherChain,
+    });
+    log({ error: `wallet signed for ${otherChain}; it should have refused` });
+  } catch (error) {
+    log(error instanceof Error ? error.message : String(error));
+  }
+};
+
+document.getElementById('signTxAsMessage').onclick = async () => {
+  if (!wallet?.accounts[0]) return log('Connect first');
+  try {
+    // The serialized message of a transaction: a signature over it would be a valid transaction signature.
+    const tx = await buildSelfTransfer(wallet.accounts[0]);
+    await wallet.features['solana:signMessage'].signMessage({
+      account: wallet.accounts[0],
+      message: tx.message.serialize(),
+    });
+    log({ error: 'wallet signed a transaction message as a message; it should have refused' });
   } catch (error) {
     log(error instanceof Error ? error.message : String(error));
   }

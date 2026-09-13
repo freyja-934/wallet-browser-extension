@@ -36,7 +36,7 @@
       font-weight: 600;
     }
     #connect { background: var(--orange); color: #010000; }
-    #connectSilent, #signMessage, #signTx, #signAndSend {
+    #connectSilent, #signMessage, #signTx, #signAndSend, #signAll, #signWrongChain, #signTxAsMessage {
       background: rgba(235,234,233,.08);
       color: var(--fg);
       border: 1px solid rgba(235,234,233,.14);
@@ -62,6 +62,9 @@
       <button id="signMessage">Sign message</button>
       <button id="signTx">Sign v0 transfer</button>
       <button id="signAndSend">Sign and send (reject in wallet)</button>
+      <button id="signAll">Sign two (one approval)</button>
+      <button id="signWrongChain">Sign on the other chain (refused)</button>
+      <button id="signTxAsMessage">Sign a transaction as a message (refused)</button>
     </div>
     <pre id="log">waiting for wallet-standard:register-wallet…</pre>
   </div>

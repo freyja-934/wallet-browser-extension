@@ -8,8 +8,7 @@ import { PrimaryButton, SecondaryButton } from '../ui/Button';
 import { Card, CardContent } from '../ui/Card';
 import { GlowMark } from '../ui/GlowMark';
 import { UnlockForm } from '../wallet/UnlockForm';
-
-type Preview = PreviewResult;
+import { BalanceDiff } from './BalanceDiff';
 
 const KIND_LABEL: Record<string, string> = {
   connect: 'Connect',
@@ -17,6 +16,18 @@ const KIND_LABEL: Record<string, string> = {
   signTransaction: 'Sign transaction',
   signAndSendTransaction: 'Send transaction',
 };
+
+/** A preview that could not be fetched at all (the worker threw): shown in place, never approvable. */
+interface PreviewFailure {
+  failed: true;
+  error: string;
+}
+
+type ItemPreview = PreviewResult | PreviewFailure;
+
+function isFailure(preview: ItemPreview): preview is PreviewFailure {
+  return 'failed' in preview;
+}
 
 export function ApprovalScreen() {
   const params = new URLSearchParams(window.location.search);
@@ -26,9 +37,9 @@ export function ApprovalScreen() {
   const [locked, setLocked] = useState<boolean | null>(null);
   // The worker settled the request while this window was open (a lock rejected it, the page gave up).
   const [expired, setExpired] = useState(false);
-  const [preview, setPreview] = useState<Preview | null>(null);
-  const [previewSettled, setPreviewSettled] = useState(false);
-  const [showInstructions, setShowInstructions] = useState(false);
+  // One entry per transaction of the request, in order, once all of them have settled.
+  const [previews, setPreviews] = useState<ItemPreview[] | null>(null);
+  const [showInstructions, setShowInstructions] = useState<Record<number, boolean>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -83,25 +94,29 @@ export function ApprovalScreen() {
     setError('This request has expired. Retry it from the site.');
   };
 
-  // The preview needs the RPC and a readable request; it runs once the wallet is unlocked.
+  // The preview needs the RPC and a readable request; it runs once the wallet is unlocked,
+  // one item at a time, and settles only when every item has an answer.
   useEffect(() => {
-    if (locked !== false || !request?.transactionBytes || previewSettled) return;
+    const transactions = request?.transactions ?? [];
+    if (locked !== false || transactions.length === 0 || previews) return;
     let cancelled = false;
     (async () => {
-      try {
-        const result = await extensionClient.previewTransaction(request.transactionBytes!);
-        if (!cancelled) setPreview(result);
-      } catch (err) {
-        // Error and settle land in the same handler so Approve never enables before the banner renders.
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Preview failed');
-      } finally {
-        if (!cancelled) setPreviewSettled(true);
+      const results: ItemPreview[] = [];
+      for (const transaction of transactions) {
+        try {
+          results.push(await extensionClient.previewTransaction(transaction));
+        } catch (err) {
+          results.push({ failed: true, error: err instanceof Error ? err.message : 'Preview failed' });
+        }
+        if (cancelled) return;
       }
+      // Settle in one update so Approve never enables before every banner renders.
+      setPreviews(results);
     })();
     return () => {
       cancelled = true;
     };
-  }, [locked, request, previewSettled]);
+  }, [locked, request, previews]);
 
   const approve = async () => {
     setBusy(true);
@@ -128,10 +143,21 @@ export function ApprovalScreen() {
   };
 
   const originHost = request?.origin ? safeHost(request.origin) : '';
-  const danger = preview?.warnings?.some((warning) => warning.level === 'danger');
   const isSend = request?.kind === 'signAndSendTransaction';
-  // Never let a transaction be approved before its preview has settled.
-  const awaitingPreview = Boolean(request?.transactionBytes) && !previewSettled;
+  const transactionCount = request?.transactions?.length ?? 0;
+  // Never let a transaction be approved before every preview has settled.
+  const awaitingPreview = transactionCount > 0 && previews === null;
+  const settled = previews ?? [];
+  // A preview the worker could not produce at all, or bytes it could not read: no approving that.
+  const anyUnreadable = settled.some((preview) => isFailure(preview) || preview.unreadable);
+  const notSigner = settled.find((preview) => !isFailure(preview) && !preview.signerOk);
+  const anyFailedSimulation = settled.some((preview) => !isFailure(preview) && !preview.success);
+  const anyDanger = settled.some((preview) => !isFailure(preview) && preview.warnings.some((w) => w.level === 'danger'));
+  // Simulation failed but the bytes are readable and ours to sign: the user may still go ahead, warned.
+  const approveAnyway = !anyUnreadable && !notSigner && anyFailedSimulation;
+  const approveDisabled =
+    busy || !request || expired || locked !== false || awaitingPreview || anyUnreadable || Boolean(notSigner);
+  const danger = approveAnyway || (isSend && anyDanger);
 
   return (
     <PopupFrame atmosphere="still" heavy>
@@ -161,6 +187,8 @@ export function ApprovalScreen() {
               <CardContent className="space-y-2 text-sm">
                 <Row label="Origin" value={originHost || request.origin} />
                 <Row label="Type" value={KIND_LABEL[request.kind] || request.kind} />
+                {transactionCount > 1 && <Row label="Transactions" value={String(transactionCount)} />}
+                {request.chain && <Row label="Chain" value={request.chain} />}
                 {expired && (
                   <p className="text-ui-danger" data-testid="approval-expired">
                     Expired — the site is no longer waiting for this request.
@@ -170,59 +198,82 @@ export function ApprovalScreen() {
             </Card>
           )}
 
-        {preview && (
-          <Card className="mb-4">
-            <CardContent className="space-y-3">
-              <p
-                className={`text-sm ${preview.success ? 'text-ui-success' : 'text-ui-danger'}`}
-                data-testid="approval-preview"
-              >
-                {preview.success ? 'Simulation succeeded' : preview.error || 'Simulation failed'}
-              </p>
-              {preview.warnings?.map((warning, i) => (
-                <Banner key={i} tone={warning.level === 'danger' ? 'danger' : 'warning'}>
-                  {warning.message}
-                </Banner>
-              ))}
-              {preview.instructions && preview.instructions.length > 0 && (
-                <div>
-                  <button
-                    type="button"
-                    onClick={() => setShowInstructions((v) => !v)}
-                    className="text-xs text-fg-2 hover:text-fg-0"
-                  >
-                    {showInstructions ? 'Hide' : 'Show'} instructions
-                  </button>
-                  {showInstructions && (
-                    <div className="mt-2 space-y-1">
-                      {preview.instructions.map((ix, i) => (
-                        <div key={i} className="text-xs text-fg-1">
-                          {ix.label} <span className="text-fg-3">({ix.programName})</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+          {notSigner && (
+            <div className="mb-4">
+              <Banner tone="danger">{notSigner.error}</Banner>
+            </div>
+          )}
+
+          {previews?.map((preview, i) => (
+            <Card className="mb-4" key={i}>
+              <CardContent className="space-y-3">
+                {/* Card does not forward attributes; the item marker lives on this wrapper. */}
+                <div data-testid="approval-item" data-index={i} className="space-y-3">
+                {transactionCount > 1 && (
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-fg-2">
+                    Transaction {i + 1} of {transactionCount}
+                  </p>
+                )}
+                {isFailure(preview) ? (
+                  <p className="text-sm text-ui-danger" data-testid="approval-preview">
+                    {preview.error}
+                  </p>
+                ) : (
+                  <>
+                    <p
+                      className={`text-sm ${preview.success ? 'text-ui-success' : 'text-ui-danger'}`}
+                      data-testid="approval-preview"
+                    >
+                      {preview.success ? 'Simulation succeeded' : preview.error || 'Simulation failed'}
+                    </p>
+                    {preview.diff && <BalanceDiff diff={preview.diff} />}
+                    {preview.warnings.map((warning, j) => (
+                      <Banner key={j} tone={warning.level === 'danger' ? 'danger' : 'warning'}>
+                        {warning.message}
+                      </Banner>
+                    ))}
+                    {preview.instructions.length > 0 && (
+                      <div>
+                        <button
+                          type="button"
+                          onClick={() => setShowInstructions((v) => ({ ...v, [i]: !v[i] }))}
+                          className="text-xs text-fg-2 hover:text-fg-0"
+                        >
+                          {showInstructions[i] ? 'Hide' : 'Show'} instructions
+                        </button>
+                        {showInstructions[i] && (
+                          <div className="mt-2 space-y-1">
+                            {preview.instructions.map((ix, j) => (
+                              <div key={j} className="text-xs text-fg-1">
+                                {ix.label} <span className="text-fg-3">({ix.programName})</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
                 </div>
-              )}
-            </CardContent>
-          </Card>
-        )}
+              </CardContent>
+            </Card>
+          ))}
 
-        {request?.kind === 'signMessage' && (
-          <Card className="mb-4">
-            <CardContent>
-              <p className="break-all font-mono text-xs text-fg-2">
-                {new TextDecoder().decode(Uint8Array.from(request.messageBytes || []))}
-              </p>
-            </CardContent>
-          </Card>
-        )}
+          {request?.kind === 'signMessage' && (
+            <Card className="mb-4">
+              <CardContent className="space-y-3">
+                {(request.messages ?? []).map((message, i) => (
+                  <MessageBody key={i} bytes={Uint8Array.from(message)} index={i} total={request.messages?.length ?? 1} />
+                ))}
+              </CardContent>
+            </Card>
+          )}
 
-        {isSend && danger && (
-          <div className="mb-4">
-            <Banner tone="danger">This request can move funds. Review the simulation before approving.</Banner>
-          </div>
-        )}
+          {isSend && anyDanger && (
+            <div className="mb-4">
+              <Banner tone="danger">This request can move funds. Review the simulation before approving.</Banner>
+            </div>
+          )}
         </div>
 
         <div className="grid shrink-0 grid-cols-2 gap-3 pt-4">
@@ -231,15 +282,49 @@ export function ApprovalScreen() {
           </SecondaryButton>
           <PrimaryButton
             onClick={approve}
-            disabled={busy || !request || expired || locked !== false || awaitingPreview}
+            disabled={approveDisabled}
             data-testid="approval-approve"
-            className={isSend && danger ? 'bg-ui-danger text-[#010000] shadow-none' : ''}
+            className={danger ? 'bg-ui-danger text-[#010000] shadow-none hover:bg-ui-danger' : ''}
           >
-            Approve
+            {approveAnyway ? 'Approve anyway' : 'Approve'}
           </PrimaryButton>
         </div>
       </div>
     </PopupFrame>
+  );
+}
+
+/** Most bytes of a message shown as hex before the rest is elided. */
+const HEX_PREVIEW_BYTES = 512;
+
+/** UTF-8 when the bytes are valid text; otherwise hex with the byte count, so nothing is guessed at. */
+function MessageBody({ bytes, index, total }: { bytes: Uint8Array; index: number; total: number }) {
+  let text: string | null = null;
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    text = null;
+  }
+  const heading = total > 1 ? `Message ${index + 1} of ${total}` : undefined;
+  if (text !== null) {
+    return (
+      <div data-testid="approval-message" data-encoding="utf-8">
+        {heading && <p className="mb-1 text-[11px] uppercase tracking-[0.18em] text-fg-2">{heading}</p>}
+        <p className="whitespace-pre-wrap break-all font-mono text-xs text-fg-2">{text}</p>
+      </div>
+    );
+  }
+  const shown = bytes.subarray(0, HEX_PREVIEW_BYTES);
+  const hex = Array.from(shown, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return (
+    <div data-testid="approval-message" data-encoding="hex">
+      {heading && <p className="mb-1 text-[11px] uppercase tracking-[0.18em] text-fg-2">{heading}</p>}
+      <p className="mb-1 text-xs text-fg-2">Binary message, {bytes.length} bytes (hex)</p>
+      <p className="break-all font-mono text-xs text-fg-2">
+        {hex}
+        {bytes.length > HEX_PREVIEW_BYTES && '…'}
+      </p>
+    </div>
   );
 }
 

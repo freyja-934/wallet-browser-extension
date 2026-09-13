@@ -1,5 +1,6 @@
 {
   "manifest_version": 3,
+  "minimum_chrome_version": "111",
   "name": "Cinder Wallet",
   "version": "0.2.0",
   "description": "Cinder Wallet — a Solana wallet with Wallet Standard and transaction preview",
@@ -22,6 +23,13 @@
       "matches": ["http://localhost/*", "https://*/*"],
       "js": ["src/content/content-script.js"],
       "run_at": "document_start",
+      "all_frames": false
+    },
+    {
+      "matches": ["http://localhost/*", "https://*/*"],
+      "js": ["src/content/injected.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
       "all_frames": false
     }
   ],
@@ -53,7 +61,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["src/content/injected.js", "assets/*"],
+      "resources": ["assets/*"],
       "matches": ["http://localhost/*", "https://*/*"]
     }
   ]

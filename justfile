@@ -33,7 +33,16 @@ test *ARGS:
 
 [doc('Build the loadable Chrome MV3 extension into dist/')]
 ext:
+    #!/usr/bin/env bash
+    set -euo pipefail
     {{ ext_c }}
+    # The provider runs in the page's MAIN world: it must carry no API key, no build-time env, and no chrome.* call.
+    for needle in 'api-key' 'VITE_' 'chrome.'; do
+        if grep -qF -- "$needle" dist/src/content/injected.js; then
+            echo "ext: refusing dist/ — dist/src/content/injected.js contains '$needle'; the page-world bundle must not." >&2
+            exit 1
+        fi
+    done
 
 [doc('Serve the Wallet Standard test dApp at http://localhost:5174')]
 dapp:

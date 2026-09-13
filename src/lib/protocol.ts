@@ -1,10 +1,20 @@
 import type { ApprovalResult } from '../background/approvals';
-import { MAX_MESSAGE_BYTES, MAX_TRANSACTION_BYTES, validateByteArray } from './bridge';
+import {
+  MAX_MESSAGE_BYTES,
+  MAX_TRANSACTION_BYTES,
+  validateByteArray,
+  validateByteArrays,
+  validateChain,
+  validateSendOptions,
+  validateSingleTransaction,
+} from './bridge';
 import {
   isExtensionMessageType,
   type ConnectedSite,
   type ExtensionMessageType,
+  type KnownChain,
   type PendingApproval,
+  type SendOptions,
   type WalletPublicState,
   type WalletSettings,
 } from './messages';
@@ -30,9 +40,9 @@ export type WalletRequest =
   | { type: 'GET_ACCOUNTS' }
   | { type: 'WALLET_CONNECT'; silent?: boolean }
   | { type: 'WALLET_DISCONNECT' }
-  | { type: 'SIGN_MESSAGE'; message: number[] }
-  | { type: 'SIGN_TRANSACTION'; transaction: number[] }
-  | { type: 'SIGN_AND_SEND_TRANSACTION'; transaction: number[] }
+  | { type: 'SIGN_MESSAGE'; messages: number[][] }
+  | { type: 'SIGN_TRANSACTION'; transactions: number[][]; chain?: KnownChain; options?: SendOptions }
+  | { type: 'SIGN_AND_SEND_TRANSACTION'; transactions: number[][]; chain?: KnownChain; options?: SendOptions }
   | { type: 'PREVIEW_TRANSACTION'; transaction: number[] }
   | { type: 'GET_PENDING_REQUEST'; id: string }
   | { type: 'POLL_APPROVAL'; id: string }
@@ -65,8 +75,11 @@ export interface WalletResponses {
   EXPORT_SEED: { seedPhrase: string };
   EXPORT_PRIVATE_KEY: { privateKey: string };
   GET_ACCOUNTS: { accounts: string[] };
-  /** A prompt (`pendingId`), or the accounts straight away for a connected origin or a silent connect. */
-  WALLET_CONNECT: PendingResponse | { accounts: string[] };
+  /**
+   * A prompt (`pendingId`), or the accounts straight away for a connected origin or a
+   * silent connect, with the active cluster so the page can stamp its accounts' chains.
+   */
+  WALLET_CONNECT: PendingResponse | { accounts: string[]; cluster: WalletSettings['cluster'] };
   WALLET_DISCONNECT: { disconnected: true };
   SIGN_MESSAGE: PendingResponse;
   SIGN_TRANSACTION: PendingResponse;
@@ -266,9 +279,23 @@ export function parseRequest(input: unknown): WalletRequest {
     }
     case 'SIGN_MESSAGE':
       // Wallet Standard does not forbid signing an empty message.
-      return { type, message: validateByteArray(raw.message, MAX_MESSAGE_BYTES, 'message', true) };
+      return { type, messages: validateByteArrays(raw.messages, MAX_MESSAGE_BYTES, 'messages', true) };
     case 'SIGN_TRANSACTION':
-    case 'SIGN_AND_SEND_TRANSACTION':
+    case 'SIGN_AND_SEND_TRANSACTION': {
+      // Validated again here even though the bridge already did: the worker trusts no page-side check.
+      const request: Extract<WalletRequest, { type: typeof type }> = {
+        type,
+        transactions:
+          type === 'SIGN_AND_SEND_TRANSACTION'
+            ? validateSingleTransaction(raw.transactions)
+            : validateByteArrays(raw.transactions, MAX_TRANSACTION_BYTES, 'transactions'),
+      };
+      const chain = validateChain(raw.chain);
+      if (chain !== undefined) request.chain = chain;
+      const options = validateSendOptions(raw.options);
+      if (options !== undefined) request.options = options;
+      return request;
+    }
     case 'PREVIEW_TRANSACTION':
       return { type, transaction: validateByteArray(raw.transaction, MAX_TRANSACTION_BYTES, 'transaction') };
     case 'GET_PENDING_REQUEST':
