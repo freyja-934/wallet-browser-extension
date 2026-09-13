@@ -60,7 +60,7 @@ export async function handleMessage(
   raw: unknown,
   sender: SenderLike,
   extensionBase: string
-): Promise<Record<string, unknown>> {
+): Promise<WalletResponse> {
   const type = raw && typeof raw === 'object' && 'type' in raw ? raw.type : undefined;
   if (typeof type !== 'string' || !isExtensionMessageType(type)) {
     throw new Error('Unknown message type');

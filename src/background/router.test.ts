@@ -4,6 +4,7 @@ import nacl from 'tweetnacl';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MAX_TRANSACTION_BYTES, SINGLE_SEND_MESSAGE } from '../lib/bridge';
 import type { PendingApproval, WalletAccountInfo, WalletPublicState } from '../lib/messages';
+import type { WalletResponse } from '../lib/protocol';
 import type { PreviewResult } from '../lib/preview';
 import { deriveKeypairFromSeed, mnemonicToSeedBuffer } from '../lib/wallet';
 import { installChromeStub, STUB_EXTENSION_ID, uninstallChromeStub, type ChromeStub } from '../test/chrome-stub';
@@ -61,6 +62,12 @@ afterEach(() => {
   uninstallChromeStub();
 });
 
+/** The public state a state-returning message answered with, narrowed off the response union. */
+function stateOf(response: WalletResponse): WalletPublicState {
+  if (!('state' in response)) throw new Error('response carried no state');
+  return response.state;
+}
+
 /** The fixture wallet on Mainnet, whatever `VITE_NETWORK` the build environment carries. */
 async function createFixtureWallet(): Promise<WalletPublicState> {
   const result = await handleMessage(
@@ -69,7 +76,7 @@ async function createFixtureWallet(): Promise<WalletPublicState> {
     BASE,
   );
   await handleMessage({ type: 'UPDATE_SETTINGS', settings: { cluster: 'mainnet-beta' } }, popup, BASE);
-  return result.state as WalletPublicState;
+  return stateOf(result);
 }
 
 /** Connect `sender` the way a user would: prompt, then Approve in the window. */
@@ -166,7 +173,7 @@ describe('handleMessage', () => {
 
   it('reports no vault to the popup on a fresh install', async () => {
     const result = await handleMessage({ type: 'GET_STATE' }, popup, BASE);
-    expect(result.state).toEqual({ hasVault: false, isLocked: true, accounts: [], activeAccountIndex: 0 });
+    expect(stateOf(result)).toEqual({ hasVault: false, isLocked: true, accounts: [], activeAccountIndex: 0 });
   });
 
   it('creates the fixture wallet unlocked and derives the fixture address', async () => {
@@ -1065,7 +1072,7 @@ describe('account order', () => {
   /** Two accounts stored the way the keyring keeps them, the second not derived (its address never signs here). */
   async function twoAccounts(): Promise<void> {
     await createFixtureWallet();
-    const { accounts } = (await handleMessage({ type: 'GET_STATE' }, popup, BASE)).state as WalletPublicState;
+    const { accounts } = stateOf(await handleMessage({ type: 'GET_STATE' }, popup, BASE));
     const second: WalletAccountInfo = { address: SECOND, name: 'Account 2', derivationPath: "m/44'/501'/1'/0'", index: 1 };
     await chromeStub.storage.local.set({ cinder_accounts: { accounts: [...accounts, second] } });
   }
@@ -1262,7 +1269,7 @@ describe('multiple accounts', () => {
     await connectPage(page);
     const second = await secondAddress();
 
-    const added = (await handleMessage({ type: 'ADD_ACCOUNT' }, popup, BASE)).state as WalletPublicState;
+    const added = stateOf(await handleMessage({ type: 'ADD_ACCOUNT' }, popup, BASE));
     expect(added.accounts).toHaveLength(2);
     expect(added.accounts[1]).toMatchObject({
       address: second,
@@ -1277,11 +1284,10 @@ describe('multiple accounts', () => {
       accounts: [TEST_ADDRESS, second],
     });
 
-    const switched = (await handleMessage({ type: 'SWITCH_ACCOUNT', index: 1 }, popup, BASE)).state as WalletPublicState;
+    const switched = stateOf(await handleMessage({ type: 'SWITCH_ACCOUNT', index: 1 }, popup, BASE));
     expect(switched.activeAccountIndex).toBe(1);
 
-    const renamed = (await handleMessage({ type: 'RENAME_ACCOUNT', index: 1, name: '  Savings  ' }, popup, BASE))
-      .state as WalletPublicState;
+    const renamed = stateOf(await handleMessage({ type: 'RENAME_ACCOUNT', index: 1, name: '  Savings  ' }, popup, BASE));
     expect(renamed.accounts[1]?.name).toBe('Savings');
     expect(renamed.accounts[1]?.address).toBe(second);
     expect(chromeStub.tabs.sent().at(-1)?.message).toMatchObject({
@@ -1291,8 +1297,7 @@ describe('multiple accounts', () => {
 
     // The vault was written when there was one account; the stored list is what survives.
     await handleMessage({ type: 'LOCK' }, popup, BASE);
-    const reopened = (await handleMessage({ type: 'UNLOCK', password: TEST_PASSWORD }, popup, BASE))
-      .state as WalletPublicState;
+    const reopened = stateOf(await handleMessage({ type: 'UNLOCK', password: TEST_PASSWORD }, popup, BASE));
     expect(reopened.accounts.map((account) => account.address)).toEqual([TEST_ADDRESS, second]);
     expect(reopened.accounts[1]?.name).toBe('Savings');
     // Which account the user is on is public state, stored beside the list: the
