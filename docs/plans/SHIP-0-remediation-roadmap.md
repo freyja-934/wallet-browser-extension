@@ -62,16 +62,20 @@ Minimal path to Gate A if time is short: SHIP-0, 1, 2, 3, 4, 5, 7a, 7b, then SHI
 
 Outside the repo or off limits to agents.
 
+**Still open as of 2026-09-13:** 1 (rotate the key), 4 (developer account), 5 (the
+plans-public half; agent commits were authorised), 6 (the `@types/qrcode` move), 7,
+10 (ongoing), and the `v0.3.0` tag. Everything else below is struck through and dated.
+
 1. **Rotate the Helius key** exposed in commits `be1802b`, `2f09e4f`, `6fd9b73`. Do not rewrite public history; the string is absent from the tracked tree so gitleaks stays green.
-2. **Fix GitHub billing** so Actions runs (every run fails with "account is locked due to a billing issue").
-3. **Enable GitHub Pages** (Settings → Pages → branch `main`, folder `/docs`). Jekyll renders `docs/legal/privacy.md` at `https://freyja-934.github.io/wallet-browser-extension/legal/privacy.html`; use that exact form in the listing and in `privacy.md`.
+2. ~~**Fix GitHub billing** so Actions runs (every run fails with "account is locked due to a billing issue").~~ — **done 2026-09-13.** Runs execute. Three further faults had to be fixed in the workflow itself before it went green, in PR #18: `pnpm/action-setup` was given a `version` that `packageManager` already pins, Node 20 could not load jsdom's undici so the component tests never started while the summary still printed green, and the e2e job was failing on devnet rate limits. See item 9.
+3. ~~**Enable GitHub Pages** (Settings → Pages → branch `main`, folder `/docs`).~~ — **done 2026-09-13.** `https://freyja-934.github.io/wallet-browser-extension/legal/privacy.html` and the terms page both answer 200. That is the URL to paste into the listing.
 4. **Chrome Web Store developer account**: $5 registration, 2-Step Verification, trader/non-trader declaration, verified contact email. Do not submit until Gate A.
 5. **Decide:** keep `docs/plans/`, `.claude/`, `.cursor/`, and the PR template's "AI-assisted" line public, or move plans to `docs/history/`? Authorize agents to commit on `freyja-934/ship-N-*` branches?
 6. ~~**Before SHIP-8b starts**, on `main`: `pnpm add -D jsdom @testing-library/react @testing-library/jest-dom @vitest/coverage-v8@1`~~ — **done 2026-09-13**: authorised for SHIP-10, which installed the four and landed the component tests and the coverage gate SHIP-8b had deferred. Still open: `pnpm remove @types/qrcode && pnpm add -D @types/qrcode` (it is a dependency, not a devDependency).
 7. **After SHIP-3 merges**, update the comment block in `.env.example` (agents cannot read `.env*`) to describe the Settings `rpcUrl` / `heliusApiKey` fields and DAS-on-any-URL.
-8. **After SHIP-4 merges**, retake store screenshots on a mainnet profile with a Helius key set in Settings, holding at least one named token and one NFT: 01–05 at 1280×800 plus the promo tiles, committed under `docs/store/screenshots/`. Agents have no mainnet-funded account (AGENTS.md forbids funding the fixture).
+8. ~~**After SHIP-4 merges**, retake store screenshots on a mainnet profile.~~ — **done 2026-09-13**, twice. The first set had a Devnet capture of 0 SOL sitting under a caption promising live prices; it was rebuilt in PR #18 from two runs, each shot taken on whichever cluster makes its own caption true, from a keyless build that matches `just store`. Provenance and the verification rule are in `docs/store/screenshots/README.md`. Still worth an owner pass: the approval shots show `localhost:5174` as the requesting origin, which is honest for a local test dApp but could be made prettier by hosting the demo dApp on the Pages site.
 10. **Keep the devnet fixture funded.** `HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk` had 0 lamports on 2026-09-12, so every `signAndSend` e2e fails with `AccountNotFound` (fee payer). The RPC `requestAirdrop` is rate-limited; use https://faucet.solana.com (GitHub login) for 1–2 devnet SOL before running `just e2e`. Each full run spends 10000 lamports: one 0-lamport dApp self-transfer and one 0.001 SOL popup self-transfer, both paying only the fee; nothing leaves the fixture.
-9. **After SHIP-9**, owner edits `.github/workflows/check.yml`: add a `store` job (`just store`, upload the zip as an artifact) and a Playwright job (`pnpm exec playwright install chromium`, `just e2e`). SHIP-9 writes the exact YAML into its plan.
+9. ~~**After SHIP-9**, owner edits `.github/workflows/check.yml`: add a `store` job and a Playwright job.~~ — **done 2026-09-13**, owner waived the off-limits rule once for this. `store` runs on every PR and push and uploads the zip. The Playwright job landed but is **opt-in** (`workflow_dispatch`): public devnet rate-limits GitHub-hosted runners hard enough that it failed seven specs on HTTP 429, and a gate that cannot tell throttling apart from a real break is worse than none. `just e2e` stays the strict local gate.
 
 ---
 
