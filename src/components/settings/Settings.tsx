@@ -22,6 +22,7 @@ import { Card, CardContent } from '../ui/Card';
 import { FieldLabel, PasswordField, Select, TextField } from '../ui/Input';
 import { Icon } from '../ui/Icon';
 import { Modal, ModalContent, ModalFooter, ModalHeader } from '../ui/Modal';
+import { ConnectedSites } from './ConnectedSites';
 
 const PROBE_TIMEOUT_MS = 10_000;
 
@@ -350,6 +351,8 @@ export function Settings() {
           </div>
         </CardContent>
       </Card>
+
+      <ConnectedSites />
 
       <Card>
         <CardContent className="space-y-4">

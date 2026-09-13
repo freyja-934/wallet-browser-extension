@@ -102,6 +102,20 @@ describe('alarms', () => {
     await expect(stub.alarms.clear('tick')).resolves.toBe(false);
     expect(stub.alarms.scheduled()).toStrictEqual({});
   });
+
+  it('get reports the scheduled time Chrome would: `when` as given, else minutes from now', async () => {
+    await expect(stub.alarms.get('none')).resolves.toBeUndefined();
+    await stub.alarms.create('at', { when: 1_700_000_000_000 });
+    await expect(stub.alarms.get('at')).resolves.toStrictEqual({ name: 'at', scheduledTime: 1_700_000_000_000 });
+    const before = Date.now();
+    await stub.alarms.create('later', { delayInMinutes: 2 });
+    const later = await stub.alarms.get('later');
+    expect(later?.scheduledTime).toBeGreaterThanOrEqual(before + 120_000);
+    await stub.alarms.create('every', { periodInMinutes: 1 });
+    expect((await stub.alarms.get('every'))?.periodInMinutes).toBe(1);
+    await stub.alarms.clear('at');
+    await expect(stub.alarms.get('at')).resolves.toBeUndefined();
+  });
 });
 
 describe('windows', () => {
@@ -112,6 +126,14 @@ describe('windows', () => {
       { id: 1, options: { url: 'approve.html', type: 'popup' } },
       { id: 2, options: { url: 'index.html' } },
     ]);
+  });
+
+  it('remove records every call and rejects for a window it does not have', async () => {
+    await stub.windows.create({ url: 'approve.html' });
+    await expect(stub.windows.remove(1)).resolves.toBeUndefined();
+    await expect(stub.windows.remove(1)).rejects.toThrow('No window with id: 1.');
+    await expect(stub.windows.remove(99)).rejects.toThrow('No window with id: 99.');
+    expect(stub.windows.removed()).toStrictEqual([1, 1, 99]);
   });
 });
 

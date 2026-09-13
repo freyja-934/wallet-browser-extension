@@ -27,6 +27,18 @@ describe('buildRuntimeMessage', () => {
     }
   });
 
+  it('forwards silent on WALLET_CONNECT only when it is exactly true', () => {
+    expect(buildRuntimeMessage('WALLET_CONNECT', { silent: true }, ORIGIN)).toEqual({
+      type: 'WALLET_CONNECT',
+      origin: ORIGIN,
+      silent: true,
+    });
+    for (const silent of [false, 'true', 1, undefined]) {
+      expect(buildRuntimeMessage('WALLET_CONNECT', { silent }, ORIGIN)).toEqual({ type: 'WALLET_CONNECT', origin: ORIGIN });
+    }
+    expect(buildRuntimeMessage('GET_ACCOUNTS', { silent: true }, ORIGIN)).toEqual({ type: 'GET_ACCOUNTS', origin: ORIGIN });
+  });
+
   it('uses the caller origin, not one from the payload', () => {
     const out = buildRuntimeMessage('GET_ACCOUNTS', { origin: 'https://evil.example' }, ORIGIN);
     expect(out.origin).toBe(ORIGIN);

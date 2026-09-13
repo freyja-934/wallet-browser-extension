@@ -17,12 +17,104 @@ import {
   mnemonicToSeedBuffer,
   validateSeedPhrase,
 } from '../lib/wallet';
+import { rejectAll } from './approvals';
+import * as origins from './origins';
+import { sessionArea } from './session-store';
 
-const VAULT_KEYS = ['cinder_vault', 'lumen_vault'] as const;
-const SETTINGS_KEYS = ['cinder_settings', 'lumen_settings'] as const;
-const SESSION_KEYS = ['cinder_session', 'lumen_session'] as const;
-const ACCOUNTS_KEYS = ['cinder_accounts', 'lumen_accounts'] as const;
-const AUTOLOCK_ALARMS = ['cinder-autolock', 'lumen-autolock'] as const;
+const VAULT_KEY = 'cinder_vault';
+const SETTINGS_KEY = 'cinder_settings';
+const SESSION_KEY = 'cinder_session';
+const ACCOUNTS_KEY = 'cinder_accounts';
+const AUTOLOCK_ALARM = 'cinder-autolock';
+
+/** Pre-rename storage keys, read once and moved to their `cinder_*` names on first access. */
+const LEGACY_LOCAL_KEYS: Record<string, string> = {
+  lumen_vault: VAULT_KEY,
+  lumen_settings: SETTINGS_KEY,
+  lumen_accounts: ACCOUNTS_KEY,
+};
+const LEGACY_SESSION_KEYS: Record<string, string> = { lumen_session: SESSION_KEY };
+const LEGACY_AUTOLOCK_ALARM = 'lumen-autolock';
+
+async function moveLegacyKeys(
+  area: Pick<chrome.storage.StorageArea, 'get' | 'set' | 'remove'>,
+  mapping: Record<string, string>
+): Promise<void> {
+  const oldKeys = Object.keys(mapping);
+  const found = await area.get(oldKeys);
+  const present = oldKeys.filter((key) => found[key] !== undefined);
+  if (present.length === 0) return;
+  const current = await area.get(present.map((key) => mapping[key]));
+  const copy: Record<string, unknown> = {};
+  for (const key of present) {
+    const target = mapping[key];
+    if (current[target] === undefined) copy[target] = found[key];
+  }
+  if (Object.keys(copy).length > 0) await area.set(copy);
+  await area.remove(present);
+}
+
+let migration: Promise<void> | undefined;
+
+/**
+ * Carry a scheduled `lumen-autolock` over to `cinder-autolock` at the same
+ * moment, so the rename neither postpones nor skips the auto-lock. Not
+ * `scheduleAutoLock`: that reads settings, which would re-enter the migration.
+ */
+async function moveLegacyAlarm(): Promise<void> {
+  if (!chrome.alarms) return;
+  // Chrome resolves with undefined for an alarm that does not exist; the types say otherwise.
+  const legacy = (await chrome.alarms.get(LEGACY_AUTOLOCK_ALARM)) as chrome.alarms.Alarm | undefined;
+  await chrome.alarms.clear(LEGACY_AUTOLOCK_ALARM);
+  if (legacy) await chrome.alarms.create(AUTOLOCK_ALARM, { when: legacy.scheduledTime });
+}
+
+/** One-time move of `lumen_*` keys and the `lumen-autolock` alarm. Runs before any read or write. */
+function ensureMigrated(): Promise<void> {
+  if (!migration) {
+    migration = (async () => {
+      await moveLegacyKeys(chrome.storage.local, LEGACY_LOCAL_KEYS);
+      await moveLegacyKeys(sessionArea(), LEGACY_SESSION_KEYS);
+      await moveLegacyAlarm();
+    })().catch((error) => {
+      // Let the next access try again rather than pinning a failed promise forever.
+      migration = undefined;
+      throw error;
+    });
+  }
+  return migration;
+}
+
+/** Tests only: forget that the migration ran, so a fresh stub migrates again. */
+export function resetKeyringForTests(): void {
+  migration = undefined;
+  lockHooks = {};
+}
+
+export interface LockHooks {
+  /** After the session is gone and pending approvals rejected (lock, auto-lock, clear). */
+  onLocked?: () => void | Promise<void>;
+  /** After a successful unlock wrote the session (the popup re-reads state on this). */
+  onUnlocked?: () => void | Promise<void>;
+  /** After the vault and connected sites are removed. */
+  onCleared?: () => void | Promise<void>;
+}
+
+let lockHooks: LockHooks = {};
+
+/** The worker registers event emitters here; the keyring never touches `chrome.tabs` itself. */
+export function setLockHooks(hooks: LockHooks): void {
+  lockHooks = { ...hooks };
+}
+
+async function runHook(hook: (() => void | Promise<void>) | undefined): Promise<void> {
+  if (!hook) return;
+  try {
+    await hook();
+  } catch {
+    /* event delivery is best effort */
+  }
+}
 
 interface VaultPayload {
   mnemonic: string;
@@ -46,53 +138,38 @@ interface LegacySession {
 }
 
 async function localGet<T>(key: string): Promise<T | undefined> {
+  await ensureMigrated();
   const data = await chrome.storage.local.get(key);
   return data[key] as T | undefined;
 }
 
-async function localGetFirst<T>(keys: readonly string[]): Promise<T | undefined> {
-  for (const key of keys) {
-    const value = await localGet<T>(key);
-    if (value !== undefined) return value;
-  }
-  return undefined;
-}
-
 async function localSet(key: string, value: unknown): Promise<void> {
+  await ensureMigrated();
   await chrome.storage.local.set({ [key]: value });
 }
 
-function sessionStore() {
-  return chrome.storage.session ?? chrome.storage.local;
-}
-
 async function sessionGet<T>(key: string): Promise<T | undefined> {
-  const data = await sessionStore().get(key);
+  await ensureMigrated();
+  const data = await sessionArea().get(key);
   return data[key] as T | undefined;
 }
 
-async function sessionGetFirst<T>(keys: readonly string[]): Promise<T | undefined> {
-  for (const key of keys) {
-    const value = await sessionGet<T>(key);
-    if (value !== undefined) return value;
-  }
-  return undefined;
-}
-
 async function sessionSet(key: string, value: unknown): Promise<void> {
-  await sessionStore().set({ [key]: value });
+  await ensureMigrated();
+  await sessionArea().set({ [key]: value });
 }
 
-async function sessionRemoveAll(keys: readonly string[]): Promise<void> {
-  await sessionStore().remove([...keys]);
+async function sessionRemove(key: string): Promise<void> {
+  await ensureMigrated();
+  await sessionArea().remove(key);
 }
 
 async function writeSession(session: SessionPayload): Promise<void> {
-  await sessionSet(SESSION_KEYS[0], session);
+  await sessionSet(SESSION_KEY, session);
 }
 
 async function readSession(): Promise<SessionPayload | undefined> {
-  const raw = await sessionGetFirst<LegacySession>(SESSION_KEYS);
+  const raw = await sessionGet<LegacySession>(SESSION_KEY);
   if (!raw) return undefined;
   if (raw.seedB64) {
     return { seedB64: raw.seedB64, activeAccountIndex: raw.activeAccountIndex };
@@ -107,7 +184,7 @@ async function readSession(): Promise<SessionPayload | undefined> {
 }
 
 export async function hasVault(): Promise<boolean> {
-  return !!(await localGetFirst<StoredVault>(VAULT_KEYS));
+  return !!(await localGet<StoredVault>(VAULT_KEY));
 }
 
 /**
@@ -124,7 +201,7 @@ export function setBuildHeliusApiKeyForTests(key: string): void {
 type StoredSettings = Partial<WalletSettings>;
 
 async function readStoredSettings(): Promise<StoredSettings> {
-  return (await localGetFirst<StoredSettings>(SETTINGS_KEYS)) ?? {};
+  return (await localGet<StoredSettings>(SETTINGS_KEY)) ?? {};
 }
 
 /** Defaults under the stored object; the build cluster when none is stored. */
@@ -187,13 +264,13 @@ export async function updateSettings(partial: Partial<WalletSettings>): Promise<
   if ('heliusApiKey' in partial) {
     next.heliusApiKey = normalizeOptional(partial.heliusApiKey) ?? '';
   }
-  await localSet(SETTINGS_KEYS[0], next);
+  await localSet(SETTINGS_KEY, next);
   await scheduleAutoLock();
   return getSettings();
 }
 
 export async function getPublicState(): Promise<WalletPublicState> {
-  const vault = await localGetFirst<StoredVault>(VAULT_KEYS);
+  const vault = await localGet<StoredVault>(VAULT_KEY);
   const session = await readSession();
   const accounts = vault && session ? await accountsFromSession(session) : [];
   return {
@@ -205,14 +282,14 @@ export async function getPublicState(): Promise<WalletPublicState> {
 }
 
 async function accountsFromSession(session: SessionPayload): Promise<WalletAccountInfo[]> {
-  const stored = await localGetFirst<{ accounts: WalletAccountInfo[] }>(ACCOUNTS_KEYS);
+  const stored = await localGet<{ accounts: WalletAccountInfo[] }>(ACCOUNTS_KEY);
   if (stored?.accounts?.length) return stored.accounts;
   const seed = Buffer.from(session.seedB64, 'base64');
   return await generateAccountsFromSeed(seed, 1);
 }
 
 async function persistAccounts(accounts: WalletAccountInfo[]): Promise<void> {
-  await localSet(ACCOUNTS_KEYS[0], { accounts });
+  await localSet(ACCOUNTS_KEY, { accounts });
 }
 
 export async function createWallet(password: string, mnemonic?: string): Promise<WalletPublicState> {
@@ -224,7 +301,7 @@ export async function createWallet(password: string, mnemonic?: string): Promise
   const accounts = await generateAccountsFromSeed(seed, 1);
   const payload: VaultPayload = { mnemonic: seedInfo.mnemonic, accounts };
   const encrypted = await encrypt(JSON.stringify(payload), password);
-  await localSet(VAULT_KEYS[0], { encrypted, createdAt: Date.now() } satisfies StoredVault);
+  await localSet(VAULT_KEY, { encrypted, createdAt: Date.now() } satisfies StoredVault);
   await persistAccounts(accounts);
   await writeSession({ seedB64: seed.toString('base64'), activeAccountIndex: 0 });
   await scheduleAutoLock();
@@ -232,7 +309,7 @@ export async function createWallet(password: string, mnemonic?: string): Promise
 }
 
 async function decryptVault(password: string): Promise<VaultPayload> {
-  const vault = await localGetFirst<StoredVault>(VAULT_KEYS);
+  const vault = await localGet<StoredVault>(VAULT_KEY);
   if (!vault) throw new Error('No wallet found');
   try {
     const bytes = await decrypt(vault.encrypted, password);
@@ -253,15 +330,26 @@ export async function unlock(password: string): Promise<WalletPublicState> {
   await persistAccounts(accounts);
   await writeSession({ seedB64: seed.toString('base64'), activeAccountIndex: 0 });
   await scheduleAutoLock();
+  await runHook(lockHooks.onUnlocked);
   return getPublicState();
 }
 
 export async function lock(): Promise<WalletPublicState> {
-  await sessionRemoveAll(SESSION_KEYS);
-  if (chrome.alarms) {
-    await Promise.all(AUTOLOCK_ALARMS.map((name) => chrome.alarms.clear(name)));
-  }
+  await sessionRemove(SESSION_KEY);
+  if (chrome.alarms) await chrome.alarms.clear(AUTOLOCK_ALARM);
+  // Nothing queued before the lock may be approved after it.
+  await rejectAll('Wallet locked');
+  await runHook(lockHooks.onLocked);
   return getPublicState();
+}
+
+/**
+ * The popup is in use: push the auto-lock deadline out again. Called by the
+ * router for every extension-page message; a no-op while locked.
+ */
+export async function touchActivity(): Promise<void> {
+  if (!(await readSession())) return;
+  await scheduleAutoLock();
 }
 
 export async function requireSession(): Promise<SessionPayload> {
@@ -299,12 +387,14 @@ export async function changePassword(currentPassword: string, newPassword: strin
   const state = await unlock(currentPassword);
   const next: VaultPayload = { mnemonic: payload.mnemonic, accounts: state.accounts };
   const encrypted = await encrypt(JSON.stringify(next), newPassword);
-  await localSet(VAULT_KEYS[0], { encrypted, createdAt: Date.now() } satisfies StoredVault);
+  await localSet(VAULT_KEY, { encrypted, createdAt: Date.now() } satisfies StoredVault);
 }
 
 export async function clearWallet(): Promise<WalletPublicState> {
   await lock();
-  await chrome.storage.local.remove([...VAULT_KEYS, ...SETTINGS_KEYS, ...ACCOUNTS_KEYS]);
+  await chrome.storage.local.remove([VAULT_KEY, SETTINGS_KEY, ACCOUNTS_KEY]);
+  await origins.clear();
+  await runHook(lockHooks.onCleared);
   return getPublicState();
 }
 
@@ -317,16 +407,16 @@ export async function switchAccount(index: number): Promise<WalletPublicState> {
 export async function scheduleAutoLock(): Promise<void> {
   if (!chrome.alarms) return;
   const settings = await getSettings();
-  await Promise.all(AUTOLOCK_ALARMS.map((name) => chrome.alarms.clear(name)));
+  await chrome.alarms.clear(AUTOLOCK_ALARM);
   if (settings.autoLockTimeout <= 0) return;
-  await chrome.alarms.create(AUTOLOCK_ALARMS[0], {
+  await chrome.alarms.create(AUTOLOCK_ALARM, {
     delayInMinutes: Math.max(settings.autoLockTimeout, 1),
   });
 }
 
 export function registerAutoLock(): void {
   chrome.alarms?.onAlarm.addListener((alarm) => {
-    if ((AUTOLOCK_ALARMS as readonly string[]).includes(alarm.name)) {
+    if (alarm.name === AUTOLOCK_ALARM) {
       void lock();
     }
   });

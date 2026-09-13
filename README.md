@@ -20,9 +20,13 @@ This is a portfolio implementation. It does not impersonate Phantom. Do not put 
 ```
 Page (Wallet Standard) → content script (allowlisted) → service worker keyring
 Popup / approval window → chrome.runtime.sendMessage → same keyring
+Worker → page events (lock, disconnect, revoke, account / cluster change) → chrome.tabs.sendMessage → standard:events `change`
 Vault: PBKDF2 + AES-GCM in chrome.storage.local
-Session: chrome.storage.session (cleared when the browser closes)
+Connected sites: chrome.storage.local (Settings → Connected sites, Revoke)
+Session: chrome.storage.session (cleared when the browser closes; no local fallback)
 ```
+
+A site must be approved once (Connect) before it can read the address or ask for a signature; a connected site's later `connect()` answers without a window, `connect({ silent: true })` never prompts, and a request from a site that never connected is refused with `Not connected`. One request per site is pending at a time; closing the approval window or the site's tab rejects it, the page gives up shortly before its 120 s timeout and withdraws it, disconnecting or revoking the site rejects it, the worker expires anything older than 5 minutes, and locking rejects everything queued. Approve claims a request before signing, so whatever is broadcast is what the site is told about, and a page can only poll or cancel its own request. A connect or sign while locked opens the approval window with the unlock form inside it. There is no keep-alive port: the worker wakes for each message and pending approvals survive in `chrome.storage.session`.
 
 The toolbar popup is **380×600** (Chrome caps action popups at 600px). Approvals open `approve.html` via `chrome.windows.create`, never `chrome.action.openPopup()`.
 
@@ -47,7 +51,8 @@ Optional: copy `.env.example` to `.env` and set `VITE_HELIUS_API_KEY` for richer
 
 - MV3 service worker lifecycle and auto-lock (`chrome.alarms`)
 - BIP39 → BIP44 `m/44'/501'/n'/0'` derivation (`mnemonicToSeed`, not `Buffer.from(mnemonic)`)
-- Wallet Standard: `standard:connect`, `solana:signTransaction`, `solana:signAndSendTransaction`, `solana:signMessage`
+- Wallet Standard: `standard:connect` (with `silent`), `standard:disconnect`, `standard:events`, `solana:signTransaction`, `solana:signAndSendTransaction`, `solana:signMessage`
+- Per-origin trust: connect once, revoke in Settings; approval lifecycle (window close, timeout, lock) with pushed `change` events
 - Legacy + v0 transactions
 - Simulation preview (program names, `setAuthority` / approve warnings, unknown programs)
 - Settings-driven RPC: custom URL, optional Helius key, keyless public defaults, with per-endpoint rotation
@@ -72,14 +77,14 @@ Privacy and terms: `docs/legal/` (also shipped as `legal/privacy.html` / `legal/
 
 - `just e2e` loads Cinder Wallet into Playwright's bundled Chromium (`channel: 'chromium'`), not branded Google Chrome 152 (which removed `--load-extension`).
 - First time: `pnpm exec playwright install chromium`
-- Coverage: import / unlock, dashboard tabs, create-new + seed quiz, Send → Review (does not click Confirm), settings auto-lock / export seed / change password, Receive toast stub, dApp connect / sign-message / sign-v0, locked Connect → Unlock, `signAndSend` reject, 0-lamport `signAndSend` approve.
+- Coverage: import / unlock, dashboard tabs, create-new + seed quiz, Send → Review (does not click Confirm), settings auto-lock / export seed / change password, Receive toast stub, dApp connect / sign-message / sign-v0, locked Connect → unlock inside the approval window, `signAndSend` reject, 0-lamport `signAndSend` approve, approval window close → reject, repeat and silent connect without a window, Settings → Connected sites → Revoke, `Not connected` for a stranger, lock → empty `change` event.
 
 ## Chrome click-through (after Load unpacked)
 
 1. Create a wallet, close the popup, reopen — you should see Unlock, not Create
 2. Unlock, then `just dapp` → http://localhost:5174
-3. Connect (approval window) → Sign message → Sign v0 transfer (simulation preview)
-4. In the popup, Receive → Copy should toast “Address copied” and write the real clipboard
+3. Connect (approval window) → Sign message → Sign v0 transfer (simulation preview). Connect again: no window. Lock in the popup: the dApp log shows `change` with no accounts
+4. In the popup, Receive → Copy should toast “Address copied” and write the real clipboard; Settings → Connected sites lists localhost:5174 with Revoke
 5. Optional on **devnet only**: faucet if needed, then Send a tiny amount of SOL or an SPL token. Activity should show the amount, not “On-chain”.
 
 ## Security notes

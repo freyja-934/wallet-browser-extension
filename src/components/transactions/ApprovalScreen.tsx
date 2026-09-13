@@ -7,6 +7,7 @@ import { Banner } from '../ui/EmptyState';
 import { PrimaryButton, SecondaryButton } from '../ui/Button';
 import { Card, CardContent } from '../ui/Card';
 import { GlowMark } from '../ui/GlowMark';
+import { UnlockForm } from '../wallet/UnlockForm';
 
 type Preview = PreviewResult;
 
@@ -21,6 +22,10 @@ export function ApprovalScreen() {
   const params = new URLSearchParams(window.location.search);
   const id = params.get('id') || '';
   const [request, setRequest] = useState<PendingApproval | null>(null);
+  // null until GET_STATE answers; the request summary renders either way.
+  const [locked, setLocked] = useState<boolean | null>(null);
+  // The worker settled the request while this window was open (a lock rejected it, the page gave up).
+  const [expired, setExpired] = useState(false);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [previewSettled, setPreviewSettled] = useState(false);
   const [showInstructions, setShowInstructions] = useState(false);
@@ -35,19 +40,11 @@ export function ApprovalScreen() {
     let cancelled = false;
     (async () => {
       try {
-        const pending = await extensionClient.getPendingRequest(id);
+        const [state, pending] = await Promise.all([extensionClient.getState(), extensionClient.getPendingRequest(id)]);
         if (cancelled) return;
+        setLocked(state.isLocked);
         setRequest(pending);
-        if (!pending?.transactionBytes) return;
-        try {
-          const result = await extensionClient.previewTransaction(pending.transactionBytes);
-          if (!cancelled) setPreview(result);
-        } catch (err) {
-          // Error and settle land in the same handler so Approve never enables before the banner renders.
-          if (!cancelled) setError(err instanceof Error ? err.message : 'Preview failed');
-        } finally {
-          if (!cancelled) setPreviewSettled(true);
-        }
+        if (!pending) setError('This request has expired. Retry it from the site.');
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Request failed');
       }
@@ -56,6 +53,55 @@ export function ApprovalScreen() {
       cancelled = true;
     };
   }, [id]);
+
+  // The wallet locked underneath this window (auto-lock, or Lock in the popup): ask for the
+  // password again. The lock rejected the request, which the re-fetch after unlock reports.
+  useEffect(() => {
+    if (typeof chrome === 'undefined' || !chrome.runtime?.onMessage) return;
+    const onMessage = (message: unknown) => {
+      const event = message as { type?: unknown; event?: unknown } | null;
+      if (event?.type === 'WALLET_EVENT' && event.event === 'locked') setLocked(true);
+    };
+    chrome.runtime.onMessage.addListener(onMessage);
+    return () => chrome.runtime.onMessage.removeListener(onMessage);
+  }, []);
+
+  // Unlocked inline: the request may have been settled meanwhile, so read it again before
+  // enabling Approve. A request that is gone renders as expired with Approve disabled.
+  const onUnlocked = async () => {
+    setLocked(false);
+    try {
+      const pending = await extensionClient.getPendingRequest(id);
+      if (pending) {
+        setRequest(pending);
+        return;
+      }
+    } catch {
+      /* treated as gone */
+    }
+    setExpired(true);
+    setError('This request has expired. Retry it from the site.');
+  };
+
+  // The preview needs the RPC and a readable request; it runs once the wallet is unlocked.
+  useEffect(() => {
+    if (locked !== false || !request?.transactionBytes || previewSettled) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await extensionClient.previewTransaction(request.transactionBytes!);
+        if (!cancelled) setPreview(result);
+      } catch (err) {
+        // Error and settle land in the same handler so Approve never enables before the banner renders.
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Preview failed');
+      } finally {
+        if (!cancelled) setPreviewSettled(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [locked, request, previewSettled]);
 
   const approve = async () => {
     setBusy(true);
@@ -102,11 +148,24 @@ export function ApprovalScreen() {
 
         <div className="min-h-0 flex-1 overflow-y-auto">
           {error && <Banner tone="danger">{error}</Banner>}
+          {locked && (
+            <Card className="mb-4" data-testid="approval-unlock">
+              <CardContent className="space-y-4">
+                <p className="text-sm text-fg-2">Unlock Cinder Wallet to review this request.</p>
+                <UnlockForm onUnlocked={() => void onUnlocked()} />
+              </CardContent>
+            </Card>
+          )}
           {request && (
             <Card className="mb-4">
               <CardContent className="space-y-2 text-sm">
                 <Row label="Origin" value={originHost || request.origin} />
                 <Row label="Type" value={KIND_LABEL[request.kind] || request.kind} />
+                {expired && (
+                  <p className="text-ui-danger" data-testid="approval-expired">
+                    Expired — the site is no longer waiting for this request.
+                  </p>
+                )}
               </CardContent>
             </Card>
           )}
@@ -172,7 +231,7 @@ export function ApprovalScreen() {
           </SecondaryButton>
           <PrimaryButton
             onClick={approve}
-            disabled={busy || !request || awaitingPreview}
+            disabled={busy || !request || expired || locked !== false || awaitingPreview}
             data-testid="approval-approve"
             className={isSend && danger ? 'bg-ui-danger text-[#010000] shadow-none' : ''}
           >

@@ -36,7 +36,7 @@
       font-weight: 600;
     }
     #connect { background: var(--orange); color: #010000; }
-    #signMessage, #signTx, #signAndSend {
+    #connectSilent, #signMessage, #signTx, #signAndSend {
       background: rgba(235,234,233,.08);
       color: var(--fg);
       border: 1px solid rgba(235,234,233,.14);
@@ -58,6 +58,7 @@
     <p>Serve with <code>just dapp</code> at http://localhost:5174, then load the unpacked Cinder Wallet extension.</p>
     <div class="row">
       <button id="connect">Connect</button>
+      <button id="connectSilent">Connect (silent)</button>
       <button id="signMessage">Sign message</button>
       <button id="signTx">Sign v0 transfer</button>
       <button id="signAndSend">Sign and send (reject in wallet)</button>

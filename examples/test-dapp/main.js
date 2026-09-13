@@ -24,7 +24,12 @@ const log = (value) => {
 let wallet = null;
 
 const register = (registered) => {
-  if (registered.name === 'Cinder Wallet') wallet = registered;
+  if (registered.name !== 'Cinder Wallet') return log(`registered ${registered.name}`);
+  wallet = registered;
+  // Lock, disconnect, revoke, account and cluster changes arrive here as `change`.
+  wallet.features['standard:events'].on('change', ({ accounts }) => {
+    if (accounts) log({ event: 'change', accounts: accounts.map((account) => account.address) });
+  });
   log(`registered ${registered.name}`);
 };
 
@@ -38,6 +43,17 @@ document.getElementById('connect').onclick = async () => {
   try {
     const { accounts } = await wallet.features['standard:connect'].connect();
     log({ accounts: accounts.map((account) => account.address) });
+  } catch (error) {
+    log(error instanceof Error ? error.message : String(error));
+  }
+};
+
+document.getElementById('connectSilent').onclick = async () => {
+  if (!wallet) return log('No Cinder Wallet yet — load the extension, then refresh this page.');
+  try {
+    // Never prompts: the accounts if this site is already connected, otherwise none.
+    const { accounts } = await wallet.features['standard:connect'].connect({ silent: true });
+    log({ silent: true, accounts: accounts.map((account) => account.address) });
   } catch (error) {
     log(error instanceof Error ? error.message : String(error));
   }

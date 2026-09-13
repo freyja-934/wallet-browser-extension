@@ -15,7 +15,7 @@ const cases: Record<ExtensionMessageType, Case> = {
   LOCK: { valid: {}, malformed: {}, error: '' },
   CLEAR_WALLET: { valid: {}, malformed: {}, error: '' },
   GET_ACCOUNTS: { valid: {}, malformed: {}, error: '' },
-  WALLET_CONNECT: { valid: {}, malformed: {}, error: '' },
+  WALLET_CONNECT: { valid: { silent: true }, malformed: { silent: 'yes' }, error: 'Invalid silent' },
   WALLET_DISCONNECT: { valid: {}, malformed: {}, error: '' },
   UPDATE_SETTINGS: {
     valid: { settings: { autoLockTimeout: 5, cluster: 'devnet', hideSmallBalances: true } },
@@ -55,6 +55,9 @@ const cases: Record<ExtensionMessageType, Case> = {
   GET_PENDING_REQUEST: { valid: { id: 'abc' }, malformed: { id: '' }, error: 'Invalid id' },
   POLL_APPROVAL: { valid: { id: 'abc' }, malformed: { id: 5 }, error: 'Invalid id' },
   APPROVE_REQUEST: { valid: { id: 'abc' }, malformed: {}, error: 'Invalid id' },
+  CANCEL_APPROVAL: { valid: { id: 'abc' }, malformed: { id: '' }, error: 'Invalid id' },
+  GET_CONNECTED_SITES: { valid: {}, malformed: {}, error: '' },
+  REVOKE_SITE: { valid: { origin: 'https://dapp.example' }, malformed: { origin: '' }, error: 'Invalid origin' },
   REJECT_REQUEST: {
     valid: { id: 'abc', reason: 'nope' },
     malformed: { id: 'abc', reason: { text: 'nope' } },
@@ -80,9 +83,11 @@ describe('parseRequest', () => {
     const { valid, malformed, error } = cases[type];
 
     it(`${type}: accepts a valid payload and copies only its fields`, () => {
-      const out = parseRequest({ type, ...valid, origin: 'https://evil.example', extra: 1 });
+      // REVOKE_SITE names an origin on purpose (popup-only); every other type must drop a smuggled one.
+      const smuggled = 'origin' in valid ? { extra: 1 } : { origin: 'https://evil.example', extra: 1 };
+      const out = parseRequest({ type, ...valid, ...smuggled });
       expect(out).toEqual({ type, ...valid });
-      expect(Object.keys(out)).not.toContain('origin');
+      if (!('origin' in valid)) expect(Object.keys(out)).not.toContain('origin');
       expect(Object.keys(out)).not.toContain('extra');
     });
 
@@ -117,6 +122,15 @@ describe('parseRequest', () => {
       type: 'REJECT_REQUEST',
       id: 'a',
     });
+  });
+
+  it('treats an absent, null, or false silent flag on WALLET_CONNECT as an ordinary connect', () => {
+    expect(parseRequest({ type: 'WALLET_CONNECT' })).toStrictEqual({ type: 'WALLET_CONNECT' });
+    expect(parseRequest({ type: 'WALLET_CONNECT', silent: null })).toStrictEqual({ type: 'WALLET_CONNECT' });
+    expect(parseRequest({ type: 'WALLET_CONNECT', silent: false })).toStrictEqual({ type: 'WALLET_CONNECT', silent: false });
+    for (const silent of [1, 'true', {}]) {
+      expect(() => parseRequest({ type: 'WALLET_CONNECT', silent })).toThrow('Invalid silent');
+    }
   });
 
   it('requires a string password on CREATE_WALLET', () => {

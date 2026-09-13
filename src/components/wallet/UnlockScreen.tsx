@@ -1,30 +1,11 @@
-import { useState, type FormEvent } from 'react';
-import toast from 'react-hot-toast';
-import { unlockWallet } from '../../store/slices/walletSlice';
-import { useAppDispatch, useAppSelector } from '../../store/store';
+import { initializeWallet } from '../../store/slices/walletSlice';
+import { useAppDispatch } from '../../store/store';
 import { PopupFrame } from '../ui/Atmosphere';
-import { Banner } from '../ui/EmptyState';
-import { PrimaryButton } from '../ui/Button';
 import { GlowMark } from '../ui/GlowMark';
-import { FieldLabel, PasswordField } from '../ui/Input';
+import { UnlockForm } from './UnlockForm';
 
 export function UnlockScreen() {
   const dispatch = useAppDispatch();
-  const { isLoading, error } = useAppSelector((state) => state.wallet);
-  const [password, setPassword] = useState('');
-
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!password) {
-      toast.error('Enter your password');
-      return;
-    }
-    try {
-      await dispatch(unlockWallet(password)).unwrap();
-    } catch {
-      toast.error('Invalid password');
-    }
-  };
 
   return (
     <PopupFrame atmosphere="still" focus="mark">
@@ -38,27 +19,8 @@ export function UnlockScreen() {
           </p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-5">
-          <div>
-            <FieldLabel htmlFor="unlock-password">Password</FieldLabel>
-            <PasswordField
-              id="unlock-password"
-              name="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Enter password"
-              autoFocus
-              disabled={isLoading}
-              data-testid="unlock-password"
-            />
-          </div>
-
-          {error && <Banner tone="danger">{error}</Banner>}
-
-          <PrimaryButton type="submit" disabled={isLoading || !password} className="w-full" data-testid="unlock-submit">
-            {isLoading ? 'Unlocking…' : 'Unlock'}
-          </PrimaryButton>
-        </form>
+        {/* The worker already holds the session; re-read public state so routing flips to the dashboard. */}
+        <UnlockForm onUnlocked={() => void dispatch(initializeWallet())} />
       </div>
     </PopupFrame>
   );

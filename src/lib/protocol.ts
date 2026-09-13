@@ -2,6 +2,7 @@ import type { ApprovalResult } from '../background/approvals';
 import { MAX_MESSAGE_BYTES, MAX_TRANSACTION_BYTES, validateByteArray } from './bridge';
 import {
   isExtensionMessageType,
+  type ConnectedSite,
   type ExtensionMessageType,
   type PendingApproval,
   type WalletPublicState,
@@ -27,7 +28,7 @@ export type WalletRequest =
   | { type: 'EXPORT_SEED'; password: string }
   | { type: 'EXPORT_PRIVATE_KEY'; password: string; accountIndex?: number }
   | { type: 'GET_ACCOUNTS' }
-  | { type: 'WALLET_CONNECT' }
+  | { type: 'WALLET_CONNECT'; silent?: boolean }
   | { type: 'WALLET_DISCONNECT' }
   | { type: 'SIGN_MESSAGE'; message: number[] }
   | { type: 'SIGN_TRANSACTION'; transaction: number[] }
@@ -37,6 +38,9 @@ export type WalletRequest =
   | { type: 'POLL_APPROVAL'; id: string }
   | { type: 'APPROVE_REQUEST'; id: string }
   | { type: 'REJECT_REQUEST'; id: string; reason?: string }
+  | { type: 'CANCEL_APPROVAL'; id: string }
+  | { type: 'GET_CONNECTED_SITES' }
+  | { type: 'REVOKE_SITE'; origin: string }
   | { type: 'SEND_TRANSFER'; to: string; amountSmallest: string; mint?: string };
 
 /** Fields of the request for one message type, without `type`. */
@@ -61,7 +65,8 @@ export interface WalletResponses {
   EXPORT_SEED: { seedPhrase: string };
   EXPORT_PRIVATE_KEY: { privateKey: string };
   GET_ACCOUNTS: { accounts: string[] };
-  WALLET_CONNECT: PendingResponse;
+  /** A prompt (`pendingId`), or the accounts straight away for a connected origin or a silent connect. */
+  WALLET_CONNECT: PendingResponse | { accounts: string[] };
   WALLET_DISCONNECT: { disconnected: true };
   SIGN_MESSAGE: PendingResponse;
   SIGN_TRANSACTION: PendingResponse;
@@ -71,6 +76,9 @@ export interface WalletResponses {
   POLL_APPROVAL: ApprovalResult;
   APPROVE_REQUEST: EmptyResponse;
   REJECT_REQUEST: EmptyResponse;
+  CANCEL_APPROVAL: EmptyResponse;
+  GET_CONNECTED_SITES: { sites: ConnectedSite[] };
+  REVOKE_SITE: EmptyResponse;
   SEND_TRANSFER: { signature: string };
 }
 
@@ -224,9 +232,15 @@ export function parseRequest(input: unknown): WalletRequest {
     case 'LOCK':
     case 'CLEAR_WALLET':
     case 'GET_ACCOUNTS':
-    case 'WALLET_CONNECT':
     case 'WALLET_DISCONNECT':
+    case 'GET_CONNECTED_SITES':
       return { type };
+    case 'WALLET_CONNECT': {
+      // Absent or null means an ordinary connect; anything else must be a boolean.
+      if (raw.silent === undefined || raw.silent === null) return { type };
+      if (typeof raw.silent !== 'boolean') invalid('silent');
+      return { type, silent: raw.silent };
+    }
     case 'UPDATE_SETTINGS':
       return { type, settings: requireSettings(raw.settings) };
     case 'CREATE_WALLET': {
@@ -260,7 +274,10 @@ export function parseRequest(input: unknown): WalletRequest {
     case 'GET_PENDING_REQUEST':
     case 'POLL_APPROVAL':
     case 'APPROVE_REQUEST':
+    case 'CANCEL_APPROVAL':
       return { type, id: requireNonEmptyString(raw.id, 'id') };
+    case 'REVOKE_SITE':
+      return { type, origin: requireNonEmptyString(raw.origin, 'origin') };
     case 'REJECT_REQUEST': {
       const id = requireNonEmptyString(raw.id, 'id');
       const reason = optionalString(raw.reason, 'reason');

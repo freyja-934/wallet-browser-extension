@@ -5,7 +5,7 @@ import {
 import bs58 from 'bs58';
 import { isExtensionMessageType, type PendingApproval } from '../lib/messages';
 import { parseRequest, type WalletRequest, type WalletResponse } from '../lib/protocol';
-import { isRequestAllowed, type SenderLike } from '../lib/sender-gate';
+import { isExtensionSender, isRequestAllowed, pageOrigin, type SenderLike } from '../lib/sender-gate';
 import { buildPreview, type PreviewResult } from '../lib/preview';
 import {
   changePassword,
@@ -18,18 +18,23 @@ import {
   lock,
   signMessage,
   switchAccount,
+  touchActivity,
   unlock,
   updateSettings,
   getKeypair,
 } from './keyring';
 import {
+  cancelApproval,
+  claimApproval,
   enqueueApproval,
   getApprovalResult,
   getPending,
-  openUnlockWindow,
   rejectApproval,
-  resolveApproval,
+  rejectForOrigin,
+  settleClaimed,
 } from './approvals';
+import { sendToConnected, sendWalletEvent, snapshot } from './events';
+import * as origins from './origins';
 import { getConnection, sendTransfer } from './transfers';
 
 /**
@@ -51,24 +56,62 @@ export async function handleMessage(
     throw new Error('Not allowed from a page');
   }
 
-  // Trust the browser's view of who sent this, never a field in the payload.
-  const origin = sender.origin || sender.url || '';
+  if (isExtensionSender(sender, extensionBase)) {
+    // The user is in the popup or approval window: push the auto-lock out again.
+    await touchActivity();
+    return dispatch(parseRequest(raw), { origin: extensionBase.replace(/\/$/, ''), page: false });
+  }
 
-  return dispatch(parseRequest(raw), origin);
+  // Trust the browser's view of who sent this, never a field in the payload —
+  // and only a real web origin gets a grant, a pending request, or a registry entry.
+  const origin = pageOrigin(sender);
+  if (origin === null) throw new Error('Untrusted sender');
+  const frame = typeof sender.tab?.id === 'number'
+    ? { tabId: sender.tab.id, frameId: typeof sender.frameId === 'number' ? sender.frameId : 0 }
+    : undefined;
+  // Note where the page is so events can reach it later.
+  await origins.remember(sender, origin);
+  return dispatch(parseRequest(raw), { origin, page: true, frame });
+}
+
+interface Caller {
+  origin: string;
+  /** A web page (content script) rather than the popup or approval window. */
+  page: boolean;
+  /** The tab and frame a page spoke from; absent for extension pages. */
+  frame?: { tabId: number; frameId: number };
+}
+
+async function requireConnected(origin: string): Promise<void> {
+  if (!(await origins.isConnected(origin))) throw new Error('Not connected');
+}
+
+function addresses(state: { accounts: { address: string }[] }): string[] {
+  return state.accounts.map((account) => account.address);
 }
 
 function assertNever(_request: never): never {
   throw new Error('Unknown message type');
 }
 
-async function dispatch(request: WalletRequest, origin: string): Promise<WalletResponse> {
+async function dispatch(request: WalletRequest, caller: Caller): Promise<WalletResponse> {
+  const { origin, frame } = caller;
+  // A page may poll or cancel only its own request; extension pages are unrestricted.
+  const own = caller.page ? origin : undefined;
   switch (request.type) {
     case 'GET_STATE':
       return { state: await getPublicState() };
     case 'GET_SETTINGS':
       return { settings: await getSettings() };
-    case 'UPDATE_SETTINGS':
-      return { settings: await updateSettings(request.settings) };
+    case 'UPDATE_SETTINGS': {
+      const before = (await getSettings()).cluster;
+      const settings = await updateSettings(request.settings);
+      if (settings.cluster !== before) {
+        const { accounts } = await snapshot();
+        await sendToConnected('clusterChanged', { accounts, cluster: settings.cluster });
+      }
+      return { settings };
+    }
     case 'CREATE_WALLET':
       return { state: await createWallet(request.password, request.seedPhrase) };
     case 'UNLOCK':
@@ -77,8 +120,11 @@ async function dispatch(request: WalletRequest, origin: string): Promise<WalletR
       return { state: await lock() };
     case 'CLEAR_WALLET':
       return { state: await clearWallet() };
-    case 'SWITCH_ACCOUNT':
-      return { state: await switchAccount(request.index) };
+    case 'SWITCH_ACCOUNT': {
+      const state = await switchAccount(request.index);
+      await sendToConnected('accountsChanged', await snapshot());
+      return { state };
+    }
     case 'CHANGE_PASSWORD':
       await changePassword(request.currentPassword, request.newPassword);
       return {};
@@ -87,29 +133,40 @@ async function dispatch(request: WalletRequest, origin: string): Promise<WalletR
     case 'EXPORT_PRIVATE_KEY':
       return { privateKey: await exportPrivateKey(request.password, request.accountIndex ?? 0) };
     case 'GET_ACCOUNTS': {
+      await requireConnected(origin);
       const state = await getPublicState();
       if (state.isLocked) return { accounts: [] };
-      return { accounts: state.accounts.map((account) => account.address) };
+      return { accounts: addresses(state) };
     }
     case 'WALLET_CONNECT': {
       const state = await getPublicState();
-      if (state.isLocked) {
-        await openUnlockWindow();
-        throw new Error('Wallet is locked. Unlock Cinder Wallet and try again.');
-      }
-      return { pendingId: await enqueueApproval('connect', origin) };
+      // A site that already connected gets its accounts back without a prompt.
+      if (!state.isLocked && (await origins.isConnected(origin))) return { accounts: addresses(state) };
+      // Silent connects never open a window: nothing to show is an empty account list.
+      if (request.silent) return { accounts: [] };
+      // Locked: the approval window renders the unlock form first, then the request.
+      return { pendingId: await enqueueApproval('connect', origin, { ...frame }) };
     }
-    case 'WALLET_DISCONNECT':
+    case 'WALLET_DISCONNECT': {
+      // Whatever the site still had waiting can no longer be approved.
+      await rejectForOrigin(origin, 'Disconnected');
+      await origins.disconnect(origin);
+      const { cluster } = await snapshot();
+      // The frame that asked emits its own `change`; its other frames and tabs hear it from here.
+      await sendWalletEvent('disconnected', { origin, accounts: [], cluster, exclude: frame });
       return { disconnected: true };
+    }
     case 'SIGN_MESSAGE':
+      await requireConnected(origin);
       return {
-        pendingId: await enqueueApproval('signMessage', origin, { messageBytes: [...request.message] }),
+        pendingId: await enqueueApproval('signMessage', origin, { ...frame, messageBytes: [...request.message] }),
       };
     case 'SIGN_TRANSACTION':
     case 'SIGN_AND_SEND_TRANSACTION': {
+      await requireConnected(origin);
       const kind = request.type === 'SIGN_AND_SEND_TRANSACTION' ? 'signAndSendTransaction' : 'signTransaction';
       return {
-        pendingId: await enqueueApproval(kind, origin, { transactionBytes: [...request.transaction] }),
+        pendingId: await enqueueApproval(kind, origin, { ...frame, transactionBytes: [...request.transaction] }),
       };
     }
     case 'PREVIEW_TRANSACTION':
@@ -117,16 +174,42 @@ async function dispatch(request: WalletRequest, origin: string): Promise<WalletR
     case 'GET_PENDING_REQUEST':
       return { request: await getPending(request.id) };
     case 'POLL_APPROVAL':
-      return getApprovalResult(request.id);
+      return getApprovalResult(request.id, own);
     case 'APPROVE_REQUEST': {
-      const pending = await getPending(request.id);
-      if (!pending) throw new Error('Approval expired — unlock and retry the dApp request');
-      await resolveApproval(pending.id, await fulfillApproval(pending));
+      // The approval window unlocks inline first; nothing is approved on a locked wallet.
+      if ((await getPublicState()).isLocked) throw new Error('Wallet is locked');
+      // Claim before doing anything irreversible: from here on, nothing else can settle it,
+      // so the page is told what actually happened (a broadcast in particular).
+      const pending = await claimApproval(request.id, { requireConnected: true });
+      let value: Record<string, unknown>;
+      try {
+        value = await fulfillApproval(pending);
+      } catch (error) {
+        // Whatever failed, the request is finished: it must never be approvable again.
+        await settleClaimed(pending.id, { status: 'rejected', error: errorText(error, 'Approval failed') });
+        throw error;
+      }
+      await settleClaimed(pending.id, { status: 'approved', value });
       return {};
     }
     case 'REJECT_REQUEST':
       await rejectApproval(request.id, request.reason || 'User rejected');
       return {};
+    case 'CANCEL_APPROVAL':
+      // The page gave up waiting (its timeout, or it went away); a later Approve must not sign.
+      // Only the page's own request, and never one already being fulfilled.
+      if (own === undefined) await rejectApproval(request.id, 'Request timeout');
+      else await cancelApproval(request.id, own);
+      return {};
+    case 'GET_CONNECTED_SITES':
+      return { sites: await origins.list() };
+    case 'REVOKE_SITE': {
+      await rejectForOrigin(request.origin, 'Site revoked');
+      await origins.disconnect(request.origin);
+      const { cluster } = await snapshot();
+      await sendWalletEvent('revoked', { origin: request.origin, accounts: [], cluster });
+      return {};
+    }
     case 'SEND_TRANSFER':
       return {
         signature: await sendTransfer({
@@ -140,12 +223,20 @@ async function dispatch(request: WalletRequest, origin: string): Promise<WalletR
   }
 }
 
+function errorText(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
 export async function fulfillApproval(request: PendingApproval): Promise<Record<string, unknown>> {
   if (request.kind === 'connect') {
     const next = await getPublicState();
+    await origins.connect(
+      request.origin,
+      next.accounts.map((account) => account.index),
+    );
     return {
       connected: true,
-      accounts: next.accounts.map((account) => account.address),
+      accounts: addresses(next),
       publicKey: next.accounts[next.activeAccountIndex]?.address,
     };
   }

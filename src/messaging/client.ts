@@ -45,4 +45,11 @@ export const extensionClient = {
   },
   previewTransaction: async (transaction: number[]) =>
     (await send('PREVIEW_TRANSACTION', { transaction })).preview,
+  getConnectedSites: async () => (await send('GET_CONNECTED_SITES', {})).sites,
+  revokeSite: async (origin: string) => {
+    await send('REVOKE_SITE', { origin });
+  },
+  cancelApproval: async (id: string) => {
+    await send('CANCEL_APPROVAL', { id });
+  },
 };
