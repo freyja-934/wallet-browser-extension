@@ -1,9 +1,10 @@
-import { PublicKey, SystemProgram, Transaction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
+import { Message, PublicKey, SystemProgram, Transaction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import bs58 from 'bs58';
 import nacl from 'tweetnacl';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MAX_TRANSACTION_BYTES } from '../lib/bridge';
 import type { PendingApproval, WalletPublicState } from '../lib/messages';
+import type { PreviewResult } from '../lib/preview';
 import { installChromeStub, STUB_EXTENSION_ID, uninstallChromeStub, type ChromeStub } from '../test/chrome-stub';
 import { TEST_ADDRESS, TEST_MNEMONIC, TEST_PASSWORD } from '../test/fixtures';
 import { installApprovalLifecycle, onWindowRemoved } from './approvals';
@@ -14,11 +15,17 @@ import { CONFIRMATION_POLL_MS, CONFIRMATION_TIMEOUT_MS, handleMessage } from './
 const rpc = vi.hoisted(() => ({
   sendRawTransaction: vi.fn<[Uint8Array, unknown], Promise<string>>(),
   getSignatureStatuses: vi.fn<[string[]], Promise<{ value: Array<{ err: unknown; confirmationStatus?: string } | null> }>>(),
+  getMultipleAccountsInfo: vi.fn<[unknown[]], Promise<unknown[]>>(),
+  getAddressLookupTable: vi.fn<[unknown], Promise<{ value: unknown }>>(),
+  simulateTransaction: vi.fn<[unknown, unknown], Promise<{ value: unknown }>>(),
 }));
 vi.mock('./transfers', () => ({
   getConnection: async () => ({
     sendRawTransaction: rpc.sendRawTransaction,
     getSignatureStatuses: rpc.getSignatureStatuses,
+    getMultipleAccountsInfo: rpc.getMultipleAccountsInfo,
+    getAddressLookupTable: rpc.getAddressLookupTable,
+    simulateTransaction: rpc.simulateTransaction,
   }),
   sendTransfer: async () => {
     throw new Error('not under test');
@@ -37,6 +44,9 @@ beforeEach(() => {
   resetKeyringForTests();
   rpc.sendRawTransaction.mockReset();
   rpc.getSignatureStatuses.mockReset();
+  rpc.getMultipleAccountsInfo.mockReset();
+  rpc.getAddressLookupTable.mockReset();
+  rpc.simulateTransaction.mockReset();
 });
 
 afterEach(() => {
@@ -887,5 +897,107 @@ describe('send options', () => {
     }
     expect(rpc.getSignatureStatuses).toHaveBeenCalledTimes(1);
     await expect(poll(pendingId)).resolves.toEqual({ status: 'approved', value: { signatures: [SIGNATURE_BYTES] } });
+  });
+});
+
+describe('the signMessage guard', () => {
+  it('refuses to sign serialized transaction message bytes as a message, before opening a window', async () => {
+    await createFixtureWallet();
+    await connectPage(page);
+    const payer = new PublicKey(TEST_ADDRESS);
+    const legacy = Message.compile({
+      payerKey: payer,
+      recentBlockhash: PublicKey.default.toBase58(),
+      instructions: [SystemProgram.transfer({ fromPubkey: payer, toPubkey: payer, lamports: 0 })],
+    }).serialize();
+    const v0 = VersionedTransaction.deserialize(Uint8Array.from(selfTransfer())).message.serialize();
+    for (const bytes of [legacy, v0]) {
+      await expect(handleMessage({ type: 'SIGN_MESSAGE', messages: [[...bytes]] }, page, BASE)).rejects.toThrow(
+        'Refusing to sign a transaction as a message',
+      );
+      // Hidden among ordinary messages it is refused all the same.
+      await expect(handleMessage({ type: 'SIGN_MESSAGE', messages: [[104, 105], [...bytes]] }, page, BASE)).rejects.toThrow(
+        'Refusing to sign a transaction as a message',
+      );
+    }
+    expect(chromeStub.windows.created()).toHaveLength(1);
+    expect(chromeStub.storage.session.snapshot().cinder_pending ?? {}).toEqual({});
+
+    // Text, and even a whole signed transaction (not a bare message), still prompt.
+    const text = [...new TextEncoder().encode('hello from lumen test dapp')];
+    await expect(handleMessage({ type: 'SIGN_MESSAGE', messages: [text, selfTransfer()] }, page, BASE)).resolves.toMatchObject({
+      pendingId: expect.any(String),
+    });
+  });
+});
+
+describe('PREVIEW_TRANSACTION', () => {
+  const preview = (transaction: number[]) =>
+    handleMessage({ type: 'PREVIEW_TRANSACTION', transaction }, popup, BASE) as Promise<{ preview: PreviewResult }>;
+
+  it('simulates with replaceRecentBlockhash and the writable accounts, and reports the fee as the SOL change', async () => {
+    await createFixtureWallet();
+    const owner = new PublicKey(TEST_ADDRESS);
+    rpc.getMultipleAccountsInfo.mockResolvedValueOnce([
+      { executable: false, owner: SystemProgram.programId, lamports: 1_000_000, data: Buffer.alloc(0) },
+    ]);
+    rpc.simulateTransaction.mockResolvedValueOnce({
+      value: {
+        err: null,
+        logs: ['Program 11111111111111111111111111111111 success'],
+        unitsConsumed: 150,
+        accounts: [{ owner: SystemProgram.programId.toBase58(), lamports: 995_000, data: ['', 'base64'] }],
+      },
+    });
+    const { preview: result } = await preview(selfTransfer());
+    expect(result).toMatchObject({ success: true, signerOk: true, unreadable: false });
+    expect(result.diff).toEqual({ sol: { pre: '1000000', post: '995000' }, tokens: [], fee: '5000', partial: false });
+    expect(result.instructions.map((ix) => ix.label)).toEqual(['Transfer SOL']);
+
+    const [keys] = rpc.getMultipleAccountsInfo.mock.calls[0];
+    expect((keys as PublicKey[]).map((key) => key.toBase58())).toEqual([owner.toBase58()]);
+    const [tx, config] = rpc.simulateTransaction.mock.calls[0];
+    expect(tx).toBeInstanceOf(VersionedTransaction);
+    expect(config).toEqual({
+      sigVerify: false,
+      replaceRecentBlockhash: true,
+      innerInstructions: true,
+      accounts: { encoding: 'base64', addresses: [owner.toBase58()] },
+    });
+    expect(rpc.getAddressLookupTable).not.toHaveBeenCalled();
+  });
+
+  it('a dead RPC leaves the decoded instructions with the error and no diff', async () => {
+    await createFixtureWallet();
+    rpc.getMultipleAccountsInfo.mockRejectedValueOnce(new Error('403 Forbidden'));
+    const { preview: result } = await preview(selfTransfer());
+    expect(result).toMatchObject({ success: false, error: '403 Forbidden', signerOk: true, unreadable: false });
+    expect(result.instructions.map((ix) => ix.label)).toEqual(['Transfer SOL']);
+    expect(result.diff).toBeUndefined();
+    expect(rpc.simulateTransaction).not.toHaveBeenCalled();
+  });
+
+  it('a transaction the active account need not sign never reaches the RPC', async () => {
+    await createFixtureWallet();
+    const stranger = PublicKey.unique();
+    const message = new TransactionMessage({
+      payerKey: stranger,
+      recentBlockhash: PublicKey.default.toBase58(),
+      instructions: [SystemProgram.transfer({ fromPubkey: stranger, toPubkey: stranger, lamports: 0 })],
+    }).compileToV0Message();
+    const { preview: result } = await preview([...new VersionedTransaction(message).serialize()]);
+    expect(result).toMatchObject({
+      success: false,
+      signerOk: false,
+      error: 'This transaction does not require a signature from your account',
+    });
+    expect(rpc.getMultipleAccountsInfo).not.toHaveBeenCalled();
+    expect(rpc.simulateTransaction).not.toHaveBeenCalled();
+  });
+
+  it('is refused while locked', async () => {
+    await createFixtureWallet();
+    await handleMessage({ type: 'LOCK' }, popup, BASE);
+    await expect(preview(selfTransfer())).rejects.toThrow('Wallet is locked');
   });
 });

@@ -1,4 +1,5 @@
-import { VersionedTransaction, type Connection } from '@solana/web3.js';
+import { PublicKey, VersionedTransaction, type AccountInfo, type Connection } from '@solana/web3.js';
+import { MINT_SIZE, MintLayout, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import bs58 from 'bs58';
 import {
   CHAIN_FOR_CLUSTER,
@@ -12,6 +13,7 @@ import {
 import { parseRequest, type WalletRequest, type WalletResponse } from '../lib/protocol';
 import { isExtensionSender, isRequestAllowed, pageOrigin, type SenderLike } from '../lib/sender-gate';
 import { buildPreview, type PreviewResult } from '../lib/preview';
+import { isTransactionMessage } from '../lib/tx-preview';
 import {
   changePassword,
   clearWallet,
@@ -182,6 +184,10 @@ async function dispatch(request: WalletRequest, caller: Caller): Promise<WalletR
     }
     case 'SIGN_MESSAGE': {
       await requireConnected(origin);
+      // A signature over serialized message bytes is a valid transaction signature; never make one here.
+      if (request.messages.some((message) => isTransactionMessage(Uint8Array.from(message)))) {
+        throw new Error('Refusing to sign a transaction as a message');
+      }
       const messages = request.messages.map((message) => [...message]);
       // One approval for the whole batch: the window shows every item, the page gets every signature.
       return { pendingId: await enqueueApproval('signMessage', origin, { ...frame, messages }) };
@@ -350,13 +356,59 @@ async function signTransactionBytes(bytes: Uint8Array): Promise<Uint8Array> {
   return tx.serialize();
 }
 
+const TOKEN_PROGRAMS = new Set([TOKEN_PROGRAM_ID.toBase58(), TOKEN_2022_PROGRAM_ID.toBase58()]);
+
+/** The decimals of every mint account among `infos`, keyed by address; anything that is not a mint is skipped. */
+function mintDecimals(mints: PublicKey[], infos: (AccountInfo<Buffer> | null)[]): Map<string, number> {
+  const out = new Map<string, number>();
+  mints.forEach((mint, i) => {
+    const info = infos[i];
+    if (!info || !TOKEN_PROGRAMS.has(info.owner.toBase58()) || info.data.length < MINT_SIZE) return;
+    try {
+      out.set(mint.toBase58(), MintLayout.decode(info.data.subarray(0, MINT_SIZE)).decimals);
+    } catch {
+      /* not a mint */
+    }
+  });
+  return out;
+}
+
+/**
+ * The preview for the approval window. Every network read goes through the
+ * rotated connection and is fetched lazily, so an endpoint failure reaches the
+ * screen as a decode-only preview with the error, never as a thrown message.
+ */
 export async function previewTransaction(bytes: Uint8Array): Promise<{ preview: PreviewResult }> {
-  const preview = await buildPreview(bytes, async (tx) => {
-    const connection = await getConnection();
-    const simulation = tx instanceof VersionedTransaction
-      ? await connection.simulateTransaction(tx, { sigVerify: false, innerInstructions: true })
-      : await connection.simulateTransaction(tx);
-    return simulation.value;
+  const state = await getPublicState();
+  const active = state.accounts[state.activeAccountIndex]?.address;
+  if (state.isLocked || !active) throw new Error('Wallet is locked');
+  const preview = await buildPreview(bytes, {
+    owner: new PublicKey(active),
+    fetchLookupTables: async (keys) => {
+      const connection = await getConnection();
+      const tables = await Promise.all(keys.map((key) => connection.getAddressLookupTable(key)));
+      return tables.flatMap((table) => (table.value ? [table.value] : []));
+    },
+    fetchAccounts: async (keys) => {
+      const connection = await getConnection();
+      const infos = await connection.getMultipleAccountsInfo(keys);
+      return new Map(keys.map((key, i) => [key.toBase58(), infos[i] ?? null]));
+    },
+    fetchMintDecimals: async (mints) => {
+      const connection = await getConnection();
+      return mintDecimals(mints, await connection.getMultipleAccountsInfo(mints));
+    },
+    simulate: async (tx, addresses) => {
+      const connection = await getConnection();
+      // The RPC refuses sigVerify together with replaceRecentBlockhash; the bytes are unsigned anyway.
+      const simulation = await connection.simulateTransaction(tx, {
+        sigVerify: false,
+        replaceRecentBlockhash: true,
+        innerInstructions: true,
+        accounts: { encoding: 'base64', addresses },
+      });
+      return simulation.value;
+    },
   });
   // Nested so the preview's own `success` never collides with the message envelope.
   return { preview };
