@@ -54,6 +54,19 @@ async function main() {
     console.log('captured', name);
   };
 
+  /**
+   * Run one shot's flow, and carry on if it cannot complete. A cluster the
+   * machine cannot read (no key, a blocked public endpoint) leaves some screens
+   * with nothing to show; that must not cost the screens that do work.
+   */
+  const step = async (name, fn) => {
+    try {
+      await fn();
+    } catch (error) {
+      console.log('SKIPPED', name, '-', error instanceof Error ? error.message.split('\n')[0] : error);
+    }
+  };
+
   // Import the fixture wallet.
   await popup.getByTestId('import-existing-wallet').click();
   await popup.getByTestId('seed-paste').fill(MNEMONIC);
@@ -67,33 +80,50 @@ async function main() {
   await sleep(9000);
   await shot(popup, 'home');
 
+  // Tokens: the same list scrolled so SPL and Token-2022 rows fill the frame.
+  // Only meaningful on a cluster where this account actually holds tokens.
+  const assetRows = popup.locator('[data-testid^="asset-"]');
+  if ((await assetRows.count()) > 3) {
+    await popup.getByTestId('asset-sol').evaluate((el) => el.scrollIntoView({ block: 'start' }));
+    await sleep(1200);
+    await shot(popup, 'tokens');
+    await popup.locator('main').evaluate((el) => { el.scrollTop = 0; });
+    await sleep(500);
+  }
+
   // Receive.
   await popup.getByTestId('open-receive').click();
   await shot(popup, 'receive');
   await popup.keyboard.press('Escape');
   await sleep(400);
 
-  // Send, filled in to the Review step.
-  await popup.getByTestId('open-send').click();
-  await popup.getByTestId('send-recipient').fill('HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk');
-  await popup.getByTestId('send-amount').fill('0.05');
-  await popup.getByTestId('send-ack').check();
-  await popup.getByTestId('send-continue').click();
-  await popup.getByTestId('send-review').waitFor({ timeout: 30_000 });
-  await sleep(3500);
-  await shot(popup, 'send-review');
+  // Send, filled in to the Review step. Needs a readable balance and fee.
+  await step('send-review', async () => {
+    await popup.getByTestId('open-send').click();
+    await popup.getByTestId('send-recipient').fill('HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk');
+    await popup.getByTestId('send-amount').fill('0.05');
+    await popup.getByTestId('send-ack').check();
+    await popup.getByTestId('send-continue').click({ timeout: 25_000 });
+    await popup.getByTestId('send-review').waitFor({ timeout: 30_000 });
+    await sleep(3500);
+    await shot(popup, 'send-review');
+  });
   await popup.keyboard.press('Escape');
   await sleep(400);
 
   // Activity.
-  await popup.getByTestId('nav-activity').click();
-  await sleep(9000);
-  await shot(popup, 'activity');
+  await step('activity', async () => {
+    await popup.getByTestId('nav-activity').click();
+    await sleep(9000);
+    await shot(popup, 'activity');
+  });
 
   // Collectibles.
-  await popup.getByTestId('nav-nfts').click();
-  await sleep(7000);
-  await shot(popup, 'nfts');
+  await step('nfts', async () => {
+    await popup.getByTestId('nav-nfts').click();
+    await sleep(7000);
+    await shot(popup, 'nfts');
+  });
 
   await popup.getByTestId('nav-home').click();
   await sleep(800);
@@ -101,6 +131,9 @@ async function main() {
   // Settings.
   await popup.getByTestId('open-settings').click();
   await sleep(1500);
+  // Scroll so the custom-RPC card is whole: that is what the caption talks about.
+  await popup.getByTestId('settings-rpc-url').evaluate((el) => el.scrollIntoView({ block: 'center' }));
+  await sleep(600);
   await shot(popup, 'settings');
   await popup.getByTestId('open-settings').click();
   await sleep(500);
@@ -115,6 +148,7 @@ async function main() {
   await popup.getByTestId('open-receive').waitFor({ timeout: 60_000 });
 
   // Approval, driven by the test dApp. Signs nothing: the request is rejected.
+  await step('approvals', async () => {
   const dapp = await context.newPage();
   await dapp.goto('http://localhost:5174/');
   await dapp.locator('#log').waitFor();
@@ -144,6 +178,7 @@ async function main() {
   await sleep(6000); // let the simulation and the balance diff land
   await shot(approval, 'approve-sign');
   await approval.getByTestId('approval-reject').click();
+  });
 
   await context.close();
   console.log('raw captures written to', raw);
