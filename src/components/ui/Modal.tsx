@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { Icon } from './Icon';
 
 interface ModalProps {
@@ -9,11 +9,61 @@ interface ModalProps {
   className?: string;
 }
 
+/** What the browser will put focus on, in document order. */
+const FOCUSABLE = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(', ');
+
+function focusableIn(root: HTMLElement | null): HTMLElement[] {
+  if (!root) return [];
+  return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
+    (element) => !element.hasAttribute('hidden') && element.getAttribute('aria-hidden') !== 'true',
+  );
+}
+
 export function Modal({ isOpen, onClose, children, className = '' }: ModalProps) {
+  const sheet = useRef<HTMLDivElement>(null);
+  /** Whatever had focus when the sheet opened; focus goes back there when it closes. */
+  const opener = useRef<HTMLElement | null>(null);
+
+  // Focus the sheet's first control on open, and hand focus back to the control
+  // that opened it on close — otherwise focus falls to the document body and a
+  // keyboard user has to tab from the top of the popup again.
+  useEffect(() => {
+    if (!isOpen) return;
+    opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    focusableIn(sheet.current)[0]?.focus();
+    return () => {
+      opener.current?.focus();
+      opener.current = null;
+    };
+  }, [isOpen]);
+
   useEffect(() => {
     if (!isOpen) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') {
+        onClose();
+        return;
+      }
+      // Tab stays inside the sheet: a modal that lets focus walk out onto the
+      // screen behind it is a modal only to the mouse.
+      if (event.key !== 'Tab') return;
+      const items = focusableIn(sheet.current);
+      if (items.length === 0) return;
+      const first = items[0]!;
+      const last = items[items.length - 1]!;
+      const active = document.activeElement;
+      const inside = active instanceof Node && sheet.current?.contains(active);
+      if (event.shiftKey ? active === first || !inside : active === last || !inside) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
@@ -33,6 +83,7 @@ export function Modal({ isOpen, onClose, children, className = '' }: ModalProps)
             onClick={onClose}
           />
           <motion.div
+            ref={sheet}
             role="dialog"
             aria-modal="true"
             initial={{ opacity: 0, y: 24 }}
