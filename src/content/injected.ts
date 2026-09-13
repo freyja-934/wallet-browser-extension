@@ -1,4 +1,4 @@
-import { SOLANA_MAINNET_CHAIN } from '@solana/wallet-standard-chains';
+import { SOLANA_DEVNET_CHAIN, SOLANA_MAINNET_CHAIN } from '@solana/wallet-standard-chains';
 import {
   SolanaSignAndSendTransaction,
   SolanaSignMessage,
@@ -7,7 +7,7 @@ import {
   type SolanaSignMessageFeature,
   type SolanaSignTransactionFeature,
 } from '@solana/wallet-standard-features';
-import type { Wallet, WalletAccount } from '@wallet-standard/base';
+import type { IdentifierString, Wallet, WalletAccount } from '@wallet-standard/base';
 import {
   StandardConnect,
   StandardDisconnect,
@@ -18,6 +18,7 @@ import {
   type StandardEventsListeners,
 } from '@wallet-standard/features';
 import { registerWallet } from '@wallet-standard/wallet';
+import bs58 from 'bs58';
 import { PAGE_TIMEOUT_MS, WALLET_CHANNEL } from '../lib/messages';
 import { CINDER_ICON_DATA_URI } from '../config/brand';
 import { WALLET_NAME } from '../config/constants';
@@ -70,11 +71,20 @@ import { WALLET_NAME } from '../config/constants';
     });
   }
 
-  function bytesToAccount(address: string): WalletAccount {
+  /**
+   * The chain an account can sign for right now. wallet-adapter refuses to send
+   * through an account whose `chains` lack the endpoint's chain, so each account
+   * carries exactly the wallet's active cluster; the wallet itself lists both.
+   */
+  function chainsFor(cluster: string | undefined): IdentifierString[] {
+    return cluster === 'devnet' ? [SOLANA_DEVNET_CHAIN] : [SOLANA_MAINNET_CHAIN];
+  }
+
+  function bytesToAccount(address: string, cluster: string | undefined): WalletAccount {
     return {
       address,
       publicKey: decodeAddress(address),
-      chains: [SOLANA_MAINNET_CHAIN],
+      chains: chainsFor(cluster),
       features: [
         SolanaSignTransaction,
         SolanaSignAndSendTransaction,
@@ -85,35 +95,25 @@ import { WALLET_NAME } from '../config/constants';
 
   function decodeAddress(address: string): Uint8Array {
     try {
-      const alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-      const bytes = [0];
-      for (const char of address) {
-        const value = alphabet.indexOf(char);
-        if (value < 0) throw new Error('bad address');
-        let carry = value;
-        for (let i = 0; i < bytes.length; i++) {
-          const x = bytes[i] * 58 + carry;
-          bytes[i] = x & 0xff;
-          carry = x >> 8;
-        }
-        while (carry) {
-          bytes.push(carry & 0xff);
-          carry >>= 8;
-        }
-      }
-      for (const char of address) {
-        if (char !== '1') break;
-        bytes.push(0);
-      }
-      return Uint8Array.from(bytes.reverse());
+      const bytes = bs58.decode(address);
+      return bytes.length === 32 ? bytes : new Uint8Array(32);
     } catch {
       return new Uint8Array(32);
     }
   }
 
   let accounts: WalletAccount[] = [];
-  /** The wallet's active cluster as last reported; chains stay mainnet until SHIP-6 reads this. */
+  /** The wallet's active cluster as last reported; every account's `chains` follows it. */
   let currentCluster: string | undefined;
+
+  function setAccounts(addresses: unknown, cluster: unknown): void {
+    if (typeof cluster === 'string') currentCluster = cluster;
+    const list = Array.isArray(addresses)
+      ? addresses.filter((address): address is string => typeof address === 'string')
+      : [];
+    accounts = list.map((address) => bytesToAccount(address, currentCluster));
+    emit('change', { accounts });
+  }
 
   function handleWalletEvent(name: string, nextAccounts: unknown, cluster: unknown): void {
     if (typeof cluster === 'string') currentCluster = cluster;
@@ -126,17 +126,51 @@ import { WALLET_NAME } from '../config/constants';
         emit('change', { accounts });
         return;
       case 'accountsChanged':
-      case 'clusterChanged': {
-        const addresses = Array.isArray(nextAccounts)
-          ? nextAccounts.filter((address): address is string => typeof address === 'string')
-          : [];
-        accounts = addresses.map(bytesToAccount);
-        emit('change', { accounts });
+      case 'clusterChanged':
+        // A cluster change re-stamps every account's chains without a reconnect.
+        setAccounts(nextAccounts, cluster);
         return;
-      }
       default:
         return;
     }
+  }
+
+  function toBytes(value: Uint8Array | ArrayBuffer | ArrayLike<number>): Uint8Array {
+    return value instanceof Uint8Array ? value : new Uint8Array(value as ArrayBuffer);
+  }
+
+  /** Every input must name one of this wallet's accounts and, when it names a chain, the same one. */
+  function checkInputs(inputs: readonly { account: WalletAccount; chain?: IdentifierString }[]): IdentifierString | undefined {
+    const known = new Set(accounts.map((account) => account.address));
+    let chain: IdentifierString | undefined;
+    for (const input of inputs) {
+      if (!known.has(input.account?.address)) throw new Error('Invalid account');
+      if (input.chain !== undefined) {
+        if (chain !== undefined && chain !== input.chain) throw new Error('All inputs must use the same chain');
+        chain = input.chain;
+      }
+    }
+    return chain;
+  }
+
+  /** Only the options the worker understands, copied one by one; the worker validates them again. */
+  function pickOptions(options: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+    if (!options) return undefined;
+    const out: Record<string, unknown> = {};
+    for (const key of ['skipPreflight', 'preflightCommitment', 'maxRetries', 'minContextSlot', 'commitment']) {
+      if (options[key] !== undefined) out[key] = options[key];
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
+  }
+
+  function withChainAndOptions(
+    payload: Record<string, unknown>,
+    chain: IdentifierString | undefined,
+    options: Record<string, unknown> | undefined,
+  ): Record<string, unknown> {
+    if (chain !== undefined) payload.chain = chain;
+    if (options !== undefined) payload.options = options;
+    return payload;
   }
 
   const wallet: Wallet & { readonly cluster: string | undefined } = {
@@ -144,7 +178,7 @@ import { WALLET_NAME } from '../config/constants';
     version: '1.0.0',
     name: WALLET_NAME,
     icon: CINDER_ICON_DATA_URI,
-    chains: [SOLANA_MAINNET_CHAIN],
+    chains: [SOLANA_MAINNET_CHAIN, SOLANA_DEVNET_CHAIN],
     get accounts() {
       return accounts;
     },
@@ -157,9 +191,7 @@ import { WALLET_NAME } from '../config/constants';
         connect: async (input) => {
           const response = await send('WALLET_CONNECT', { silent: !!input?.silent });
           if (!response?.success) throw new Error(response?.error || 'Connect failed');
-          const addresses: string[] = response.accounts ?? [];
-          accounts = addresses.map(bytesToAccount);
-          emit('change', { accounts });
+          setAccounts(response.accounts ?? [], response.cluster);
           return { accounts };
         },
       } satisfies StandardConnectFeature[typeof StandardConnect],
@@ -182,48 +214,54 @@ import { WALLET_NAME } from '../config/constants';
         version: '1.0.0',
         supportedTransactionVersions: ['legacy', 0],
         signTransaction: async (...inputs) => {
-          const outputs = [];
-          for (const input of inputs) {
-            const bytes = input.transaction instanceof Uint8Array
-              ? input.transaction
-              : new Uint8Array(input.transaction as ArrayBuffer);
-            const response = await send('SIGN_TRANSACTION', { transaction: [...bytes] });
-            if (!response?.signedTransaction) throw new Error(response?.error || 'Sign failed');
-            outputs.push({ signedTransaction: Uint8Array.from(response.signedTransaction) });
+          if (inputs.length === 0) return [];
+          // One message, one approval window, N signed transactions in the same order.
+          const chain = checkInputs(inputs);
+          const transactions = inputs.map((input) => [...toBytes(input.transaction)]);
+          const response = await send(
+            'SIGN_TRANSACTION',
+            withChainAndOptions({ transactions }, chain, pickOptions(inputs[0].options)),
+          );
+          const signed: unknown = response?.signedTransactions;
+          if (!Array.isArray(signed) || signed.length !== inputs.length) {
+            throw new Error(response?.error || 'Sign failed');
           }
-          return outputs;
+          return signed.map((bytes) => ({ signedTransaction: Uint8Array.from(bytes as number[]) }));
         },
       } satisfies SolanaSignTransactionFeature[typeof SolanaSignTransaction],
       [SolanaSignAndSendTransaction]: {
         version: '1.0.0',
         supportedTransactionVersions: ['legacy', 0],
         signAndSendTransaction: async (...inputs) => {
-          const outputs = [];
-          for (const input of inputs) {
-            const bytes = input.transaction instanceof Uint8Array
-              ? input.transaction
-              : new Uint8Array(input.transaction as ArrayBuffer);
-            const response = await send('SIGN_AND_SEND_TRANSACTION', { transaction: [...bytes] });
-            if (!response?.signature) throw new Error(response?.error || 'Send failed');
-            outputs.push({ signature: Uint8Array.from(response.signature) });
+          if (inputs.length === 0) return [];
+          const chain = checkInputs(inputs);
+          const transactions = inputs.map((input) => [...toBytes(input.transaction)]);
+          const response = await send(
+            'SIGN_AND_SEND_TRANSACTION',
+            withChainAndOptions({ transactions }, chain, pickOptions(inputs[0].options)),
+          );
+          const signatures: unknown = response?.signatures;
+          if (!Array.isArray(signatures) || signatures.length !== inputs.length) {
+            throw new Error(response?.error || 'Send failed');
           }
-          return outputs;
+          return signatures.map((bytes) => ({ signature: Uint8Array.from(bytes as number[]) }));
         },
       } satisfies SolanaSignAndSendTransactionFeature[typeof SolanaSignAndSendTransaction],
       [SolanaSignMessage]: {
         version: '1.0.0',
         signMessage: async (...inputs) => {
-          const outputs = [];
-          for (const input of inputs) {
-            const message = input.message instanceof Uint8Array ? input.message : new Uint8Array(input.message);
-            const response = await send('SIGN_MESSAGE', { message: [...message] });
-            if (!response?.signature) throw new Error(response?.error || 'Sign failed');
-            outputs.push({
-              signedMessage: message,
-              signature: Uint8Array.from(response.signature),
-            });
+          if (inputs.length === 0) return [];
+          checkInputs(inputs);
+          const messages = inputs.map((input) => toBytes(input.message));
+          const response = await send('SIGN_MESSAGE', { messages: messages.map((message) => [...message]) });
+          const signatures: unknown = response?.signatures;
+          if (!Array.isArray(signatures) || signatures.length !== inputs.length) {
+            throw new Error(response?.error || 'Sign failed');
           }
-          return outputs;
+          return signatures.map((bytes, i) => ({
+            signedMessage: messages[i],
+            signature: Uint8Array.from(bytes as number[]),
+          }));
         },
       } satisfies SolanaSignMessageFeature[typeof SolanaSignMessage],
     },

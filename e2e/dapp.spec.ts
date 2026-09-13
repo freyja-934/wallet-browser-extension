@@ -199,7 +199,7 @@ test('signMessage from a never-connected origin is rejected without a window', a
   await dapp.goto('http://localhost:5174/');
   await expect(dapp.locator('#log')).toContainText('registered Cinder Wallet', { timeout: 15_000 });
 
-  const signed = await postToBridge(dapp, { type: 'SIGN_MESSAGE', payload: { message: [104, 105] } });
+  const signed = await postToBridge(dapp, { type: 'SIGN_MESSAGE', payload: { messages: [[104, 105]] } });
   expect(signed.response).toMatchObject({ success: false, error: 'Not connected' });
   expect(context.pages().some((page) => page.url().includes('approve.html'))).toBe(false);
 });
@@ -361,8 +361,8 @@ test('a page cannot override the bridged message type', async ({ context, extens
   expect(direct.error).toBe('Unknown message type');
   const oversize = await postToBridge(dapp, {
     type: 'SIGN_MESSAGE',
-    payload: { message: new Array(64 * 1024 + 1).fill(0) },
+    payload: { messages: [new Array(64 * 1024 + 1).fill(0)] },
   });
-  expect(oversize.error).toBe('Invalid message');
+  expect(oversize.error).toBe('Invalid messages');
   expect(context.pages().some((page) => page.url().includes('approve.html'))).toBe(false);
 });

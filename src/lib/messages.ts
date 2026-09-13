@@ -88,6 +88,33 @@ export interface WalletSettings {
 
 export type ApprovalKind = 'connect' | 'signTransaction' | 'signAndSendTransaction' | 'signMessage';
 
+/** The Wallet Standard chains Cinder can sign for; one per `WalletSettings['cluster']`. */
+export const SUPPORTED_CHAINS = ['solana:mainnet', 'solana:devnet'] as const;
+export type SupportedChain = (typeof SUPPORTED_CHAINS)[number];
+/** Chains a Solana dApp may name that Cinder knows about but has no cluster for. */
+export const UNSUPPORTED_CHAINS = ['solana:testnet', 'solana:localnet'] as const;
+export type KnownChain = SupportedChain | (typeof UNSUPPORTED_CHAINS)[number];
+
+export const CHAIN_FOR_CLUSTER: Record<WalletSettings['cluster'], SupportedChain> = {
+  'mainnet-beta': 'solana:mainnet',
+  devnet: 'solana:devnet',
+};
+
+export type Commitment = 'processed' | 'confirmed' | 'finalized';
+
+/**
+ * What a dApp may pass with `signAndSendTransaction` (and the subset
+ * `signTransaction` allows). The first four go to `sendRawTransaction`;
+ * `commitment` makes the worker wait for that level before answering.
+ */
+export interface SendOptions {
+  skipPreflight?: boolean;
+  preflightCommitment?: Commitment;
+  maxRetries?: number;
+  minContextSlot?: number;
+  commitment?: Commitment;
+}
+
 export interface PendingApproval {
   id: string;
   kind: ApprovalKind;
@@ -100,8 +127,13 @@ export interface PendingApproval {
   /** The tab and frame that asked; closing that tab rejects the request and closes its window. */
   tabId?: number;
   frameId?: number;
-  transactionBytes?: number[];
-  messageBytes?: number[];
+  /** Every transaction of one `signTransaction` / `signAndSendTransaction` call, in the order the page gave them. */
+  transactions?: number[][];
+  /** Every message of one `signMessage` call, in order. */
+  messages?: number[][];
+  /** The chain the page named, when it named one; already checked against the active cluster. */
+  chain?: string;
+  options?: SendOptions;
 }
 
 /** One entry of the Settings "Connected sites" list. */

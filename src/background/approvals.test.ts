@@ -73,7 +73,7 @@ describe('enqueueApproval', () => {
 
   it('allows one pending request per origin', async () => {
     await enqueueApproval('connect', A);
-    await expect(enqueueApproval('signMessage', A, { messageBytes: [1] })).rejects.toThrow(
+    await expect(enqueueApproval('signMessage', A, { messages: [[1]] })).rejects.toThrow(
       'A request is already pending for this site',
     );
     expect(chromeStub.windows.created()).toHaveLength(1);
@@ -98,7 +98,7 @@ describe('enqueueApproval', () => {
 
 describe('claimApproval / settleClaimed', () => {
   it('moves a pending request to inflight, where nothing but settleClaimed can end it', async () => {
-    const id = await enqueueApproval('signMessage', A, { messageBytes: [1], tabId: 7 });
+    const id = await enqueueApproval('signMessage', A, { messages: [[1]], tabId: 7 });
     const [window] = chromeStub.windows.created();
     const claimed = await claimApproval(id);
     expect(claimed).toMatchObject({ id, kind: 'signMessage', origin: A });
@@ -134,7 +134,7 @@ describe('claimApproval / settleClaimed', () => {
   });
 
   it('records a fulfilment failure as rejected so the request can never be approved later', async () => {
-    const id = await enqueueApproval('signMessage', A, { messageBytes: [1] });
+    const id = await enqueueApproval('signMessage', A, { messages: [[1]] });
     await claimApproval(id);
     await settleClaimed(id, { status: 'rejected', error: 'Broadcast failed' });
     await expect(claimApproval(id)).rejects.toThrow('Approval expired');
@@ -173,12 +173,12 @@ describe('claimApproval / settleClaimed', () => {
     const connect = await enqueueApproval('connect', A);
     await expect(claimApproval(connect, { requireConnected: true })).resolves.toMatchObject({ kind: 'connect' });
 
-    const sign = await enqueueApproval('signMessage', B, { messageBytes: [1] });
+    const sign = await enqueueApproval('signMessage', B, { messages: [[1]] });
     await expect(claimApproval(sign, { requireConnected: true })).rejects.toThrow('Approval expired');
     await expect(getApprovalResult(sign)).resolves.toEqual({ status: 'rejected', error: 'Not connected' });
 
     await origins.connect(B, [0]);
-    const again = await enqueueApproval('signMessage', B, { messageBytes: [1] });
+    const again = await enqueueApproval('signMessage', B, { messages: [[1]] });
     await expect(claimApproval(again, { requireConnected: true })).resolves.toMatchObject({ id: again });
   });
 });
@@ -326,8 +326,8 @@ describe('onTabRemoved', () => {
 
 describe('rejectForOrigin', () => {
   it('rejects only that origin’s pending requests with the given reason', async () => {
-    const a = await enqueueApproval('signMessage', A, { messageBytes: [1] });
-    const b = await enqueueApproval('signMessage', B, { messageBytes: [1] });
+    const a = await enqueueApproval('signMessage', A, { messages: [[1]] });
+    const b = await enqueueApproval('signMessage', B, { messages: [[1]] });
     expect(await rejectForOrigin(A, 'Site revoked')).toEqual([a]);
     await expect(getApprovalResult(a)).resolves.toEqual({ status: 'rejected', error: 'Site revoked' });
     await expect(getApprovalResult(b)).resolves.toEqual({ status: 'pending' });
@@ -374,7 +374,7 @@ describe('expirePending', () => {
 describe('rejectAll', () => {
   it('rejects every pending request with the given reason', async () => {
     const a = await enqueueApproval('connect', A);
-    const b = await enqueueApproval('signMessage', B, { messageBytes: [1] });
+    const b = await enqueueApproval('signMessage', B, { messages: [[1]] });
     await rejectAll('Wallet locked');
     expect(pendingMap()).toEqual({});
     await expect(getApprovalResult(a)).resolves.toEqual({ status: 'rejected', error: 'Wallet locked' });

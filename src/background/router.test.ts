@@ -1,5 +1,6 @@
-import { PublicKey, SystemProgram, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
+import { PublicKey, SystemProgram, Transaction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import bs58 from 'bs58';
+import nacl from 'tweetnacl';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MAX_TRANSACTION_BYTES } from '../lib/bridge';
 import type { PendingApproval, WalletPublicState } from '../lib/messages';
@@ -7,12 +8,18 @@ import { installChromeStub, STUB_EXTENSION_ID, uninstallChromeStub, type ChromeS
 import { TEST_ADDRESS, TEST_MNEMONIC, TEST_PASSWORD } from '../test/fixtures';
 import { installApprovalLifecycle, onWindowRemoved } from './approvals';
 import { resetKeyringForTests } from './keyring';
-import { handleMessage } from './router';
+import { CONFIRMATION_POLL_MS, CONFIRMATION_TIMEOUT_MS, handleMessage } from './router';
 
 /** The RPC the router broadcasts through, replaced so a test can hold a broadcast open. */
-const rpc = vi.hoisted(() => ({ sendRawTransaction: vi.fn<[Uint8Array, unknown], Promise<string>>() }));
+const rpc = vi.hoisted(() => ({
+  sendRawTransaction: vi.fn<[Uint8Array, unknown], Promise<string>>(),
+  getSignatureStatuses: vi.fn<[string[]], Promise<{ value: Array<{ err: unknown; confirmationStatus?: string } | null> }>>(),
+}));
 vi.mock('./transfers', () => ({
-  getConnection: async () => ({ sendRawTransaction: rpc.sendRawTransaction }),
+  getConnection: async () => ({
+    sendRawTransaction: rpc.sendRawTransaction,
+    getSignatureStatuses: rpc.getSignatureStatuses,
+  }),
   sendTransfer: async () => {
     throw new Error('not under test');
   },
@@ -29,18 +36,21 @@ beforeEach(() => {
   chromeStub = installChromeStub();
   resetKeyringForTests();
   rpc.sendRawTransaction.mockReset();
+  rpc.getSignatureStatuses.mockReset();
 });
 
 afterEach(() => {
   uninstallChromeStub();
 });
 
+/** The fixture wallet on Mainnet, whatever `VITE_NETWORK` the build environment carries. */
 async function createFixtureWallet(): Promise<WalletPublicState> {
   const result = await handleMessage(
     { type: 'CREATE_WALLET', password: TEST_PASSWORD, seedPhrase: TEST_MNEMONIC },
     popup,
     BASE,
   );
+  await handleMessage({ type: 'UPDATE_SETTINGS', settings: { cluster: 'mainnet-beta' } }, popup, BASE);
   return result.state as WalletPublicState;
 }
 
@@ -64,6 +74,7 @@ function selfTransfer(): number[] {
 
 const SIGNATURE_BYTES = Array.from({ length: 64 }, (_, i) => i);
 const SIGNATURE = bs58.encode(Uint8Array.from(SIGNATURE_BYTES));
+const MAINNET = { accounts: [TEST_ADDRESS], cluster: 'mainnet-beta' };
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -86,7 +97,7 @@ async function startBroadcast() {
   await createFixtureWallet();
   await connectPage(page);
   const { pendingId } = (await handleMessage(
-    { type: 'SIGN_AND_SEND_TRANSACTION', transaction: selfTransfer() },
+    { type: 'SIGN_AND_SEND_TRANSACTION', transactions: [selfTransfer()] },
     page,
     BASE,
   )) as { pendingId: string };
@@ -168,11 +179,11 @@ describe('handleMessage', () => {
   it('refuses GET_ACCOUNTS and every SIGN_* from an origin that never connected', async () => {
     await createFixtureWallet();
     await expect(handleMessage({ type: 'GET_ACCOUNTS' }, page, BASE)).rejects.toThrow('Not connected');
-    await expect(handleMessage({ type: 'SIGN_MESSAGE', message: [1] }, page, BASE)).rejects.toThrow('Not connected');
-    await expect(handleMessage({ type: 'SIGN_TRANSACTION', transaction: [1] }, page, BASE)).rejects.toThrow(
+    await expect(handleMessage({ type: 'SIGN_MESSAGE', messages: [[1]] }, page, BASE)).rejects.toThrow('Not connected');
+    await expect(handleMessage({ type: 'SIGN_TRANSACTION', transactions: [[1]] }, page, BASE)).rejects.toThrow(
       'Not connected',
     );
-    await expect(handleMessage({ type: 'SIGN_AND_SEND_TRANSACTION', transaction: [1] }, page, BASE)).rejects.toThrow(
+    await expect(handleMessage({ type: 'SIGN_AND_SEND_TRANSACTION', transactions: [[1]] }, page, BASE)).rejects.toThrow(
       'Not connected',
     );
     expect(chromeStub.windows.created()).toEqual([]);
@@ -187,7 +198,7 @@ describe('handleMessage', () => {
       [page.origin]: { accountIndexes: [0] },
     });
 
-    await expect(handleMessage({ type: 'WALLET_CONNECT' }, page, BASE)).resolves.toEqual({ accounts: [TEST_ADDRESS] });
+    await expect(handleMessage({ type: 'WALLET_CONNECT' }, page, BASE)).resolves.toEqual(MAINNET);
     expect(chromeStub.windows.created()).toHaveLength(1);
 
     // Another origin is still a stranger.
@@ -198,15 +209,16 @@ describe('handleMessage', () => {
 
   it('a silent connect from a stranger returns no accounts and opens nothing', async () => {
     await createFixtureWallet();
-    await expect(handleMessage({ type: 'WALLET_CONNECT', silent: true }, page, BASE)).resolves.toEqual({ accounts: [] });
+    await expect(handleMessage({ type: 'WALLET_CONNECT', silent: true }, page, BASE)).resolves.toEqual({
+      accounts: [],
+      cluster: 'mainnet-beta',
+    });
     expect(chromeStub.windows.created()).toEqual([]);
     expect(chromeStub.storage.local.snapshot()).not.toHaveProperty('cinder_connected');
 
     // Once connected, silent gets the accounts like any other connect.
     await connectPage(page);
-    await expect(handleMessage({ type: 'WALLET_CONNECT', silent: true }, page, BASE)).resolves.toEqual({
-      accounts: [TEST_ADDRESS],
-    });
+    await expect(handleMessage({ type: 'WALLET_CONNECT', silent: true }, page, BASE)).resolves.toEqual(MAINNET);
     expect(chromeStub.windows.created()).toHaveLength(1);
   });
 
@@ -281,7 +293,7 @@ describe('handleMessage', () => {
     await expect(handleMessage({ type: 'APPROVE_REQUEST', id: pendingId }, popup, BASE)).resolves.toEqual({});
     await expect(handleMessage({ type: 'POLL_APPROVAL', id: pendingId }, page, BASE)).resolves.toEqual({
       status: 'approved',
-      value: { connected: true, accounts: [TEST_ADDRESS], publicKey: TEST_ADDRESS },
+      value: { connected: true, accounts: [TEST_ADDRESS], publicKey: TEST_ADDRESS, cluster: 'mainnet-beta' },
     });
     await expect(handleMessage({ type: 'GET_ACCOUNTS' }, page, BASE)).resolves.toEqual({ accounts: [TEST_ADDRESS] });
   });
@@ -292,7 +304,7 @@ describe('handleMessage', () => {
     await connectPage(page);
     await handleMessage({ type: 'LOCK' }, popup, BASE);
 
-    const { pendingId } = (await handleMessage({ type: 'SIGN_MESSAGE', message: [104, 105] }, page, BASE)) as {
+    const { pendingId } = (await handleMessage({ type: 'SIGN_MESSAGE', messages: [[104, 105]] }, page, BASE)) as {
       pendingId: string;
     };
     expect(pendingId).toEqual(expect.any(String));
@@ -375,7 +387,7 @@ describe('handleMessage', () => {
     for (const sender of [sandboxA, sandboxB]) {
       await expect(handleMessage({ type: 'GET_ACCOUNTS' }, sender, BASE)).rejects.toThrow('Untrusted sender');
       await expect(handleMessage({ type: 'WALLET_CONNECT' }, sender, BASE)).rejects.toThrow('Untrusted sender');
-      await expect(handleMessage({ type: 'SIGN_MESSAGE', message: [1] }, sender, BASE)).rejects.toThrow('Untrusted sender');
+      await expect(handleMessage({ type: 'SIGN_MESSAGE', messages: [[1]] }, sender, BASE)).rejects.toThrow('Untrusted sender');
     }
     expect(Object.keys(chromeStub.storage.local.snapshot().cinder_connected as object)).toEqual([page.origin]);
     expect(chromeStub.storage.session.snapshot().cinder_tabs).toEqual({ '7:0': page.origin });
@@ -396,7 +408,10 @@ describe('handleMessage', () => {
     await handleMessage({ type: 'LOCK' }, popup, BASE);
     expect(chromeStub.windows.created()).toHaveLength(1);
 
-    await expect(handleMessage({ type: 'WALLET_CONNECT', silent: true }, page, BASE)).resolves.toEqual({ accounts: [] });
+    await expect(handleMessage({ type: 'WALLET_CONNECT', silent: true }, page, BASE)).resolves.toEqual({
+      accounts: [],
+      cluster: 'mainnet-beta',
+    });
     expect(chromeStub.windows.created()).toHaveLength(1);
 
     const { pendingId } = (await handleMessage({ type: 'WALLET_CONNECT' }, page, BASE)) as { pendingId: string };
@@ -439,15 +454,18 @@ describe('handleMessage', () => {
     await expect(handleMessage({ type: 'APPROVE_REQUEST', id: pendingId }, popup, BASE)).resolves.toEqual({});
     await expect(handleMessage({ type: 'POLL_APPROVAL', id: pendingId }, page, BASE)).resolves.toEqual({
       status: 'approved',
-      value: { connected: true, accounts: [TEST_ADDRESS], publicKey: TEST_ADDRESS },
+      value: { connected: true, accounts: [TEST_ADDRESS], publicKey: TEST_ADDRESS, cluster: 'mainnet-beta' },
     });
   });
 
   it('rejects a malformed transaction from a page and from the popup', async () => {
     await createFixtureWallet();
     for (const transaction of ['AQ==', [], [256], new Array(MAX_TRANSACTION_BYTES + 1).fill(0)]) {
-      await expect(handleMessage({ type: 'SIGN_TRANSACTION', transaction }, page, BASE)).rejects.toThrow(
-        'Invalid transaction',
+      await expect(handleMessage({ type: 'SIGN_TRANSACTION', transactions: [transaction] }, page, BASE)).rejects.toThrow(
+        'Invalid transactions',
+      );
+      await expect(handleMessage({ type: 'SIGN_TRANSACTION', transactions: transaction }, page, BASE)).rejects.toThrow(
+        'Invalid transactions',
       );
       await expect(handleMessage({ type: 'PREVIEW_TRANSACTION', transaction }, popup, BASE)).rejects.toThrow(
         'Invalid transaction',
@@ -472,7 +490,7 @@ describe('APPROVE_REQUEST claims the request before fulfilling it', () => {
     await expect(poll(pendingId)).resolves.toEqual({ status: 'pending' });
     broadcast.resolve(SIGNATURE);
     await expect(approving).resolves.toEqual({});
-    await expect(poll(pendingId)).resolves.toMatchObject({ status: 'approved', value: { signature: SIGNATURE_BYTES } });
+    await expect(poll(pendingId)).resolves.toMatchObject({ status: 'approved', value: { signatures: [SIGNATURE_BYTES] } });
     expect(rpc.sendRawTransaction).toHaveBeenCalledTimes(1);
     expect(chromeStub.windows.removed()).toEqual([]);
   });
@@ -483,7 +501,7 @@ describe('APPROVE_REQUEST claims the request before fulfilling it', () => {
     await onWindowRemoved(signWindow.id);
     broadcast.resolve(SIGNATURE);
     await approving;
-    await expect(poll(pendingId)).resolves.toMatchObject({ status: 'approved', value: { signature: SIGNATURE_BYTES } });
+    await expect(poll(pendingId)).resolves.toMatchObject({ status: 'approved', value: { signatures: [SIGNATURE_BYTES] } });
     expect(rpc.sendRawTransaction).toHaveBeenCalledTimes(1);
   });
 
@@ -493,7 +511,7 @@ describe('APPROVE_REQUEST claims the request before fulfilling it', () => {
     expect(state.isLocked).toBe(true);
     broadcast.resolve(SIGNATURE);
     await approving;
-    await expect(poll(pendingId)).resolves.toMatchObject({ status: 'approved', value: { signature: SIGNATURE_BYTES } });
+    await expect(poll(pendingId)).resolves.toMatchObject({ status: 'approved', value: { signatures: [SIGNATURE_BYTES] } });
     expect(rpc.sendRawTransaction).toHaveBeenCalledTimes(1);
   });
 
@@ -501,7 +519,7 @@ describe('APPROVE_REQUEST claims the request before fulfilling it', () => {
     await createFixtureWallet();
     await connectPage(page);
     const { pendingId } = (await handleMessage(
-      { type: 'SIGN_AND_SEND_TRANSACTION', transaction: selfTransfer() },
+      { type: 'SIGN_AND_SEND_TRANSACTION', transactions: [selfTransfer()] },
       page,
       BASE,
     )) as { pendingId: string };
@@ -512,7 +530,7 @@ describe('APPROVE_REQUEST claims the request before fulfilling it', () => {
     await expect(second).rejects.toThrow('Approval expired');
     broadcast.resolve(SIGNATURE);
     await expect(first).resolves.toEqual({});
-    await expect(poll(pendingId)).resolves.toMatchObject({ status: 'approved', value: { signature: SIGNATURE_BYTES } });
+    await expect(poll(pendingId)).resolves.toMatchObject({ status: 'approved', value: { signatures: [SIGNATURE_BYTES] } });
     expect(rpc.sendRawTransaction).toHaveBeenCalledTimes(1);
   });
 
@@ -529,7 +547,7 @@ describe('APPROVE_REQUEST claims the request before fulfilling it', () => {
     await createFixtureWallet();
     await connectPage(page);
     const { pendingId } = (await handleMessage(
-      { type: 'SIGN_AND_SEND_TRANSACTION', transaction: selfTransfer() },
+      { type: 'SIGN_AND_SEND_TRANSACTION', transactions: [selfTransfer()] },
       page,
       BASE,
     )) as { pendingId: string };
@@ -549,7 +567,7 @@ describe('a site losing its grant rejects what it had pending', () => {
   async function pendingSign(): Promise<string> {
     await createFixtureWallet();
     await connectPage(page);
-    const { pendingId } = (await handleMessage({ type: 'SIGN_MESSAGE', message: [104, 105] }, page, BASE)) as {
+    const { pendingId } = (await handleMessage({ type: 'SIGN_MESSAGE', messages: [[104, 105]] }, page, BASE)) as {
       pendingId: string;
     };
     await expect(poll(pendingId)).resolves.toEqual({ status: 'pending' });
@@ -584,7 +602,7 @@ describe('the page closing', () => {
     installApprovalLifecycle();
     await createFixtureWallet();
     await connectPage(page);
-    const { pendingId } = (await handleMessage({ type: 'SIGN_MESSAGE', message: [1] }, page, BASE)) as {
+    const { pendingId } = (await handleMessage({ type: 'SIGN_MESSAGE', messages: [[1]] }, page, BASE)) as {
       pendingId: string;
     };
     const [, signWindow] = chromeStub.windows.created();
@@ -650,5 +668,224 @@ describe('UPDATE_SETTINGS rpc fields', () => {
     const { settings } = await update({ rpcUrl: 'https://rpc.example', rpcUrlCluster: 'mainnet-beta' });
     expect(settings.rpcUrlCluster).toBe('mainnet-beta');
     expect(stored()?.rpcUrlCluster).toBe('mainnet-beta');
+  });
+});
+
+/** The signature slot of a signed transaction, checked against the fixture key. */
+function verifySigned(bytes: number[]): boolean {
+  const tx = VersionedTransaction.deserialize(Uint8Array.from(bytes));
+  const signature = tx.signatures[0];
+  return nacl.sign.detached.verify(tx.message.serialize(), signature, new PublicKey(TEST_ADDRESS).toBytes());
+}
+
+describe('batched sign requests', () => {
+  async function connected(): Promise<void> {
+    await createFixtureWallet();
+    await connectPage(page);
+  }
+
+  it('SIGN_TRANSACTION with two transactions opens one window and answers with two signed transactions in order', async () => {
+    await connected();
+    const legacy = new Transaction({ feePayer: new PublicKey(TEST_ADDRESS), recentBlockhash: PublicKey.default.toBase58() })
+      .add(SystemProgram.transfer({ fromPubkey: new PublicKey(TEST_ADDRESS), toPubkey: new PublicKey(TEST_ADDRESS), lamports: 1 }));
+    const transactions = [selfTransfer(), [...legacy.serialize({ requireAllSignatures: false })]];
+    const { pendingId } = (await handleMessage({ type: 'SIGN_TRANSACTION', transactions }, page, BASE)) as { pendingId: string };
+    expect(chromeStub.windows.created()).toHaveLength(2);
+    const { request } = (await handleMessage({ type: 'GET_PENDING_REQUEST', id: pendingId }, popup, BASE)) as {
+      request: PendingApproval | null;
+    };
+    expect(request).toMatchObject({ kind: 'signTransaction', transactions });
+    expect(request).not.toHaveProperty('chain');
+    expect(request).not.toHaveProperty('options');
+
+    await approve(pendingId);
+    const result = (await poll(pendingId)) as { status: string; value: { signedTransactions: number[][] } };
+    expect(result.status).toBe('approved');
+    expect(result.value.signedTransactions).toHaveLength(2);
+    // Same order as the request, each one signed by the fixture account (the legacy one as legacy bytes).
+    expect(VersionedTransaction.deserialize(Uint8Array.from(result.value.signedTransactions[0])).version).toBe(0);
+    expect(VersionedTransaction.deserialize(Uint8Array.from(result.value.signedTransactions[1])).version).toBe('legacy');
+    expect(result.value.signedTransactions.every(verifySigned)).toBe(true);
+    expect(rpc.sendRawTransaction).not.toHaveBeenCalled();
+  });
+
+  it('SIGN_AND_SEND_TRANSACTION broadcasts every item in order and returns one 64-byte signature each', async () => {
+    await connected();
+    const second = Array.from({ length: 64 }, (_, i) => 63 - i);
+    rpc.sendRawTransaction.mockResolvedValueOnce(SIGNATURE).mockResolvedValueOnce(bs58.encode(Uint8Array.from(second)));
+    const { pendingId } = (await handleMessage(
+      { type: 'SIGN_AND_SEND_TRANSACTION', transactions: [selfTransfer(), selfTransfer()] },
+      page,
+      BASE,
+    )) as { pendingId: string };
+    await approve(pendingId);
+    await expect(poll(pendingId)).resolves.toEqual({ status: 'approved', value: { signatures: [SIGNATURE_BYTES, second] } });
+    expect(rpc.sendRawTransaction).toHaveBeenCalledTimes(2);
+    expect(rpc.sendRawTransaction.mock.calls[0][1]).toEqual({ skipPreflight: false });
+    expect(rpc.getSignatureStatuses).not.toHaveBeenCalled();
+  });
+
+  it('SIGN_MESSAGE with three messages is one approval and three signatures in order', async () => {
+    await connected();
+    const messages = [[1], [], [2, 3]];
+    const { pendingId } = (await handleMessage({ type: 'SIGN_MESSAGE', messages }, page, BASE)) as { pendingId: string };
+    expect(chromeStub.windows.created()).toHaveLength(2);
+    const { request } = (await handleMessage({ type: 'GET_PENDING_REQUEST', id: pendingId }, popup, BASE)) as {
+      request: PendingApproval | null;
+    };
+    expect(request).toMatchObject({ kind: 'signMessage', messages });
+    await approve(pendingId);
+    const result = (await poll(pendingId)) as { status: string; value: { signatures: number[][] } };
+    expect(result.status).toBe('approved');
+    expect(result.value.signatures).toHaveLength(3);
+    const publicKey = new PublicKey(TEST_ADDRESS).toBytes();
+    messages.forEach((message, i) => {
+      expect(result.value.signatures[i]).toHaveLength(64);
+      expect(nacl.sign.detached.verify(Uint8Array.from(message), Uint8Array.from(result.value.signatures[i]), publicKey)).toBe(true);
+    });
+  });
+
+  it('a second request from the same origin while a batch is pending is still refused', async () => {
+    await connected();
+    await handleMessage({ type: 'SIGN_TRANSACTION', transactions: [selfTransfer(), selfTransfer()] }, page, BASE);
+    await expect(handleMessage({ type: 'SIGN_MESSAGE', messages: [[1]] }, page, BASE)).rejects.toThrow(
+      'A request is already pending for this site',
+    );
+    expect(chromeStub.windows.created()).toHaveLength(2);
+  });
+});
+
+describe('the chain a page names', () => {
+  async function connected(): Promise<void> {
+    await createFixtureWallet();
+    await connectPage(page);
+  }
+  const sign = (chain: string) =>
+    handleMessage({ type: 'SIGN_TRANSACTION', transactions: [selfTransfer()], chain }, page, BASE);
+
+  it('accepts the active cluster and an absent chain; the pending request records the chain', async () => {
+    await connected();
+    const { pendingId } = (await sign('solana:mainnet')) as { pendingId: string };
+    const { request } = (await handleMessage({ type: 'GET_PENDING_REQUEST', id: pendingId }, popup, BASE)) as {
+      request: PendingApproval | null;
+    };
+    expect(request?.chain).toBe('solana:mainnet');
+    await handleMessage({ type: 'REJECT_REQUEST', id: pendingId }, popup, BASE);
+    await expect(handleMessage({ type: 'SIGN_TRANSACTION', transactions: [selfTransfer()] }, page, BASE)).resolves.toMatchObject({
+      pendingId: expect.any(String),
+    });
+  });
+
+  it('refuses the other cluster with a Settings hint and opens no window', async () => {
+    await connected();
+    await expect(sign('solana:devnet')).rejects.toThrow('Cinder is on Mainnet; switch networks in Settings');
+    await handleMessage({ type: 'UPDATE_SETTINGS', settings: { cluster: 'devnet' } }, popup, BASE);
+    await expect(sign('solana:mainnet')).rejects.toThrow('Cinder is on Devnet; switch networks in Settings');
+    await expect(
+      handleMessage({ type: 'SIGN_AND_SEND_TRANSACTION', transactions: [selfTransfer()], chain: 'solana:mainnet' }, page, BASE),
+    ).rejects.toThrow('Cinder is on Devnet; switch networks in Settings');
+    expect(chromeStub.windows.created()).toHaveLength(1);
+    expect(chromeStub.storage.session.snapshot().cinder_pending ?? {}).toEqual({});
+    // Now devnet is the active cluster.
+    await expect(sign('solana:devnet')).resolves.toMatchObject({ pendingId: expect.any(String) });
+  });
+
+  it('refuses testnet and localnet whatever the cluster', async () => {
+    await connected();
+    for (const chain of ['solana:testnet', 'solana:localnet']) {
+      await expect(sign(chain)).rejects.toThrow('Cinder does not support that network');
+    }
+    await expect(sign('solana:goerli')).rejects.toThrow('Invalid chain');
+    expect(chromeStub.windows.created()).toHaveLength(1);
+  });
+
+  it('reports the active cluster on every connect answer', async () => {
+    await createFixtureWallet();
+    await handleMessage({ type: 'UPDATE_SETTINGS', settings: { cluster: 'devnet' } }, popup, BASE);
+    const { pendingId } = (await handleMessage({ type: 'WALLET_CONNECT' }, page, BASE)) as { pendingId: string };
+    await approve(pendingId);
+    await expect(poll(pendingId)).resolves.toEqual({
+      status: 'approved',
+      value: { connected: true, accounts: [TEST_ADDRESS], publicKey: TEST_ADDRESS, cluster: 'devnet' },
+    });
+    await expect(handleMessage({ type: 'WALLET_CONNECT' }, page, BASE)).resolves.toEqual({
+      accounts: [TEST_ADDRESS],
+      cluster: 'devnet',
+    });
+  });
+});
+
+describe('send options', () => {
+  async function pendingSend(options: Record<string, unknown>): Promise<string> {
+    await createFixtureWallet();
+    await connectPage(page);
+    const { pendingId } = (await handleMessage(
+      { type: 'SIGN_AND_SEND_TRANSACTION', transactions: [selfTransfer()], options },
+      page,
+      BASE,
+    )) as { pendingId: string };
+    return pendingId;
+  }
+
+  it('forwards the four sendRawTransaction options and nothing else', async () => {
+    const pendingId = await pendingSend({
+      skipPreflight: true,
+      preflightCommitment: 'processed',
+      maxRetries: 2,
+      minContextSlot: 9,
+    });
+    rpc.sendRawTransaction.mockResolvedValueOnce(SIGNATURE);
+    await approve(pendingId);
+    expect(rpc.sendRawTransaction.mock.calls[0][1]).toEqual({
+      skipPreflight: true,
+      preflightCommitment: 'processed',
+      maxRetries: 2,
+      minContextSlot: 9,
+    });
+    expect(rpc.getSignatureStatuses).not.toHaveBeenCalled();
+    await expect(poll(pendingId)).resolves.toEqual({ status: 'approved', value: { signatures: [SIGNATURE_BYTES] } });
+  });
+
+  it('with a commitment, waits for the signature to reach it before answering', async () => {
+    const pendingId = await pendingSend({ commitment: 'confirmed' });
+    rpc.sendRawTransaction.mockResolvedValueOnce(SIGNATURE);
+    rpc.getSignatureStatuses
+      .mockResolvedValueOnce({ value: [null] })
+      .mockResolvedValueOnce({ value: [{ err: null, confirmationStatus: 'processed' }] })
+      .mockResolvedValueOnce({ value: [{ err: null, confirmationStatus: 'finalized' }] });
+    await approve(pendingId);
+    expect(rpc.getSignatureStatuses).toHaveBeenCalledTimes(3);
+    expect(rpc.getSignatureStatuses.mock.calls[0][0]).toEqual([SIGNATURE]);
+    expect(rpc.sendRawTransaction.mock.calls[0][1]).toEqual({ skipPreflight: false });
+    await expect(poll(pendingId)).resolves.toEqual({ status: 'approved', value: { signatures: [SIGNATURE_BYTES] } });
+  });
+
+  it('a transaction that landed with an error still answers with its signature', async () => {
+    const pendingId = await pendingSend({ commitment: 'finalized' });
+    rpc.sendRawTransaction.mockResolvedValueOnce(SIGNATURE);
+    rpc.getSignatureStatuses.mockResolvedValueOnce({ value: [{ err: { InstructionError: [0, 'Custom'] }, confirmationStatus: 'processed' }] });
+    await approve(pendingId);
+    expect(rpc.getSignatureStatuses).toHaveBeenCalledTimes(1);
+    await expect(poll(pendingId)).resolves.toEqual({ status: 'approved', value: { signatures: [SIGNATURE_BYTES] } });
+  });
+
+  it('gives up waiting after the confirmation timeout rather than holding the page forever', async () => {
+    const pendingId = await pendingSend({ commitment: 'finalized' });
+    rpc.sendRawTransaction.mockResolvedValueOnce(SIGNATURE);
+    // The clock jumps past the timeout after the first status poll; the level is never reached.
+    const start = Date.now();
+    let now = start;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    rpc.getSignatureStatuses.mockImplementation(async () => {
+      now = start + CONFIRMATION_TIMEOUT_MS + CONFIRMATION_POLL_MS;
+      return { value: [{ err: null, confirmationStatus: 'confirmed' }] };
+    });
+    try {
+      await expect(approve(pendingId)).resolves.toEqual({});
+    } finally {
+      clock.mockRestore();
+    }
+    expect(rpc.getSignatureStatuses).toHaveBeenCalledTimes(1);
+    await expect(poll(pendingId)).resolves.toEqual({ status: 'approved', value: { signatures: [SIGNATURE_BYTES] } });
   });
 });

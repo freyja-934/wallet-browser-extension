@@ -85,11 +85,12 @@ export function ApprovalScreen() {
 
   // The preview needs the RPC and a readable request; it runs once the wallet is unlocked.
   useEffect(() => {
-    if (locked !== false || !request?.transactionBytes || previewSettled) return;
+    const first = request?.transactions?.[0];
+    if (locked !== false || !first || previewSettled) return;
     let cancelled = false;
     (async () => {
       try {
-        const result = await extensionClient.previewTransaction(request.transactionBytes!);
+        const result = await extensionClient.previewTransaction(first);
         if (!cancelled) setPreview(result);
       } catch (err) {
         // Error and settle land in the same handler so Approve never enables before the banner renders.
@@ -131,7 +132,7 @@ export function ApprovalScreen() {
   const danger = preview?.warnings?.some((warning) => warning.level === 'danger');
   const isSend = request?.kind === 'signAndSendTransaction';
   // Never let a transaction be approved before its preview has settled.
-  const awaitingPreview = Boolean(request?.transactionBytes) && !previewSettled;
+  const awaitingPreview = Boolean(request?.transactions?.length) && !previewSettled;
 
   return (
     <PopupFrame atmosphere="still" heavy>
@@ -211,9 +212,11 @@ export function ApprovalScreen() {
         {request?.kind === 'signMessage' && (
           <Card className="mb-4">
             <CardContent>
-              <p className="break-all font-mono text-xs text-fg-2">
-                {new TextDecoder().decode(Uint8Array.from(request.messageBytes || []))}
-              </p>
+              {(request.messages ?? []).map((message, i) => (
+                <p key={i} className="break-all font-mono text-xs text-fg-2">
+                  {new TextDecoder().decode(Uint8Array.from(message))}
+                </p>
+              ))}
             </CardContent>
           </Card>
         )}
