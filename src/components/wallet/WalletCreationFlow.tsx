@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import toast from 'react-hot-toast';
 import { generateSeedPhrase } from '../../lib/wallet';
-import { createWallet } from '../../store/slices/walletSlice';
+import { extensionClient } from '../../messaging/client';
+import { initializeWallet } from '../../store/slices/walletSlice';
 import { useAppDispatch } from '../../store/store';
 import { PopupFrame } from '../ui/Atmosphere';
 import { PrimaryButton, SecondaryButton } from '../ui/Button';
@@ -36,9 +37,17 @@ export function WalletCreationFlow({ onComplete }: { onComplete?: () => void }) 
     setCurrentStep('create-password');
   };
 
+  /**
+   * The worker is told the phrase directly: a Redux action carrying a mnemonic
+   * would sit in the store's action history (and any devtools attached to it).
+   * The phrase lives in this component's state and nowhere else, and is dropped
+   * as soon as the vault exists; Redux only ever learns the public state.
+   */
   const handlePasswordCreate = async (password: string) => {
     try {
-      await dispatch(createWallet({ password, seedPhrase, imported: isImported })).unwrap();
+      await extensionClient.createWallet(password, seedPhrase);
+      setSeedPhrase('');
+      await dispatch(initializeWallet()).unwrap();
       toast.success(isImported ? 'Wallet imported' : 'Wallet created');
       setCurrentStep('complete');
       onComplete?.();
