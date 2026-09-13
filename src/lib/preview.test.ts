@@ -13,10 +13,12 @@ import { ACCOUNT_SIZE, AccountLayout, TOKEN_PROGRAM_ID, createApproveInstruction
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildPreview,
+  describeSimulationError,
   estimatedFeeLamports,
   MAX_COMPUTE_UNITS,
   MAX_SIMULATED_ACCOUNTS,
   NOT_A_SIGNER_ERROR,
+  RUNTIME_ERROR_EXPLANATIONS,
   UNREADABLE_TRANSACTION_WARNING,
   type PreviewDeps,
   type SimulationValue,
@@ -145,6 +147,19 @@ describe('buildPreview', () => {
     expect(preview.logs).toEqual(['Program log: boom']);
     expect(preview.instructions).toHaveLength(1);
     expect(preview.diff).toBeUndefined();
+  });
+
+  it('reports a plain-string simulation error without the quotes JSON.stringify would add', async () => {
+    // What the mainnet fixture actually answers: the account is owned by a program,
+    // so the runtime refuses it as fee payer before anything executes.
+    const preview = await buildPreview(
+      bytes(),
+      deps({ simulate: async () => ({ err: 'InvalidAccountForFee', logs: [] }) }),
+    );
+    expect(preview.success).toBe(false);
+    expect(preview.error).not.toContain('"');
+    expect(preview.error).toContain('(InvalidAccountForFee)');
+    expect(preview.error).toContain('not a system account');
   });
 
   it('reports success with logs and units when the simulation passes', async () => {
@@ -373,5 +388,59 @@ describe('estimatedFeeLamports', () => {
     // 1_400_000 * 1000 / 1e6 = 1400, not 2000.
     expect(MAX_COMPUTE_UNITS).toBe(1_400_000n);
     expect(estimatedFeeLamports(oversized)).toBe(5_000n + 1_400n);
+  });
+});
+
+describe('describeSimulationError', () => {
+  it('renders a string error as itself, with no literal quotes around it', () => {
+    // `JSON.stringify('AccountInUse')` is `"AccountInUse"`, quotes and all: that is
+    // what put `"InvalidAccountForFee"` on screen.
+    const text = describeSimulationError('AccountInUse');
+    expect(text).toBe('AccountInUse');
+    expect(text).not.toContain('"');
+  });
+
+  it('JSON-stringifies a shape that is not a string', () => {
+    expect(describeSimulationError({ InstructionError: [0, 'Custom'] })).toBe(
+      '{"InstructionError":[0,"Custom"]}',
+    );
+    expect(describeSimulationError(['a', 1])).toBe('["a",1]');
+  });
+
+  it('explains a known runtime code in plain English and keeps the code searchable', () => {
+    for (const code of Object.keys(RUNTIME_ERROR_EXPLANATIONS)) {
+      const text = describeSimulationError(code);
+      expect(text).toContain(RUNTIME_ERROR_EXPLANATIONS[code]);
+      // The raw code survives in brackets, so searching the web for it still works.
+      expect(text).toContain(`(${code})`);
+      expect(text.startsWith('"')).toBe(false);
+    }
+  });
+
+  it('names the five codes a wallet user actually meets', () => {
+    expect(Object.keys(RUNTIME_ERROR_EXPLANATIONS).sort()).toEqual([
+      'AccountNotFound',
+      'BlockhashNotFound',
+      'InsufficientFundsForFee',
+      'InsufficientFundsForRent',
+      'InvalidAccountForFee',
+    ]);
+    // The fixture's own mainnet state: owned by a program, so it can never pay a fee.
+    expect(describeSimulationError('InvalidAccountForFee')).toContain('not a system account');
+  });
+
+  it('explains a single-key object error and keeps its detail', () => {
+    expect(describeSimulationError({ InsufficientFundsForRent: { account_index: 0 } })).toBe(
+      `${RUNTIME_ERROR_EXPLANATIONS.InsufficientFundsForRent} ({"InsufficientFundsForRent":{"account_index":0}})`,
+    );
+  });
+
+  it('leaves an unknown code exactly as the runtime reported it', () => {
+    expect(describeSimulationError('ProgramAccountNotFound')).toBe('ProgramAccountNotFound');
+    expect(describeSimulationError({ Custom: 6001 })).toBe('{"Custom":6001}');
+    // Two keys: not one of ours, however familiar one of them looks.
+    expect(describeSimulationError({ AccountNotFound: 1, Other: 2 })).toBe(
+      '{"AccountNotFound":1,"Other":2}',
+    );
   });
 });

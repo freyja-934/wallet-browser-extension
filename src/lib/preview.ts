@@ -104,6 +104,52 @@ export const NOT_A_SIGNER_ERROR = 'This transaction does not require a signature
 /** The RPC caps `simulateTransaction` `accounts.addresses`; the diff is marked partial past this. */
 export const MAX_SIMULATED_ACCOUNTS = 32;
 
+/**
+ * The runtime errors a wallet user actually meets, in words that say what went
+ * wrong rather than what the validator called it. The code itself stays in the
+ * rendered string (see `describeSimulationError`) so it is still searchable —
+ * these sentences explain a code, they never replace it.
+ */
+export const RUNTIME_ERROR_EXPLANATIONS: Record<string, string> = {
+  InvalidAccountForFee:
+    'This account cannot pay network fees, because it is not a system account — something else owns it on-chain. Nothing signed from it will execute on this cluster.',
+  AccountNotFound: 'An account this transaction needs does not exist on this cluster.',
+  InsufficientFundsForFee: 'Not enough SOL to pay the network fee.',
+  InsufficientFundsForRent:
+    'This would leave an account below the rent-exempt minimum, which the runtime refuses. Send less, or leave the account empty.',
+  BlockhashNotFound:
+    'The transaction’s blockhash has expired. The site has to rebuild the transaction and ask again.',
+};
+
+/**
+ * The one known error code in a simulation's `err`, when there is one. The
+ * runtime reports these either as a bare string (`'InvalidAccountForFee'`) or
+ * as a single-key object carrying its detail
+ * (`{ InsufficientFundsForRent: { account_index: 0 } }`); anything else — an
+ * `InstructionError` tuple, a program's custom code — has no sentence here.
+ */
+function knownErrorCode(err: unknown): string | undefined {
+  if (typeof err === 'string') return err in RUNTIME_ERROR_EXPLANATIONS ? err : undefined;
+  if (!err || typeof err !== 'object' || Array.isArray(err)) return undefined;
+  const keys = Object.keys(err);
+  return keys.length === 1 && keys[0] in RUNTIME_ERROR_EXPLANATIONS ? keys[0] : undefined;
+}
+
+/**
+ * A simulation error as the approval screen shows it. A string error is its own
+ * text — `JSON.stringify` would wrap it in literal double quotes, which is what
+ * put `"InvalidAccountForFee"` in front of users — and every other shape is
+ * JSON. A code we have words for is explained first, with the raw value kept in
+ * brackets so it can still be searched for.
+ */
+export function describeSimulationError(err: unknown): string {
+  // `JSON.stringify` answers `undefined` for a value with no JSON form (a bigint throws
+  // instead, but nothing in an RPC answer is one), so the text is never the word "undefined".
+  const raw = typeof err === 'string' ? err : (JSON.stringify(err) as string | undefined) ?? String(err);
+  const code = knownErrorCode(err);
+  return code ? `${RUNTIME_ERROR_EXPLANATIONS[code]} (${raw})` : raw;
+}
+
 const LAMPORTS_PER_SIGNATURE = 5_000n;
 const DEFAULT_COMPUTE_UNITS_PER_INSTRUCTION = 200_000n;
 /** The runtime's per-transaction ceiling; a `SetComputeUnitLimit` above it is clamped, never charged. */
@@ -231,7 +277,7 @@ export async function buildPreview(bytes: Uint8Array, deps: PreviewDeps): Promis
   const result: PreviewResult = {
     ...base,
     success: !value.err,
-    error: value.err ? JSON.stringify(value.err) : undefined,
+    error: value.err ? describeSimulationError(value.err) : undefined,
     logs: value.logs ?? [],
     unitsConsumed: value.unitsConsumed,
   };
