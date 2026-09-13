@@ -3,6 +3,7 @@ import bs58 from 'bs58';
 import {
   Connection,
   PublicKey,
+  SystemInstruction,
   SystemProgram,
   TransactionMessage,
   VersionedTransaction,
@@ -28,9 +29,12 @@ let wallet = null;
 const register = (registered) => {
   if (registered.name !== 'Cinder Wallet') return log(`registered ${registered.name}`);
   wallet = registered;
-  // Lock, disconnect, revoke, account and cluster changes arrive here as `change`.
+  // Lock, disconnect, revoke, account and cluster changes arrive here as `change`;
+  // a cluster change re-stamps every account's `chains`, so those are logged too.
   wallet.features['standard:events'].on('change', ({ accounts }) => {
-    if (accounts) log({ event: 'change', accounts: accounts.map((account) => account.address) });
+    if (accounts) {
+      log({ event: 'change', accounts: accounts.map((account) => account.address), chains: accounts[0]?.chains ?? [] });
+    }
   });
   log(`registered ${registered.name}`);
 };
@@ -91,7 +95,7 @@ async function waitForConfirmation(connection, signature) {
   return false;
 }
 
-async function buildSelfTransfer(account) {
+async function buildSelfTransfer(account, lamports = 0) {
   const address = account.address;
   const pubkey = new PublicKey(address);
   const connection = new Connection(rpcUrl, 'confirmed');
@@ -101,7 +105,7 @@ async function buildSelfTransfer(account) {
   const ix = SystemProgram.transfer({
     fromPubkey: pubkey,
     toPubkey: pubkey,
-    lamports: 0,
+    lamports,
   });
   const message = new TransactionMessage({
     payerKey: pubkey,
@@ -148,16 +152,31 @@ document.getElementById('signAndSend').onclick = async () => {
   }
 };
 
+/** The lamports of the one transfer in a signed self-transfer, so the outputs' order is observable. */
+function transferLamports(signedTransaction) {
+  const tx = VersionedTransaction.deserialize(signedTransaction);
+  const [ix] = TransactionMessage.decompile(tx.message).instructions;
+  return Number(SystemInstruction.decodeTransfer(ix).lamports);
+}
+
 document.getElementById('signAll').onclick = async () => {
   if (!wallet?.accounts[0]) return log('Connect first');
   try {
-    // Two transactions, one call: the wallet opens one approval window and answers both in order.
-    const [first, second] = await Promise.all([buildSelfTransfer(wallet.accounts[0]), buildSelfTransfer(wallet.accounts[0])]);
+    // Two transactions, one call: the wallet opens one approval window and answers both in
+    // order. They transfer 1 and 2 lamports so the order of the outputs can be checked.
+    const [first, second] = await Promise.all([
+      buildSelfTransfer(wallet.accounts[0], 1),
+      buildSelfTransfer(wallet.accounts[0], 2),
+    ]);
     const outs = await wallet.features['solana:signTransaction'].signTransaction(
       { account: wallet.accounts[0], transaction: first.serialize(), chain: clusterChain },
       { account: wallet.accounts[0], transaction: second.serialize(), chain: clusterChain },
     );
-    log({ signedCount: outs.length, signedBytes: outs.map((out) => out.signedTransaction.length) });
+    log({
+      signedCount: outs.length,
+      signedBytes: outs.map((out) => out.signedTransaction.length),
+      lamports: outs.map((out) => transferLamports(out.signedTransaction)),
+    });
   } catch (error) {
     log(error instanceof Error ? error.message : String(error));
   }

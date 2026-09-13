@@ -398,10 +398,41 @@ test('two transactions in one signTransaction call open one approval and come ba
   await approval.getByTestId('approval-approve').click();
 
   await expect(dapp.locator('#log')).toContainText('"signedCount": 2', { timeout: 30_000 });
+  // The outputs line up with the inputs: the 1-lamport transfer first, then the 2-lamport one.
+  await expect(dapp.locator('#log')).toContainText(/"lamports":\s*\[\s*1,\s*2\s*\]/);
   // No second window ever opened for the second transaction.
   await expect
     .poll(() => context.pages().filter((page) => page.url().includes('approve.html')).length, { timeout: 5_000 })
     .toBe(0);
+});
+
+test("switching the cluster in Settings re-stamps a connected page's chains", async ({ context, extensionId }) => {
+  test.setTimeout(120_000);
+  const popup = await importAndUnlock(context, extensionId);
+
+  const dapp = await context.newPage();
+  await dapp.goto('http://localhost:5174/');
+  await expect(dapp.locator('#log')).toContainText('registered Cinder Wallet', { timeout: 15_000 });
+  await approveNext(context, () => dapp.locator('#connect').click(), dapp);
+  await expect(dapp.locator('#log')).toContainText(/"accounts":\s*\[\s*"/, { timeout: 15_000 });
+  await expect(dapp.locator('#log')).toContainText('solana:devnet');
+
+  // Mainnet: the page hears a `change` whose accounts carry the mainnet chain, without reconnecting.
+  await popup.bringToFront();
+  await popup.getByTestId('open-settings').click();
+  await popup.getByTestId('settings-cluster').selectOption('mainnet-beta');
+  await expect(popup.getByText('Using Solana Mainnet')).toBeVisible();
+  await expect(dapp.locator('#log')).toContainText('"event": "change"', { timeout: 5_000 });
+  await expect(dapp.locator('#log')).toContainText(/"accounts":\s*\[\s*"/);
+  await expect(dapp.locator('#log')).toContainText('solana:mainnet');
+  await expect(dapp.locator('#log')).not.toContainText('solana:devnet');
+
+  // ...and back, so the profile is on the cluster later steps expect.
+  await popup.getByTestId('settings-cluster').selectOption('devnet');
+  await expect(popup.getByText('Using Solana Devnet')).toBeVisible();
+  await expect(dapp.locator('#log')).toContainText('solana:devnet', { timeout: 5_000 });
+  await expect(dapp.locator('#log')).not.toContainText('solana:mainnet');
+  expect(context.pages().some((page) => page.url().includes('approve.html'))).toBe(false);
 });
 
 test('a chain the wallet is not on is refused with the Settings hint, without a window', async ({ context, extensionId }) => {

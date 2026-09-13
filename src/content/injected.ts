@@ -19,6 +19,7 @@ import {
 } from '@wallet-standard/features';
 import { registerWallet } from '@wallet-standard/wallet';
 import bs58 from 'bs58';
+import { SINGLE_SEND_MESSAGE } from '../lib/bridge';
 import { PAGE_TIMEOUT_MS, WALLET_CHANNEL } from '../lib/messages';
 import { CINDER_ICON_DATA_URI } from '../config/brand';
 import { WALLET_NAME } from '../config/constants';
@@ -102,17 +103,37 @@ import { WALLET_NAME } from '../config/constants';
     }
   }
 
+  /** The worker orders the active account first; `accounts[0]` is what a dApp uses. */
   let accounts: WalletAccount[] = [];
   /** The wallet's active cluster as last reported; every account's `chains` follows it. */
   let currentCluster: string | undefined;
+
+  function sameChains(a: readonly IdentifierString[], b: readonly IdentifierString[]): boolean {
+    return a.length === b.length && a.every((chain, i) => chain === b[i]);
+  }
+
+  /**
+   * Replace the account list, keeping the object of every account whose address
+   * and chains are unchanged (dApps compare accounts by identity), and emit
+   * `change` only when something actually changed: the addresses, their order,
+   * or their chains.
+   */
+  function applyAccounts(next: WalletAccount[]): void {
+    const merged = next.map((account) => {
+      const existing = accounts.find((current) => current.address === account.address);
+      return existing && sameChains(existing.chains, account.chains) ? existing : account;
+    });
+    const changed = merged.length !== accounts.length || merged.some((account, i) => account !== accounts[i]);
+    accounts = merged;
+    if (changed) emit('change', { accounts });
+  }
 
   function setAccounts(addresses: unknown, cluster: unknown): void {
     if (typeof cluster === 'string') currentCluster = cluster;
     const list = Array.isArray(addresses)
       ? addresses.filter((address): address is string => typeof address === 'string')
       : [];
-    accounts = list.map((address) => bytesToAccount(address, currentCluster));
-    emit('change', { accounts });
+    applyAccounts(list.map((address) => bytesToAccount(address, currentCluster)));
   }
 
   function handleWalletEvent(name: string, nextAccounts: unknown, cluster: unknown): void {
@@ -122,8 +143,7 @@ import { WALLET_NAME } from '../config/constants';
       case 'disconnected':
       case 'revoked':
       case 'cleared':
-        accounts = [];
-        emit('change', { accounts });
+        applyAccounts([]);
         return;
       case 'accountsChanged':
       case 'clusterChanged':
@@ -153,14 +173,34 @@ import { WALLET_NAME } from '../config/constants';
     return chain;
   }
 
+  const OPTION_KEYS = ['skipPreflight', 'preflightCommitment', 'maxRetries', 'minContextSlot', 'commitment'] as const;
+
   /** Only the options the worker understands, copied one by one; the worker validates them again. */
   function pickOptions(options: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
     if (!options) return undefined;
     const out: Record<string, unknown> = {};
-    for (const key of ['skipPreflight', 'preflightCommitment', 'maxRetries', 'minContextSlot', 'commitment']) {
+    for (const key of OPTION_KEYS) {
       if (options[key] !== undefined) out[key] = options[key];
     }
     return Object.keys(out).length > 0 ? out : undefined;
+  }
+
+  /**
+   * One batch carries one set of options: the worker applies them to every
+   * item, so inputs that disagree are refused rather than silently given the
+   * first input's options. Returns the shared options.
+   */
+  function sharedOptions(inputs: readonly { options?: Record<string, unknown> }[]): Record<string, unknown> | undefined {
+    const first = pickOptions(inputs[0]?.options);
+    const key = (options: Record<string, unknown> | undefined) =>
+      OPTION_KEYS.map((name) => `${name}=${JSON.stringify(options?.[name])}`).join('&');
+    const expected = key(first);
+    for (const input of inputs.slice(1)) {
+      if (key(pickOptions(input.options)) !== expected) {
+        throw new Error('All transactions in a request must share the same options');
+      }
+    }
+    return first;
   }
 
   function withChainAndOptions(
@@ -199,8 +239,7 @@ import { WALLET_NAME } from '../config/constants';
         version: '1.0.0',
         disconnect: async () => {
           await send('WALLET_DISCONNECT');
-          accounts = [];
-          emit('change', { accounts });
+          applyAccounts([]);
         },
       } satisfies StandardDisconnectFeature[typeof StandardDisconnect],
       [StandardEvents]: {
@@ -217,11 +256,9 @@ import { WALLET_NAME } from '../config/constants';
           if (inputs.length === 0) return [];
           // One message, one approval window, N signed transactions in the same order.
           const chain = checkInputs(inputs);
+          const options = sharedOptions(inputs);
           const transactions = inputs.map((input) => [...toBytes(input.transaction)]);
-          const response = await send(
-            'SIGN_TRANSACTION',
-            withChainAndOptions({ transactions }, chain, pickOptions(inputs[0].options)),
-          );
+          const response = await send('SIGN_TRANSACTION', withChainAndOptions({ transactions }, chain, options));
           const signed: unknown = response?.signedTransactions;
           if (!Array.isArray(signed) || signed.length !== inputs.length) {
             throw new Error(response?.error || 'Sign failed');
@@ -234,6 +271,8 @@ import { WALLET_NAME } from '../config/constants';
         supportedTransactionVersions: ['legacy', 0],
         signAndSendTransaction: async (...inputs) => {
           if (inputs.length === 0) return [];
+          // One per call: a batch broadcast is not atomic, and the worker refuses it with the same message.
+          if (inputs.length > 1) throw new Error(SINGLE_SEND_MESSAGE);
           const chain = checkInputs(inputs);
           const transactions = inputs.map((input) => [...toBytes(input.transaction)]);
           const response = await send(
@@ -269,5 +308,4 @@ import { WALLET_NAME } from '../config/constants';
 
   // Wallet Standard only — do not impersonate Phantom or write window.solana.
   registerWallet(wallet);
-  window.dispatchEvent(new CustomEvent('cinder#initialized', { detail: { name: WALLET_NAME } }));
 })();
