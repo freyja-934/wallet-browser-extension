@@ -470,3 +470,79 @@ test('signMessage over serialized transaction bytes is refused before a window o
   await expect(dapp.locator('#log')).toContainText('Refusing to sign a transaction as a message', { timeout: 15_000 });
   expect(context.pages().some((page) => page.url().includes('approve.html'))).toBe(false);
 });
+
+test('cancelling a pending approval clears it, and a late Approve is refused', async ({ context, extensionId }) => {
+  test.setTimeout(180_000);
+  const popup = await importAndUnlock(context, extensionId);
+
+  const dapp = await context.newPage();
+  await dapp.goto('http://localhost:5174/');
+  await expect(dapp.locator('#log')).toContainText('registered Cinder Wallet', { timeout: 15_000 });
+  await approveNext(context, () => dapp.locator('#connect').click(), dapp);
+  await expect(dapp.locator('#log')).toContainText(/"accounts":\s*\[\s*"/, { timeout: 15_000 });
+
+  const approval = await openApproval(context, () => dapp.locator('#signMessage').click(), dapp);
+  const id = new URL(approval.url()).searchParams.get('id');
+  expect(id).toBeTruthy();
+
+  // The withdrawal the content script makes when the page gives up, driven
+  // straight at the worker rather than by waiting out the page's 120 s timeout.
+  const cancelled = await popup.evaluate(
+    (requestId) => chrome.runtime.sendMessage({ type: 'CANCEL_APPROVAL', id: requestId }),
+    id,
+  );
+  expect(cancelled).toMatchObject({ success: true });
+
+  // The page is told, and the request is gone from the worker.
+  await expect(dapp.locator('#log')).toContainText('Request timeout', { timeout: 10_000 });
+  const pending = await popup.evaluate(
+    (requestId) => chrome.runtime.sendMessage({ type: 'GET_PENDING_REQUEST', id: requestId }),
+    id,
+  );
+  expect(pending).toMatchObject({ success: true, request: null });
+
+  // The window is still open on a request nothing can approve any more.
+  await approval.bringToFront();
+  await approval.getByTestId('approval-approve').click();
+  await expect(approval.getByText(/Approval expired/)).toBeVisible({ timeout: 5_000 });
+  await expect(dapp.locator('#log')).not.toContainText('"signature"');
+});
+
+test('a sign request that arrives while locked unlocks in the approval window, then signs', async ({
+  context,
+  extensionId,
+}) => {
+  test.setTimeout(180_000);
+  const popup = await importAndUnlock(context, extensionId);
+
+  const dapp = await context.newPage();
+  await dapp.goto('http://localhost:5174/');
+  await expect(dapp.locator('#log')).toContainText('registered Cinder Wallet', { timeout: 15_000 });
+  await approveNext(context, () => dapp.locator('#connect').click(), dapp);
+  await expect(dapp.locator('#log')).toContainText(/"accounts":\s*\[\s*"/, { timeout: 15_000 });
+
+  await popup.bringToFront();
+  await popup.getByLabel('Lock wallet').click();
+  await expect(popup.getByTestId('unlock-password')).toBeVisible();
+
+  // The lock emptied the page's account list, so the provider refuses the call
+  // before it leaves the page. The content script is the boundary the worker
+  // actually defends, so the request goes straight at it: the grant outlives
+  // the lock, and approve.html carries the unlock form rather than bouncing it.
+  const signing = postToBridge(dapp, { type: 'SIGN_MESSAGE', payload: { messages: [[104, 105]] } });
+
+  const approval = await waitForUnlock(context);
+  await expect(approval.getByTestId('approval-approve')).toBeDisabled();
+  await approval.getByTestId('unlock-password').fill(TEST_PASSWORD);
+  await approval.getByTestId('unlock-submit').click();
+
+  await expect(approval.getByTestId('approval-approve')).toBeEnabled({ timeout: CHAIN_TIMEOUT_MS });
+  await approval.getByTestId('approval-approve').click();
+
+  const signed = await signing;
+  expect(signed.error).toBeUndefined();
+  const [signature] = (signed.response?.signatures ?? []) as number[][];
+  expect(signature).toHaveLength(64);
+  // The popup followed the unlock the approval window performed.
+  await expect(popup.getByTestId('open-receive')).toBeVisible({ timeout: 10_000 });
+});
