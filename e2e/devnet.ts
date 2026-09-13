@@ -5,6 +5,9 @@
  * every such read is wrapped and reported as `devnet unreachable: <error>`.
  */
 
+import { test } from './fixtures';
+import { TEST_ADDRESS } from './popup';
+
 /** Devnet is the cluster the e2e build talks to (`VITE_NETWORK=devnet`). */
 export const DEVNET_RPC_URL = 'https://api.devnet.solana.com';
 
@@ -51,4 +54,64 @@ export async function devnetRpc<T>(method: string, params: unknown[]): Promise<T
     if (json.result === undefined) throw new Error('answered with no result');
     return json.result;
   });
+}
+
+/**
+ * The public fixture's devnet balance, read once per test process. It is a
+ * shared address anyone can derive, and bots sweep it to zero, so it is empty
+ * as often as not — which is a fact about the faucet, never about the wallet.
+ */
+let balanceRead: Promise<bigint> | null = null;
+
+export function fixtureBalance(): Promise<bigint> {
+  balanceRead ??= devnetRpc<{ value: number }>('getBalance', [TEST_ADDRESS])
+    .then((answer) => BigInt(answer.value))
+    .catch((error: unknown) => {
+      // A failed read is not an answer: the next test asks again rather than
+      // inheriting one cluster hiccup as "unfunded".
+      balanceRead = null;
+      throw error;
+    });
+  return balanceRead;
+}
+
+/** What a bare system account must hold to exist at all, read once per test process. */
+let rentRead: Promise<bigint> | null = null;
+
+export function rentExemptMinimum(): Promise<bigint> {
+  rentRead ??= devnetRpc<number>('getMinimumBalanceForRentExemption', [0])
+    .then((lamports) => BigInt(lamports))
+    .catch((error: unknown) => {
+      rentRead = null;
+      throw error;
+    });
+  return rentRead;
+}
+
+/** `5000n` → `0.000005`: lamports as SOL, without trailing-zero noise. */
+function formatSol(lamports: bigint): string {
+  const whole = lamports / 1_000_000_000n;
+  const fraction = (lamports % 1_000_000_000n).toString().padStart(9, '0').replace(/0+$/, '');
+  return fraction ? `${whole}.${fraction}` : `${whole}`;
+}
+
+/**
+ * Skip — never soften — a test the fixture cannot pay for. The same principle
+ * as `devnetUnreachable`: an empty shared faucet address says nothing about the
+ * product, so it must not read as a product assertion failing. Every assertion
+ * stays exactly as strict as it was, and the whole test runs whenever the
+ * wallet is funded.
+ *
+ * `needs` is the least the address must hold for the test to mean anything, and
+ * `what` names that in words, so the skip line says what to top up and why.
+ */
+export async function skipUnlessFixtureHolds(needs: bigint, what: string): Promise<void> {
+  const balance = await fixtureBalance();
+  if (balance >= needs) return;
+  test.skip(
+    true,
+    `devnet fixture ${TEST_ADDRESS} holds ${formatSol(balance)} SOL; ${what} needs ${formatSol(needs)} SOL ` +
+      `(short ${formatSol(needs - balance)} SOL). Top it up at https://faucet.solana.com, then re-run. ` +
+      'An empty fixture is a faucet fact, not a wallet bug.',
+  );
 }
