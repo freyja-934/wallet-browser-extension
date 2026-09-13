@@ -222,6 +222,85 @@ test('locking the wallet empties the connected page’s accounts', async ({ cont
   await expect(dapp.locator('#log')).toContainText('"accounts": []');
 });
 
+test('closing the dApp tab withdraws its request and closes the approval window', async ({ context, extensionId }) => {
+  test.setTimeout(120_000);
+  await importAndUnlock(context, extensionId);
+
+  const dapp = await context.newPage();
+  await dapp.goto('http://localhost:5174/');
+  await expect(dapp.locator('#log')).toContainText('registered Cinder Wallet', { timeout: 15_000 });
+
+  const approval = await openApproval(context, () => dapp.locator('#connect').click(), dapp);
+  const closed = approval.waitForEvent('close', { timeout: 10_000 });
+  await dapp.close();
+  await closed;
+  expect(context.pages().some((page) => page.url().includes('approve.html'))).toBe(false);
+});
+
+test('revoking a site while its request is pending rejects it; a late Approve is refused', async ({
+  context,
+  extensionId,
+}) => {
+  test.setTimeout(120_000);
+  const popup = await importAndUnlock(context, extensionId);
+
+  const dapp = await context.newPage();
+  await dapp.goto('http://localhost:5174/');
+  await expect(dapp.locator('#log')).toContainText('registered Cinder Wallet', { timeout: 15_000 });
+
+  await approveNext(context, () => dapp.locator('#connect').click(), dapp);
+  await expect(dapp.locator('#log')).toContainText(/"accounts":\s*\[\s*"/, { timeout: 15_000 });
+  const approval = await openApproval(context, () => dapp.locator('#signMessage').click(), dapp);
+
+  await popup.bringToFront();
+  await popup.getByTestId('open-settings').click();
+  await popup.getByTestId('settings-revoke-site').click();
+  await expect(popup.getByTestId('settings-no-sites')).toBeVisible();
+
+  // The page's poll sees the rejection and the site is told it is disconnected.
+  await expect(dapp.locator('#log')).toContainText(/Site revoked|"accounts": \[\]/, { timeout: 5_000 });
+  await expect(dapp.locator('#log')).not.toContainText('signature');
+
+  // The window is still open on a request the worker has already settled.
+  await approval.bringToFront();
+  await approval.getByTestId('approval-approve').click();
+  await expect(approval.getByText(/Approval expired/)).toBeVisible({ timeout: 5_000 });
+  await expect(dapp.locator('#log')).not.toContainText('signature');
+});
+
+test('locking underneath an open approval asks for the password again, then shows the request expired', async ({
+  context,
+  extensionId,
+}) => {
+  test.setTimeout(120_000);
+  const popup = await importAndUnlock(context, extensionId);
+
+  const dapp = await context.newPage();
+  await dapp.goto('http://localhost:5174/');
+  await expect(dapp.locator('#log')).toContainText('registered Cinder Wallet', { timeout: 15_000 });
+
+  await approveNext(context, () => dapp.locator('#connect').click(), dapp);
+  await expect(dapp.locator('#log')).toContainText(/"accounts":\s*\[\s*"/, { timeout: 15_000 });
+  const approval = await openApproval(context, () => dapp.locator('#signMessage').click(), dapp);
+
+  await popup.bringToFront();
+  await popup.getByLabel('Lock wallet').click();
+  await expect(popup.getByTestId('unlock-password')).toBeVisible();
+
+  // The lock rejected the request and the window asks for the password again.
+  await expect(dapp.locator('#log')).toContainText(/Wallet locked|"accounts": \[\]/, { timeout: 5_000 });
+  await expect(approval.getByTestId('unlock-password')).toBeVisible({ timeout: 5_000 });
+  await expect(approval.getByTestId('approval-approve')).toBeDisabled();
+  await approval.getByTestId('unlock-password').fill(TEST_PASSWORD);
+  await approval.getByTestId('unlock-submit').click();
+
+  // Unlocked, but the request is gone: Approve stays disabled and the popup followed the unlock.
+  await expect(approval.getByTestId('approval-expired')).toBeVisible({ timeout: 5_000 });
+  await expect(approval.getByTestId('approval-approve')).toBeDisabled();
+  await expect(popup.getByTestId('open-receive')).toBeVisible({ timeout: 10_000 });
+  await expect(dapp.locator('#log')).not.toContainText('signature');
+});
+
 /** The approval window showing its inline unlock form (a locked connect or sign). */
 async function waitForUnlock(context: BrowserContext): Promise<Page> {
   const deadline = Date.now() + 25_000;

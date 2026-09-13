@@ -53,12 +53,14 @@ function App() {
     init();
   }, [dispatch, queryClient]);
 
-  // The worker says it locked (auto-lock, or a lock from another window): re-read state so we route to Unlock.
+  // The worker says it locked (auto-lock, or a lock from another window) or
+  // unlocked (the approval window's inline form): re-read state so we route.
   useEffect(() => {
     if (typeof chrome === 'undefined' || !chrome.runtime?.onMessage) return;
     const onMessage = (message: unknown) => {
       const event = message as { type?: unknown; event?: unknown } | null;
-      if (event?.type === 'WALLET_EVENT' && event.event === 'locked') void dispatch(initializeWallet());
+      if (event?.type !== 'WALLET_EVENT') return;
+      if (event.event === 'locked' || event.event === 'unlocked') void dispatch(initializeWallet());
     };
     chrome.runtime.onMessage.addListener(onMessage);
     return () => chrome.runtime.onMessage.removeListener(onMessage);

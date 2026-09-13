@@ -48,7 +48,23 @@ Give the wallet a connected-origins model (sites must connect before they can se
 - `storage.session` access from the popup requires `chrome.storage.session.setAccessLevel` only for content scripts; the popup and worker are trusted contexts, so no change.
 - Event delivery is best effort: a tab whose content script is gone simply drops the message.
 
+## Deviations
+
+Review outcomes (applied after the five steps landed):
+
+1. **Approve claims before it fulfils.** `approvals.ts` gained a third map, `cinder_inflight`: `APPROVE_REQUEST` checks the wallet is unlocked, `claimApproval`s the request under the lock (refusing anything not pending, past `createdAt + PAGE_TIMEOUT_MS`, older than the TTL, or — for sign kinds — from an origin no longer connected), fulfils it, then `settleClaimed`s the real result; a fulfilment failure settles it as rejected so it can never be approved again. Every other settler (`rejectApproval`, `cancelApproval`, `onWindowRemoved`, `onTabRemoved`, `rejectForOrigin`, `expirePending`, `rejectAll`) ignores inflight ids, so a cancel, window close or lock that races a broadcast no longer turns it into a `rejected` the page retries. Router tests hold `sendRawTransaction` open to prove each race.
+2. **The content script gives up strictly before the page.** `PAGE_TIMEOUT_MS` (120 s) is exported from `lib/messages.ts` and used by the injected script; the poll loop moved to `lib/approval-poll.ts` with an injected `send` and clock, runs on a wall-clock deadline of `PAGE_TIMEOUT_MS - 10 s` (not a poll count), sends `CANCEL_APPROVAL` when it passes, then throws `Request timeout`. `PendingApproval.deadline` is stamped at enqueue and `claimApproval` refuses after it, so even a stuck content script cannot leave a late Approve valid. The e2e cannot wait 110 s; `approval-poll.test.ts` drives the loop with a fake clock instead.
+3. **Disconnect and revoke reject what the site had pending** (`rejectForOrigin`: `Disconnected` / `Site revoked`), and the claim re-checks `origins.isConnected` for sign kinds.
+4. **Closing the tab cancels.** `PendingApproval` carries `tabId` / `frameId` from the sender; `tabs.onRemoved` settles that tab's requests as `Page closed` and closes their windows (`installApprovalLifecycle` in `approvals.ts` registers both browser listeners). The content script also sends `CANCEL_APPROVAL` for every in-flight id on `pagehide` (navigation as well as close), and a page cancel closes the window too.
+5. **Origin validation.** Page senders must present `sender.origin` as a bare `http:`/`https:` origin (`new URL(origin).origin === origin`); `"null"`, `''`, a URL with a path, `file:` and other extensions throw `Untrusted sender` before `remember` or `enqueueApproval`. Only when the browser gives no `origin` at all does `sender.url` stand in, reduced to its origin, so `/app` and `/other` share one grant (`pageOrigin` in `sender-gate.ts`).
+6. **Migration keeps the auto-lock deadline**: `ensureMigrated` reads `lumen-autolock` with `chrome.alarms.get`, clears it, and re-creates `cinder-autolock` at the same `scheduledTime` without calling `scheduleAutoLock` (re-entrancy).
+7. **Tests that would fail**: the origins lock test now asserts two concurrent connects both survive and a concurrent connect + disconnect leaves the origin absent (verified to fail with `withLock` as a passthrough); router tests cover auto-lock re-arming on popup but not page messages, and a connected origin while locked (plain connect prompts, silent returns no accounts and no window).
+8. **Defence in depth**: results keep their `origin`; `POLL_APPROVAL` and `CANCEL_APPROVAL` from a page must match the pending, inflight or settled record's origin or throw `Approval expired`.
+9. **Results TTL**: results carry `settledAt`; the sweep drops any older than `APPROVAL_TTL_MS` that nobody polled.
+10. **Polish**: the sweep alarm is created only when `chrome.alarms.get` finds none; `ApprovalScreen` listens for the `locked` event, shows the unlock form again, and after unlock re-fetches the request so a settled one renders as expired with Approve disabled; keyring `unlock` runs an `onUnlocked` hook that sends `WALLET_EVENT unlocked` to extension pages only, which `App.tsx` handles by re-running `initializeWallet()`; `WALLET_DISCONNECT` excludes the asking frame from the `disconnected` push so the page emits `change` once.
+
 ## Parking lot
 
+- Connection grants are not cluster-scoped: a site connected on devnet is connected on mainnet too. SHIP-6 (per-account chains) to decide whether a grant records the cluster it was given on.
 - `standard:events` `change` for `chains` once SHIP-6 lands.
 - Approval window position and size per screen.

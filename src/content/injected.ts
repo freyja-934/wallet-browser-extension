@@ -18,7 +18,7 @@ import {
   type StandardEventsListeners,
 } from '@wallet-standard/features';
 import { registerWallet } from '@wallet-standard/wallet';
-import { WALLET_CHANNEL } from '../lib/messages';
+import { PAGE_TIMEOUT_MS, WALLET_CHANNEL } from '../lib/messages';
 import { CINDER_ICON_DATA_URI } from '../config/brand';
 import { WALLET_NAME } from '../config/constants';
 
@@ -50,12 +50,13 @@ import { WALLET_NAME } from '../config/constants';
       const id = messageId++;
       pending.set(id, { resolve, reject });
       window.postMessage({ channel: WALLET_CHANNEL, id, type, payload }, window.location.origin);
+      // The content script withdraws an approval strictly before this fires.
       setTimeout(() => {
         if (pending.has(id)) {
           pending.delete(id);
           reject(new Error('Request timeout'));
         }
-      }, 120000);
+      }, PAGE_TIMEOUT_MS);
     });
   }
 

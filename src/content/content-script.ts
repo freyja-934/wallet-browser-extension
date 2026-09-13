@@ -1,5 +1,6 @@
 /// <reference types="chrome" />
 
+import { awaitApproval, type PollMessage, type PollReply } from '../lib/approval-poll';
 import { buildRuntimeMessage } from '../lib/bridge';
 import { isDappMessageType, WALLET_CHANNEL } from '../lib/messages';
 
@@ -15,34 +16,38 @@ function reply(
   window.postMessage({ channel: WALLET_CHANNEL, id, ...payload }, window.location.origin);
 }
 
-/** 600 polls at 200 ms: the 120 s page timeout is the binding limit on an approval. */
-const APPROVAL_POLLS = 600;
-const APPROVAL_POLL_MS = 200;
+/** Requests this page is still waiting on; withdrawn if the page goes away. */
+const inflight = new Set<string>();
 
-async function awaitApproval(pendingId: string): Promise<Record<string, unknown>> {
-  for (let i = 0; i < APPROVAL_POLLS; i += 1) {
-    const poll = await chrome.runtime.sendMessage({ type: 'POLL_APPROVAL', id: pendingId }) as {
-      success?: boolean;
-      status?: string;
-      value?: Record<string, unknown>;
-      error?: string;
-    };
-    if (poll?.status === 'approved') {
-      return { success: true, ...(poll.value ?? {}) };
-    }
-    if (poll?.status === 'rejected') {
-      throw new Error(poll.error || 'User rejected');
-    }
-    await new Promise((resolve) => setTimeout(resolve, APPROVAL_POLL_MS));
-  }
-  // Withdraw the request so a late Approve in the window cannot sign or broadcast.
+const sendToWorker = (message: PollMessage) =>
+  chrome.runtime.sendMessage(message) as Promise<PollReply | undefined>;
+
+/**
+ * Poll until the worker settles the request. The loop lives in
+ * `lib/approval-poll` and gives up strictly before the page's own timeout,
+ * withdrawing the request so a late Approve in the window cannot sign.
+ */
+async function waitForApproval(pendingId: string): Promise<Record<string, unknown>> {
+  inflight.add(pendingId);
   try {
-    await chrome.runtime.sendMessage({ type: 'CANCEL_APPROVAL', id: pendingId });
-  } catch {
-    /* worker gone; the request expires on its own */
+    return await awaitApproval(pendingId, { send: sendToWorker });
+  } finally {
+    inflight.delete(pendingId);
   }
-  throw new Error('Request timeout');
 }
+
+// The page is navigating away or closing: nobody will read the answer, so
+// withdraw what is pending and let the worker close the approval windows.
+window.addEventListener('pagehide', () => {
+  for (const id of inflight) {
+    try {
+      void sendToWorker({ type: 'CANCEL_APPROVAL', id }).catch(() => undefined);
+    } catch {
+      /* extension context gone */
+    }
+  }
+  inflight.clear();
+});
 
 interface WalletEventMessage {
   type?: unknown;
@@ -92,7 +97,7 @@ window.addEventListener('message', async (event) => {
       throw new Error('No response from Cinder Wallet');
     }
     if (response.pendingId) {
-      reply(event.data.id, { response: await awaitApproval(response.pendingId) });
+      reply(event.data.id, { response: await waitForApproval(response.pendingId) });
       return;
     }
     reply(event.data.id, { response });
