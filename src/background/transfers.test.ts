@@ -13,6 +13,7 @@ import { Keypair, PublicKey, SystemProgram, Transaction, type AccountInfo, type 
 import bs58 from 'bs58';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SendError } from '../lib/protocol';
+import { installChromeStub, uninstallChromeStub } from '../test/chrome-stub';
 import {
   CONFIRM_POLL_MS,
   CONFIRM_TIMEOUT_MS,
@@ -580,5 +581,24 @@ describe('confirmation races', () => {
     // The RPC said nothing, so the id comes from the signature the wallet put on the transaction.
     expect(error.signature).toBe(bs58.encode(broadcast(rpc).signature!));
     expect(rpc.getSignatureStatuses).not.toHaveBeenCalled();
+  });
+});
+
+describe('the default io', () => {
+  // Production passes no `io`: the signer comes from the keyring and the
+  // connection from settings, both of which need `chrome.*`.
+  beforeEach(() => {
+    installChromeStub();
+  });
+
+  afterEach(() => {
+    uninstallChromeStub();
+  });
+
+  it('refuses to price or send while the wallet is locked, before reaching an endpoint', async () => {
+    // No session, so no keypair — and `defaultIo` asks for the signer first, so
+    // neither call ever resolves a connection, let alone talks to one.
+    await expect(estimateTransfer(sol('1'))).rejects.toThrow('Wallet is locked');
+    await expect(sendTransfer(sol('1'))).rejects.toThrow('Wallet is locked');
   });
 });

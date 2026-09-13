@@ -3,7 +3,7 @@ import bs58 from 'bs58';
 import nacl from 'tweetnacl';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MAX_TRANSACTION_BYTES, SINGLE_SEND_MESSAGE } from '../lib/bridge';
-import type { PendingApproval, WalletAccountInfo, WalletPublicState } from '../lib/messages';
+import type { ExtensionMessageType, PendingApproval, WalletAccountInfo, WalletPublicState } from '../lib/messages';
 import type { WalletResponse } from '../lib/protocol';
 import type { PreviewResult } from '../lib/preview';
 import { deriveKeypairFromSeed, mnemonicToSeedBuffer } from '../lib/wallet';
@@ -23,6 +23,7 @@ const rpc = vi.hoisted(() => ({
   getAddressLookupTable: vi.fn<[unknown], Promise<{ value: unknown }>>(),
   simulateTransaction: vi.fn<[unknown, unknown], Promise<{ value: unknown }>>(),
   sendTransfer: vi.fn<[unknown], Promise<string>>(),
+  estimateTransfer: vi.fn<[unknown], Promise<unknown>>(),
 }));
 vi.mock('./transfers', () => ({
   getConnection: async () => ({
@@ -34,9 +35,7 @@ vi.mock('./transfers', () => ({
     simulateTransaction: rpc.simulateTransaction,
   }),
   sendTransfer: (params: unknown) => rpc.sendTransfer(params),
-  estimateTransfer: async () => {
-    throw new Error('not under test');
-  },
+  estimateTransfer: (params: unknown) => rpc.estimateTransfer(params),
 }));
 
 const BASE = `chrome-extension://${STUB_EXTENSION_ID}/`;
@@ -56,6 +55,10 @@ beforeEach(() => {
   rpc.getAddressLookupTable.mockReset();
   rpc.simulateTransaction.mockReset();
   rpc.sendTransfer.mockReset();
+  rpc.estimateTransfer.mockReset();
+  // The fee estimate is the transfer module's, not the router's: a test that
+  // cares about it says so, and every other one fails loudly if it reaches here.
+  rpc.estimateTransfer.mockRejectedValue(new Error('not under test'));
 });
 
 afterEach(() => {
@@ -1335,5 +1338,204 @@ describe('multiple accounts', () => {
     const { state } = (await handleMessage({ type: 'GET_STATE' }, popup, BASE)) as { state: WalletPublicState };
     expect(state.accounts).toHaveLength(1);
     expect(state.accounts[0]?.name).toBe('Account 1');
+  });
+});
+
+/**
+ * Every arm of the worker's surface, answered on a locked wallet with a
+ * connected site. The table is keyed by `ExtensionMessageType`, so a new
+ * message type does not compile until someone has said what it does while
+ * locked — the same exhaustiveness proof the handler table itself carries.
+ */
+describe('every arm while the wallet is locked', () => {
+  interface LockedCase {
+    message: Record<string, unknown>;
+    /** The popup, unless this is an arm a connected page uses. */
+    from?: 'page';
+    /** Anything to arrange after the lock, before the message. */
+    setup?: () => void;
+    /** The message the arm throws while locked... */
+    throws?: string;
+    /** ...or what its answer has to be. */
+    check?: (response: WalletResponse) => Promise<void> | void;
+  }
+
+  /** A queued approval is not a signature: it cannot be fulfilled until the wallet is open. */
+  const queuedButUnfulfillable = async (response: WalletResponse) => {
+    const { pendingId } = response as { pendingId: string };
+    expect(typeof pendingId).toBe('string');
+    await expect(approve(pendingId)).rejects.toThrow('Wallet is locked');
+  };
+
+  const cases: { [T in ExtensionMessageType]: LockedCase } = {
+    GET_STATE: {
+      message: { type: 'GET_STATE' },
+      check: (response) => {
+        expect(stateOf(response)).toMatchObject({ hasVault: true, isLocked: true, accounts: [] });
+      },
+    },
+    GET_SETTINGS: {
+      message: { type: 'GET_SETTINGS' },
+      check: (response) => {
+        expect(response).toMatchObject({ settings: { cluster: 'mainnet-beta' } });
+      },
+    },
+    UPDATE_SETTINGS: {
+      // Settings are public: a locked wallet still takes them.
+      message: { type: 'UPDATE_SETTINGS', settings: { autoLockTimeout: 30 } },
+      check: (response) => {
+        expect(response).toMatchObject({ settings: { autoLockTimeout: 30 } });
+      },
+    },
+    CREATE_WALLET: {
+      message: { type: 'CREATE_WALLET', password: TEST_PASSWORD, seedPhrase: TEST_MNEMONIC },
+      throws: 'Wallet already exists',
+    },
+    UNLOCK: {
+      // The right password is the one thing that does open it, so this asks with the wrong one.
+      message: { type: 'UNLOCK', password: 'not-the-password' },
+      throws: 'Invalid password',
+    },
+    LOCK: {
+      message: { type: 'LOCK' },
+      check: (response) => {
+        expect(stateOf(response).isLocked).toBe(true);
+      },
+    },
+    CLEAR_WALLET: {
+      message: { type: 'CLEAR_WALLET' },
+      check: (response) => {
+        expect(stateOf(response)).toMatchObject({ hasVault: false, accounts: [] });
+      },
+    },
+    SWITCH_ACCOUNT: { message: { type: 'SWITCH_ACCOUNT', index: 0 }, throws: 'Wallet is locked' },
+    ADD_ACCOUNT: { message: { type: 'ADD_ACCOUNT' }, throws: 'Wallet is locked' },
+    RENAME_ACCOUNT: { message: { type: 'RENAME_ACCOUNT', index: 0, name: 'Savings' }, throws: 'Wallet is locked' },
+    CHANGE_PASSWORD: {
+      // The password proves itself; it is not a way in, so the wallet stays shut.
+      message: { type: 'CHANGE_PASSWORD', currentPassword: TEST_PASSWORD, newPassword: 'TestWallet2!' },
+      check: (response) => {
+        expect(response).toEqual({});
+      },
+    },
+    EXPORT_SEED: {
+      message: { type: 'EXPORT_SEED', password: TEST_PASSWORD },
+      check: (response) => {
+        expect(response).toEqual({ seedPhrase: TEST_MNEMONIC });
+      },
+    },
+    EXPORT_PRIVATE_KEY: {
+      message: { type: 'EXPORT_PRIVATE_KEY', password: TEST_PASSWORD, accountIndex: 0 },
+      check: (response) => {
+        const { privateKey } = response as { privateKey: string };
+        expect(bs58.decode(privateKey)).toHaveLength(64);
+      },
+    },
+    GET_ACCOUNTS: {
+      message: { type: 'GET_ACCOUNTS' },
+      from: 'page',
+      check: (response) => {
+        expect(response).toEqual({ accounts: [] });
+      },
+    },
+    WALLET_CONNECT: {
+      message: { type: 'WALLET_CONNECT' },
+      from: 'page',
+      check: (response) => {
+        // Even a site that already connected is prompted again: the window unlocks inline.
+        expect(response).toMatchObject({ pendingId: expect.any(String) });
+        expect(chromeStub.windows.created()).toHaveLength(2);
+      },
+    },
+    WALLET_DISCONNECT: {
+      message: { type: 'WALLET_DISCONNECT' },
+      from: 'page',
+      check: async (response) => {
+        expect(response).toEqual({ disconnected: true });
+        expect(await handleMessage({ type: 'GET_CONNECTED_SITES' }, popup, BASE)).toEqual({ sites: [] });
+      },
+    },
+    SIGN_MESSAGE: {
+      message: { type: 'SIGN_MESSAGE', messages: [[104, 105]] },
+      from: 'page',
+      check: queuedButUnfulfillable,
+    },
+    SIGN_TRANSACTION: {
+      message: { type: 'SIGN_TRANSACTION', transactions: [selfTransfer()] },
+      from: 'page',
+      check: queuedButUnfulfillable,
+    },
+    SIGN_AND_SEND_TRANSACTION: {
+      message: { type: 'SIGN_AND_SEND_TRANSACTION', transactions: [selfTransfer()] },
+      from: 'page',
+      check: async (response) => {
+        await queuedButUnfulfillable(response);
+        expect(rpc.sendRawTransaction).not.toHaveBeenCalled();
+      },
+    },
+    PREVIEW_TRANSACTION: {
+      message: { type: 'PREVIEW_TRANSACTION', transaction: selfTransfer() },
+      throws: 'Wallet is locked',
+    },
+    GET_PENDING_REQUEST: {
+      message: { type: 'GET_PENDING_REQUEST', id: 'no-such-id' },
+      check: (response) => {
+        expect(response).toEqual({ request: null });
+      },
+    },
+    POLL_APPROVAL: {
+      message: { type: 'POLL_APPROVAL', id: 'no-such-id' },
+      check: (response) => {
+        expect(response).toEqual({ status: 'unknown' });
+      },
+    },
+    APPROVE_REQUEST: { message: { type: 'APPROVE_REQUEST', id: 'no-such-id' }, throws: 'Wallet is locked' },
+    REJECT_REQUEST: { message: { type: 'REJECT_REQUEST', id: 'no-such-id' }, throws: 'Approval expired' },
+    CANCEL_APPROVAL: { message: { type: 'CANCEL_APPROVAL', id: 'no-such-id' }, throws: 'Approval expired' },
+    GET_CONNECTED_SITES: {
+      // The grant outlives the lock: the site is still listed, and still cannot sign.
+      message: { type: 'GET_CONNECTED_SITES' },
+      check: (response) => {
+        expect((response as { sites: unknown[] }).sites).toHaveLength(1);
+      },
+    },
+    REVOKE_SITE: {
+      message: { type: 'REVOKE_SITE', origin: 'https://dapp.example' },
+      check: async (response) => {
+        expect(response).toEqual({});
+        expect(await handleMessage({ type: 'GET_CONNECTED_SITES' }, popup, BASE)).toEqual({ sites: [] });
+      },
+    },
+    // Both transfer arms hand the message to the transfer module unchanged and
+    // surface its error verbatim; the lock itself lives there, in the keypair it
+    // cannot get (see `the default io` in transfers.test.ts).
+    SEND_TRANSFER: {
+      message: { type: 'SEND_TRANSFER', to: TEST_ADDRESS, amountSmallest: '1' },
+      setup: () => rpc.sendTransfer.mockRejectedValue(new Error('Wallet is locked')),
+      throws: 'Wallet is locked',
+    },
+    ESTIMATE_FEE: {
+      message: { type: 'ESTIMATE_FEE', to: TEST_ADDRESS, amountSmallest: '1' },
+      setup: () => rpc.estimateTransfer.mockRejectedValue(new Error('Wallet is locked')),
+      throws: 'Wallet is locked',
+    },
+  };
+
+  it.each(Object.entries(cases))('%s', async (_type, testCase) => {
+    await createFixtureWallet();
+    await connectPage(page);
+    await handleMessage({ type: 'LOCK' }, popup, BASE);
+    testCase.setup?.();
+
+    const sender = testCase.from === 'page' ? page : popup;
+    if (testCase.throws !== undefined) {
+      await expect(handleMessage(testCase.message, sender, BASE)).rejects.toThrow(testCase.throws);
+    } else {
+      await testCase.check!(await handleMessage(testCase.message, sender, BASE));
+    }
+
+    // Whatever the arm did, it did not open the wallet, and nothing was broadcast.
+    expect(stateOf(await handleMessage({ type: 'GET_STATE' }, popup, BASE)).isLocked).toBe(true);
+    expect(rpc.sendRawTransaction).not.toHaveBeenCalled();
   });
 });
