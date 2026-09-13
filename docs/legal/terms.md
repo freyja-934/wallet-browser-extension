@@ -2,6 +2,9 @@
 
 Last updated: 9 September 2026
 
+The published copy is `docs/legal/terms.html` (GitHub Pages) and the same file ships in the extension
+as `legal/terms.html` from `public/legal/terms.html`; `node scripts/sync-legal.mjs` keeps the two in step.
+
 Cinder Wallet is self-custodial software. You control the keys. Blockchain transactions are irreversible.
 
 ## Risk

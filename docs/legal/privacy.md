@@ -4,7 +4,11 @@ Last updated: 12 September 2026
 
 Cinder Wallet is a Chrome extension. The seed phrase and private keys are encrypted on the user’s device. There is no Cinder backend that receives seeds, passwords, or private keys.
 
-This page is the public copy for the Chrome Web Store. The same text ships in the extension as `legal/privacy.html`.
+The copy the Chrome Web Store listing links to is `docs/legal/privacy.html`, which GitHub Pages
+serves verbatim at `/legal/privacy.html`; the same file ships inside the extension as
+`legal/privacy.html` (from `public/legal/privacy.html`). This Markdown is the readable copy in the
+repository — Pages does not convert it — so edit `public/legal/privacy.html` and this file together,
+then run `node scripts/sync-legal.mjs`.
 
 ## What stays on the device
 
@@ -14,7 +18,7 @@ This page is the public copy for the Chrome Web Store. The same text ships in th
 
 ## What leaves the device
 
-- Public addresses and signed transactions to a Solana JSON-RPC endpoint. With nothing configured, Mainnet uses `https://solana-rpc.publicnode.com` (with `https://api.mainnet-beta.solana.com` as a fallback) and Devnet uses `https://api.devnet.solana.com`
+- Public addresses and signed transactions to a Solana JSON-RPC endpoint. With nothing configured, Mainnet uses `https://solana-rpc.publicnode.com` and Devnet uses `https://api.devnet.solana.com`
 - A custom RPC URL or Helius API key entered in Settings receives the same public addresses and signed transactions. Both values are stored only in `chrome.storage.local` on the device; Cinder never receives them
 - Public mint addresses to CoinGecko for USD prices (mainnet only)
 - dApp origins the user approves, which receive public addresses

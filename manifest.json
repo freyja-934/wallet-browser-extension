@@ -36,11 +36,11 @@
   "homepage_url": "https://github.com/freyja-934/wallet-browser-extension",
   "permissions": [
     "storage",
-    "alarms"
+    "alarms",
+    "clipboardWrite"
   ],
   "host_permissions": [
     "https://solana-rpc.publicnode.com/*",
-    "https://api.mainnet-beta.solana.com/*",
     "https://api.devnet.solana.com/*",
     "https://*.helius-rpc.com/*",
     "https://api.helius.xyz/*",

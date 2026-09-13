@@ -13,14 +13,13 @@ export const BUILD_HELIUS_API_KEY = (import.meta.env.VITE_HELIUS_API_KEY as stri
 export type Cluster = 'mainnet-beta' | 'devnet';
 
 /**
- * Keyless mainnet defaults, in order. `api.mainnet-beta.solana.com` returns 403 to any
- * request carrying an `Origin` header, so the extension needs publicnode first; the
- * Solana Foundation host stays as a fallback for the day publicnode is down.
+ * Keyless mainnet default. There is only one: `api.mainnet-beta.solana.com` answers 403
+ * to any request carrying an `Origin` header, and every extension request carries one, so
+ * it could never serve a single call from here and is not in the manifest either. When
+ * publicnode is down or blocked the wallet has no keyless mainnet endpoint at all and says
+ * so — the fix is a custom RPC URL or a Helius key in Settings, not another public host.
  */
-export const PUBLIC_MAINNET_RPCS: readonly string[] = [
-  'https://solana-rpc.publicnode.com',
-  'https://api.mainnet-beta.solana.com',
-];
+export const PUBLIC_MAINNET_RPCS: readonly string[] = ['https://solana-rpc.publicnode.com'];
 
 export const PUBLIC_DEVNET_RPCS: readonly string[] = ['https://api.devnet.solana.com'];
 

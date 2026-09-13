@@ -29,7 +29,7 @@ Cinder ships with no API key — a key in a Chrome Web Store zip is a key anyone
 | NFTs | **no** on Mainnet — needs DAS; yes on Devnet | yes |
 | dApp connect, sign, simulation preview | yes | yes |
 
-Keyless Mainnet defaults to `https://solana-rpc.publicnode.com`, because `https://api.mainnet-beta.solana.com` returns 403 to any request carrying an `Origin` header — which every extension request does. publicnode accepts browser origins but serves neither token-account queries nor DAS, which is exactly the line in the table above. Devnet's public host serves both, so Devnet is the full-feature demo.
+Keyless Mainnet has exactly one default, `https://solana-rpc.publicnode.com`. The obvious alternative is not there: `https://api.mainnet-beta.solana.com` returns 403 to any request carrying an `Origin` header — which every extension request does — so it could not serve a single call from here, and it is in neither the endpoint list nor the manifest. publicnode publishes CORS headers that accept a browser origin, and it is documented as serving no DAS and refusing `getTokenAccountsByOwner`, which is the line in the table above; that is what the wallet is built to expect, not something this repo has been able to measure (see the next section). Devnet's public host serves both, so Devnet is the full-feature demo.
 
 Where a read is not available, the popup says so: tokens and NFTs show "add an RPC endpoint in Settings", a failed read shows an error card with Retry, and the portfolio figure is marked `· SOL only`. It never shows a zero balance it does not know.
 
@@ -39,7 +39,7 @@ Settings → RPC takes a custom HTTPS URL (probed with `getHealth` and `getGenes
 
 - **Localnet is not supported.** wallet-adapter maps a localhost endpoint to `solana:localnet`, and the wallet lists only `solana:mainnet` and `solana:devnet`. A request naming another chain is refused with "Cinder is on Devnet; switch networks in Settings". `just dapp` runs on devnet.
 - **Keyless Mainnet is SOL-only** for tokens and NFTs — see the table above. This is a property of the free public endpoints, not a bug to be fixed in the client.
-- **publicnode is third-party goodwill**, provided AS IS with unpublished limits, and some home networks and ISPs block it outright (it is blocked on the author's own connection). When every endpoint is unreachable the popup asks you to add one in Settings. If Mainnet looks dead on your network, that is the first thing to check.
+- **Keyless Mainnet is unverified from here, and rests on one third-party host.** publicnode is goodwill, provided AS IS with unpublished limits. Every probe of it from the author's connection failed at the TLS handshake — an ISP filter, not the host (`https://api.devnet.solana.com` answered 200 over the same network) — so the keyless Mainnet path is what the endpoint documents and the client is coded for, not something measured end to end; the probe record is in `src/lib/rpc-rotate.test.ts`, and `E2E_LIVE_MAINNET=1 just e2e e2e/rpc.spec.ts` runs the live check from a network that can reach it. Devnet, the custom-RPC path and the Helius path are exercised for real. When no endpoint answers, the popup says so and asks you to add one in Settings rather than showing a zero — if Mainnet looks dead on your network, check that first.
 - **Chrome 111 or later.** The Wallet Standard provider is a MAIN-world content script, which is what that version added. There is no Firefox build.
 - **No hardware wallets, swaps, staking, NFT transfers, or token-approval management.** Send covers SOL and SPL / Token-2022 tokens.
 - **Not audited.** The vault, the origin model and the approval lifecycle have unit and end-to-end tests, and no third-party review.
@@ -74,18 +74,21 @@ Endpoint rotation, in one paragraph: HTTP 401/403 and a refused method (JSON-RPC
 
 ```bash
 pnpm install     # or: just setup
+cp .env.example .env   # required — without it the build is Mainnet
 just ext         # or: pnpm build:extension
 ```
+
+`.env` is gitignored, so a fresh clone has none, and `VITE_NETWORK` then falls back to its default: **Mainnet**. Copying `.env.example` is what makes `dist/` the `VITE_NETWORK=devnet` build the steps below, the test wallet and `just e2e` all assume. Rebuild with `just ext` after any change to `.env`.
 
 1. Open `chrome://extensions`
 2. Enable Developer mode
 3. Load unpacked → select `dist/`
-4. Run `just dapp` and open http://localhost:5174 (`file://` will not inject the provider)
+4. Run `just dapp` and open http://localhost:5174 (`file://` will not inject the provider — and the dApp reads the same `.env`, so it is on Devnet too)
 5. Connect → Sign message → Sign v0 transfer (approval window + simulation preview)
 
-`dist/` is a **devnet** build (`VITE_NETWORK=devnet` in `.env`). `just store` builds mainnet into `dist-store/` instead, so the unpacked extension you have loaded does not change network underneath you.
+Check the network pill in the popup before you do anything with funds: it names the cluster the build was compiled for. `just store` builds Mainnet into `dist-store/` instead, so the unpacked extension you have loaded never changes network underneath you.
 
-Optional: copy `.env.example` to `.env` and set `VITE_HELIUS_API_KEY` to seed the Settings field during development. Never commit an API key; `just store` refuses to zip a build that contains one. Rebuild after changing `.env`.
+Optional: set `VITE_HELIUS_API_KEY` in that `.env` to seed the Settings field during development. Never commit an API key; `just store` refuses to zip a build that contains one.
 
 ## What this demonstrates
 
@@ -104,7 +107,7 @@ Optional: copy `.env.example` to `.env` and set `VITE_HELIUS_API_KEY` to seed th
 ```bash
 just setup      # pnpm install
 just check      # tsc + lint + vitest run — the gate
-just ext        # build the loadable extension into dist/ (devnet from .env)
+just ext        # build the loadable extension into dist/ (the cluster comes from .env; Mainnet if there is none)
 just dapp       # http://localhost:5174 Wallet Standard test dApp
 just e2e        # build, then Playwright Chromium against the real extension
 just store      # mainnet zip for the Chrome Web Store into dist-store/ (does not submit)
@@ -117,16 +120,17 @@ Privacy and terms: `docs/legal/` (the same text ships as `legal/privacy.html` an
 ## Extension e2e
 
 - `just e2e` loads Cinder Wallet into Playwright's bundled Chromium (`channel: 'chromium'`), not branded Google Chrome, which removed `--load-extension`.
+- It builds `dist/` first and the suite assumes Devnet, so `.env` must exist with `VITE_NETWORK=devnet` (`cp .env.example .env`) or set `VITE_NETWORK=devnet` in the environment. A Mainnet `dist/` fails the suite rather than spending real funds.
 - First time: `pnpm exec playwright install chromium`
 - A full run spends 10000 lamports of the devnet fixture: two fee-only self-transfers (the dApp `signAndSend` approval and the popup send). Nothing leaves the address; top it up at https://faucet.solana.com when it runs low.
-- Coverage: import / unlock, dashboard tabs, create-new with the seed quiz, a second `CREATE_WALLET` against an existing vault refused rather than replacing it, Send → Review (junk address, Max as balance minus the priced fee, the decimals error, the fee row) and one confirmed 0.001 SOL devnet self-transfer, settings auto-lock / export seed / change password, add / switch / rename a second account surviving a lock, Receive copy, dApp connect / sign-message / sign-v0, two transactions in one call, cluster switch re-stamping `chains`, wrong-chain refusal, transaction-as-message refusal, a page trying to override the bridged message type, locked connect unlocking inside the approval window, `signAndSend` reject and a 0-lamport `signAndSend` approve, approval window close → reject, silent and repeat connect, Connected sites → Revoke, `Not connected` for a stranger, and lock → empty `change`.
+- Coverage: import / unlock, dashboard tabs, create-new with the seed quiz, a second `CREATE_WALLET` against an existing vault refused rather than replacing it, Send → Review (junk address, Max as balance minus the priced fee, the decimals error, the fee row) and one confirmed 0.001 SOL devnet self-transfer, settings auto-lock / export seed / change password, add / switch / rename a second account surviving a lock, Receive copy (the address handed to `navigator.clipboard.writeText`, which the spec stubs — the real clipboard write is a manual check), dApp connect / sign-message / sign-v0, two transactions in one call, cluster switch re-stamping `chains`, wrong-chain refusal, transaction-as-message refusal, a page trying to override the bridged message type, locked connect unlocking inside the approval window, `signAndSend` reject and a 0-lamport `signAndSend` approve, approval window close → reject, silent and repeat connect, Connected sites → Revoke, `Not connected` for a stranger, and lock → empty `change`.
 
 ## Chrome click-through (after Load unpacked)
 
 1. Create a wallet, close the popup, reopen — you should see Unlock, not Create
 2. Unlock, then `just dapp` → http://localhost:5174
 3. Connect (approval window) → Sign message → Sign v0 transfer (simulation preview). Connect again: no window. Lock in the popup: the dApp log shows `change` with no accounts
-4. In the popup, Receive → Copy should toast "Address copied" and write the real clipboard; Settings → Connected sites lists localhost:5174 with Revoke
+4. In the popup, Receive → Copy should toast "Address copied" and paste back the full address — this is the one clipboard check no automated test can make, because the e2e drives the popup as a tab and stubs `navigator.clipboard`; Settings → Connected sites lists localhost:5174 with Revoke
 5. Optional on **devnet only**: use the faucet if needed, then send a small amount of SOL or an SPL token. Activity should show the amount, not "On-chain".
 
 ## Security notes

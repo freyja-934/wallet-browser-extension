@@ -37,9 +37,9 @@ export const TOKENS_UNAVAILABLE = 'unavailable';
 /**
  * Thrown by `getTokenBalances`, `getNFTs`, and `getTransactionHistory` when every
  * endpoint failed at the transport layer (fetch rejected, aborted, timed out) or
- * with 401/403: some home-network filters block publicnode outright, and
- * `api.mainnet-beta` 403s any browser origin. The UI turns this into "add an RPC
- * endpoint" rather than a generic error.
+ * with 401/403: keyless mainnet has one public host, and some home-network filters
+ * block publicnode outright. The UI turns this into "add an RPC endpoint" rather
+ * than a generic error.
  */
 export class EndpointsUnreachableError extends Error {
   readonly endpointsUnreachable = true;
