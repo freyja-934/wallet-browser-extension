@@ -62,12 +62,22 @@ afterEach(() => {
 describe('rpcUrlsFor', () => {
   const custom = 'https://rpc.example/v1';
 
-  it('mainnet with no settings: publicnode first, then the Solana Foundation host', () => {
-    expect(rpcUrlsFor('mainnet-beta')).toEqual([
-      'https://solana-rpc.publicnode.com',
-      'https://api.mainnet-beta.solana.com',
-    ]);
+  it('mainnet with no settings: publicnode and nothing else', () => {
+    expect(rpcUrlsFor('mainnet-beta')).toEqual(['https://solana-rpc.publicnode.com']);
     expect(rpcUrlsFor('mainnet-beta', {})).toEqual([...PUBLIC_MAINNET_RPCS]);
+  });
+
+  // `api.mainnet-beta.solana.com` answers 403 to any request with an `Origin` header, which
+  // every extension request has. It is not in the rotation and not in the manifest: keeping it
+  // would only spend a rotation step on a host that cannot answer from here.
+  it('never lists the Solana Foundation mainnet host, which 403s every browser origin', () => {
+    const everywhere = [
+      rpcUrlsFor('mainnet-beta'),
+      rpcUrlsFor('mainnet-beta', { rpcUrl: custom, heliusApiKey: KEY }),
+      rpcUrlsFor('devnet', { rpcUrl: custom, heliusApiKey: KEY }),
+    ].flat();
+    expect(everywhere.some((url) => url.includes('api.mainnet-beta.solana.com'))).toBe(false);
+    expect(PUBLIC_MAINNET_RPCS).toHaveLength(1);
   });
 
   it('devnet with no settings: the public devnet host only', () => {
@@ -114,9 +124,10 @@ describe('rpcUrlsFor', () => {
   });
 
   it('removes duplicates, first occurrence wins', () => {
-    expect(rpcUrlsFor('mainnet-beta', { rpcUrl: PUBLIC_MAINNET_RPCS[1] })).toEqual([
-      PUBLIC_MAINNET_RPCS[1],
+    // The custom URL is the public default: it keeps the first slot and is not repeated last.
+    expect(rpcUrlsFor('mainnet-beta', { rpcUrl: PUBLIC_MAINNET_RPCS[0], heliusApiKey: KEY })).toEqual([
       PUBLIC_MAINNET_RPCS[0],
+      heliusRpcUrlFor('mainnet-beta', KEY),
     ]);
     const helius = heliusRpcUrlFor('devnet', KEY)!;
     expect(rpcUrlsFor('devnet', { rpcUrl: helius, heliusApiKey: KEY })).toEqual([helius, ...PUBLIC_DEVNET_RPCS]);
@@ -131,7 +142,7 @@ describe('rpcUrlsFor', () => {
 
   it('treats a trailing slash as the same endpoint when removing duplicates', () => {
     const withSlash = `${PUBLIC_MAINNET_RPCS[0]}/`;
-    expect(rpcUrlsFor('mainnet-beta', { rpcUrl: withSlash })).toEqual([withSlash, PUBLIC_MAINNET_RPCS[1]]);
+    expect(rpcUrlsFor('mainnet-beta', { rpcUrl: withSlash })).toEqual([withSlash]);
     expect(rpcUrlsFor('devnet', { rpcUrl: 'https://API.devnet.solana.com' })).toEqual(['https://API.devnet.solana.com']);
     // Different paths are different endpoints.
     expect(rpcUrlsFor('devnet', { rpcUrl: `${PUBLIC_DEVNET_RPCS[0]}/v1` })).toEqual([

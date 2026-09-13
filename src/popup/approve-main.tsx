@@ -1,5 +1,6 @@
+// First import on purpose: chain libraries below read `Buffer` while they load.
+import '../lib/buffer-global';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { Buffer } from 'buffer';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { Toaster } from 'react-hot-toast';
@@ -8,7 +9,6 @@ import { ErrorBoundary } from '../components/common/ErrorBoundary';
 import '../styles/index.css';
 
 if (typeof window !== 'undefined') {
-  window.Buffer = Buffer;
   window.global = window;
 }
 

@@ -9,7 +9,7 @@ import {
 } from '@solana/web3.js';
 import { Buffer } from 'buffer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PUBLIC_MAINNET_RPCS, heliusRpcUrlFor } from '../config/constants';
+import { PUBLIC_DEVNET_RPCS, PUBLIC_MAINNET_RPCS, heliusRpcUrlFor } from '../config/constants';
 import { resetRpcCooldowns } from '../lib/rpc-rotate';
 import { METADATA_PROGRAM_ID, metadataPda } from '../lib/token-metadata';
 import { TEST_ADDRESS } from '../test/fixtures';
@@ -18,7 +18,13 @@ const A = 'https://a.example';
 const B = 'https://b.example';
 /** The user's own URL: not in the public lists, so a 401/403 from it is a real failure. */
 const CUSTOM = 'https://rpc.custom.example/v1';
-const [PUBLICNODE, FOUNDATION] = PUBLIC_MAINNET_RPCS;
+const [PUBLICNODE] = PUBLIC_MAINNET_RPCS;
+/**
+ * A second endpoint that `helius.ts` counts as public: mainnet's public list is one host
+ * now (`api.mainnet-beta.solana.com` 403s every browser origin and is gone), and the
+ * "public URL" set the classifier uses spans both clusters.
+ */
+const [PUBLIC_DEVNET] = PUBLIC_DEVNET_RPCS;
 const FAKE_KEY = 'not-a-real-key';
 const HELIUS = heliusRpcUrlFor('mainnet-beta', FAKE_KEY)!;
 
@@ -32,6 +38,7 @@ const runtime = vi.hoisted(() => ({
     smallBalanceThreshold: 1,
     cluster: 'mainnet-beta' as 'mainnet-beta' | 'devnet',
     heliusApiKey: undefined as string | undefined,
+    rpcUrl: undefined as string | undefined,
   },
   urls: ['https://a.example', 'https://b.example'],
 }));
@@ -186,6 +193,7 @@ function parsedTransfer(signature: string, blockTime: number): ParsedTransaction
 beforeEach(() => {
   runtime.settings.cluster = 'mainnet-beta';
   runtime.settings.heliusApiKey = undefined;
+  runtime.settings.rpcUrl = undefined;
   runtime.urls = [A, B];
 });
 
@@ -240,7 +248,7 @@ describe('heliusService.getTokenBalances', () => {
   });
 
   it('names a 401 from the user\'s own URL as a refusal, never "unavailable"', async () => {
-    runtime.urls = [CUSTOM, PUBLICNODE, FOUNDATION];
+    runtime.urls = [CUSTOM, PUBLICNODE, PUBLIC_DEVNET];
     vi.spyOn(Connection.prototype, 'getBalance').mockResolvedValue(5_000);
     stubTokenAccounts((url) => {
       if (url === CUSTOM) throw tokenAccountsError('Error: 401 : {"error":"unauthorized"}');
@@ -258,7 +266,7 @@ describe('heliusService.getTokenBalances', () => {
   });
 
   it('names a 401 from a Helius key as a rejected key, without the key in the message', async () => {
-    runtime.urls = [HELIUS, PUBLICNODE, FOUNDATION];
+    runtime.urls = [HELIUS, PUBLICNODE, PUBLIC_DEVNET];
     vi.spyOn(Connection.prototype, 'getBalance').mockResolvedValue(5_000);
     stubTokenAccounts((url) => {
       if (url === HELIUS) throw tokenAccountsError('Error: 401 : {"error":"Unauthorized: invalid api key"}');
@@ -273,7 +281,7 @@ describe('heliusService.getTokenBalances', () => {
   });
 
   it('is "unavailable" on a public-only list when the primary refuses, whatever the fallback says', async () => {
-    runtime.urls = [PUBLICNODE, FOUNDATION];
+    runtime.urls = [PUBLICNODE, PUBLIC_DEVNET];
     vi.spyOn(Connection.prototype, 'getBalance').mockResolvedValue(5_000);
     stubTokenAccounts((url) => {
       if (url === PUBLICNODE) throw tokenAccountsError('Error: 403 : {}');
@@ -530,6 +538,10 @@ describe('heliusService.getTransactionHistory', () => {
   });
 
   it('rejects when every endpoint fails the RPC path instead of resolving an empty history', async () => {
+    // `getTransactionHistory` builds its own list with `rpcUrlsFor(cluster, settings)` rather
+    // than the mocked `runtimeRpcUrls`, and keyless mainnet is one public host now, so the
+    // second endpoint this rotation has to try comes from a stored custom URL.
+    runtime.settings.rpcUrl = CUSTOM;
     const signatureCalls: string[] = [];
     vi.spyOn(Connection.prototype, 'getSignaturesForAddress').mockImplementation(async function (this: Connection) {
       signatureCalls.push(this.rpcEndpoint);

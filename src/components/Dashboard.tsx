@@ -1,7 +1,7 @@
+import { Suspense, lazy } from 'react';
 import { showReceive, showSend } from '../store/slices/uiSlice';
 import { useAppDispatch, useAppSelector } from '../store/store';
 import { NFTGallery } from './nfts/NFTGallery';
-import { Settings } from './settings/Settings';
 import { AppShell } from './shell/AppShell';
 import { ReceiveModal } from './tokens/ReceiveModal';
 import { SendModal } from './tokens/SendModal';
@@ -10,6 +10,9 @@ import { TransactionHistory } from './transactions/TransactionHistory';
 import { Icon } from './ui/Icon';
 import { PrimaryButton, SecondaryButton } from './ui/Button';
 import { BalanceCard } from './wallet/BalanceCard';
+
+/** Settings is a whole screen most sessions never open; it loads when it is asked for. */
+const Settings = lazy(() => import('./settings/Settings').then((m) => ({ default: m.Settings })));
 
 /**
  * Each tab mounts only while active. That is deliberate: the chain queries in
@@ -24,7 +27,11 @@ export function Dashboard() {
   return (
     <AppShell>
       {showSettingsModal ? (
-        <Settings />
+        // The shell around it is already rendered; the fallback only holds the
+        // scroll area open for the tick it takes the chunk to arrive.
+        <Suspense fallback={<div className="h-full" />}>
+          <Settings />
+        </Suspense>
       ) : (
         <div className="h-full min-h-0 animate-fadeIn">
           {activeView === 'tokens' && (

@@ -1,10 +1,11 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { expect, test } from './fixtures';
+import { expect, outDir, test } from './fixtures';
 import { importAndUnlock, openPopup } from './popup';
 
-const distManifest = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'manifest.json');
+// The same build the fixture loads into Chromium, wherever `CINDER_OUT_DIR` put it.
+const distManifest = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', outDir, 'manifest.json');
 
 interface Manifest {
   host_permissions?: string[];
@@ -21,13 +22,15 @@ type Envelope = { success: true; settings: SettingsShape } | { success: false; e
 
 // No live publicnode fetch here: reachability varies by network, and the manifest plus the
 // worker round-trip are what make the keyless mainnet path possible.
-test('the built manifest grants publicnode, drops testnet, and can request any https origin', () => {
+test('the built manifest grants publicnode, drops the hosts it cannot use, and can request any https origin', () => {
   const manifest = JSON.parse(readFileSync(distManifest, 'utf8')) as Manifest;
   const hosts = manifest.host_permissions ?? [];
   expect(hosts).toContain('https://solana-rpc.publicnode.com/*');
-  expect(hosts).toContain('https://api.mainnet-beta.solana.com/*');
   expect(hosts).toContain('https://api.devnet.solana.com/*');
   expect(hosts.some((host) => host.includes('api.testnet.solana.com'))).toBe(false);
+  // `api.mainnet-beta.solana.com` 403s every request carrying an `Origin` header, so asking
+  // for it would be a permission the extension can never spend. It is out of the rotation too.
+  expect(hosts.some((host) => host.includes('api.mainnet-beta.solana.com'))).toBe(false);
   expect(manifest.optional_host_permissions).toEqual(['https://*/*']);
 });
 
