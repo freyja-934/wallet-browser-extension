@@ -4,10 +4,10 @@ import { awaitApproval, type PollMessage, type PollReply } from '../lib/approval
 import { buildRuntimeMessage } from '../lib/bridge';
 import { isDappMessageType, WALLET_CHANNEL } from '../lib/messages';
 
-const script = document.createElement('script');
-script.src = chrome.runtime.getURL('src/content/injected.js');
-script.onload = () => script.remove();
-(document.head || document.documentElement).appendChild(script);
+// The Wallet Standard provider (`src/content/injected.js`) is a MAIN-world
+// content script declared in the manifest, so it runs before any page script
+// and nothing is appended to the page's DOM. This isolated-world script only
+// bridges its postMessage requests to the service worker.
 
 function reply(
   id: number,
