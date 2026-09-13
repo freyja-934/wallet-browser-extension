@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { useEffect, useRef, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useId, useRef, type ReactNode, type RefObject } from 'react';
 import { Icon } from './Icon';
 
 interface ModalProps {
@@ -7,6 +7,15 @@ interface ModalProps {
   onClose: () => void;
   children: ReactNode;
   className?: string;
+  /**
+   * Changing this re-runs the initial focus. A sheet that swaps its contents
+   * while it stays open — Send's amount step for its review, Settings' password
+   * prompt for the revealed phrase — unmounts the control that had focus, and
+   * focus would otherwise fall to the document body.
+   */
+  focusKey?: string | number;
+  /** Names a sheet rendered without a `ModalHeader`; one with a header is named by its heading. */
+  'aria-label'?: string;
 }
 
 /** What the browser will put focus on, in document order. */
@@ -16,37 +25,116 @@ const FOCUSABLE = [
   'input:not([disabled])',
   'select:not([disabled])',
   'textarea:not([disabled])',
+  '[contenteditable]:not([contenteditable="false"])',
+  'iframe',
+  'audio[controls]',
+  'video[controls]',
+  'summary',
   '[tabindex]:not([tabindex="-1"])',
 ].join(', ');
+
+/**
+ * Rendered, so the browser will actually focus it. `offsetParent` is null for a
+ * `display: none` element and for a `position: fixed` one, hence the second
+ * look: a fixed element still has client rects. This is what a `hidden`
+ * attribute, a collapsed `<details>`, or a parent with `display: none` fail.
+ */
+function isRendered(element: HTMLElement): boolean {
+  return element.offsetParent !== null || element.getClientRects().length > 0;
+}
 
 function focusableIn(root: HTMLElement | null): HTMLElement[] {
   if (!root) return [];
   return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
-    (element) => !element.hasAttribute('hidden') && element.getAttribute('aria-hidden') !== 'true',
+    (element) => isRendered(element) && element.getAttribute('aria-hidden') !== 'true',
   );
 }
 
-export function Modal({ isOpen, onClose, children, className = '' }: ModalProps) {
+/**
+ * Focus the first control that will take it. A candidate can still refuse —
+ * `visibility: hidden`, `inert`, a control mid-transition — and a refused
+ * `focus()` leaves the document body focused, so walk on to the next one.
+ */
+function focusFirstIn(root: HTMLElement | null): boolean {
+  for (const candidate of focusableIn(root)) {
+    candidate.focus();
+    if (document.activeElement === candidate) return true;
+  }
+  return false;
+}
+
+/**
+ * Every open sheet, outermost first. Sheets do stack — Settings opens a confirm
+ * dialog over the sheet already showing the phrase — and each one installs its
+ * own document keydown listener, so without this the traps fight: Tab is
+ * pulled back by the sheet underneath and Escape closes the wrong one.
+ */
+const sheetStack: RefObject<HTMLDivElement>[] = [];
+
+function isTopSheet(sheet: RefObject<HTMLDivElement>): boolean {
+  return sheetStack[sheetStack.length - 1] === sheet;
+}
+
+/** The heading id a `ModalHeader` puts on its `h2`, so the dialog can point `aria-labelledby` at it. */
+const ModalTitleId = createContext<string | undefined>(undefined);
+
+export function Modal({
+  isOpen,
+  onClose,
+  children,
+  className = '',
+  focusKey,
+  'aria-label': ariaLabel,
+}: ModalProps) {
   const sheet = useRef<HTMLDivElement>(null);
   /** Whatever had focus when the sheet opened; focus goes back there when it closes. */
   const opener = useRef<HTMLElement | null>(null);
+  const titleId = useId();
 
-  // Focus the sheet's first control on open, and hand focus back to the control
-  // that opened it on close — otherwise focus falls to the document body and a
-  // keyboard user has to tab from the top of the popup again.
+  // On the stack first, off it first: the effects below, and the ones the
+  // sheet above this one runs, read the stack to decide who owns the keyboard.
+  useEffect(() => {
+    if (!isOpen) return;
+    sheetStack.push(sheet);
+    return () => {
+      const at = sheetStack.lastIndexOf(sheet);
+      if (at !== -1) sheetStack.splice(at, 1);
+    };
+  }, [isOpen]);
+
+  // Hand focus back to the control that opened the sheet — otherwise focus
+  // falls to the document body and a keyboard user has to tab from the top of
+  // the popup again. That control can be gone (a step change, or a sheet that
+  // closed the screen behind it), so an unmounted opener falls back to the
+  // sheet still underneath this one, and only then to the page.
   useEffect(() => {
     if (!isOpen) return;
     opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    focusableIn(sheet.current)[0]?.focus();
     return () => {
-      opener.current?.focus();
+      const target = opener.current;
       opener.current = null;
+      if (target?.isConnected) {
+        target.focus();
+        return;
+      }
+      const below = sheetStack[sheetStack.length - 1];
+      focusFirstIn(below?.current ?? document.body);
     };
   }, [isOpen]);
+
+  // The sheet's first control takes focus on open, and again whenever the sheet
+  // replaces its contents while staying open.
+  useEffect(() => {
+    if (!isOpen) return;
+    focusFirstIn(sheet.current);
+  }, [isOpen, focusKey]);
 
   useEffect(() => {
     if (!isOpen) return;
     const onKey = (event: KeyboardEvent) => {
+      // Only the sheet on top answers the keyboard; the ones under it are inert
+      // until it closes, which is what "modal" means to a keyboard user too.
+      if (!isTopSheet(sheet)) return;
       if (event.key === 'Escape') {
         onClose();
         return;
@@ -86,6 +174,9 @@ export function Modal({ isOpen, onClose, children, className = '' }: ModalProps)
             ref={sheet}
             role="dialog"
             aria-modal="true"
+            // Named by its own heading unless it has no header to carry one.
+            aria-label={ariaLabel}
+            aria-labelledby={ariaLabel ? undefined : titleId}
             initial={{ opacity: 0, y: 24 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 24 }}
@@ -94,7 +185,7 @@ export function Modal({ isOpen, onClose, children, className = '' }: ModalProps)
             onClick={(event) => event.stopPropagation()}
           >
             <div className="mx-auto mt-2 h-1 w-10 rounded-full bg-white/20" />
-            {children}
+            <ModalTitleId.Provider value={titleId}>{children}</ModalTitleId.Provider>
           </motion.div>
         </div>
       )}
@@ -111,9 +202,13 @@ export function ModalHeader({
   onClose?: () => void;
   className?: string;
 }) {
+  // The dialog points `aria-labelledby` here, so the sheet is announced by its title.
+  const titleId = useContext(ModalTitleId);
   return (
     <div className={`flex items-center justify-between px-5 pt-4 pb-3 ${className}`}>
-      <h2 className="text-lg font-semibold tracking-tight text-fg-0">{children}</h2>
+      <h2 id={titleId} className="text-lg font-semibold tracking-tight text-fg-0">
+        {children}
+      </h2>
       {onClose && (
         <button
           onClick={onClose}

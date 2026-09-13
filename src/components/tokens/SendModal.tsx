@@ -289,7 +289,7 @@ export function SendModal() {
     : null;
 
   return (
-    <Modal isOpen={showSendModal} onClose={handleClose}>
+    <Modal isOpen={showSendModal} onClose={handleClose} focusKey={step}>
       {step === 'amount' && (
         <>
           <ModalHeader onClose={handleClose}>Send {selected.symbol}</ModalHeader>

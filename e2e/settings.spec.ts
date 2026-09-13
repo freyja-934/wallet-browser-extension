@@ -215,3 +215,57 @@ test('add a second account, switch to it, rename it, and switch back', async ({ 
   await expect(switcher).toContainText('Savings');
   await expect(popup.getByTestId('header-address')).toHaveText(secondAddress);
 });
+
+test('a confirm dialog over the seed sheet owns the keyboard, and Escape closes only it', async ({
+  context,
+  extensionId,
+}) => {
+  test.setTimeout(90_000);
+  const popup = await importAndUnlock(context, extensionId);
+
+  /** Where focus is: the sheet on top (sheets stack), and what is focused inside it. */
+  const focus = () =>
+    popup.evaluate(() => {
+      const sheets = document.querySelectorAll('[role="dialog"]');
+      const top = sheets[sheets.length - 1];
+      const element = document.activeElement as HTMLElement | null;
+      return {
+        sheets: sheets.length,
+        inTop: Boolean(element && top?.contains(element)),
+        at: element?.getAttribute('aria-label') ?? element?.textContent?.trim() ?? '',
+      };
+    });
+
+  await popup.getByTestId('open-settings').click();
+  await popup.getByTestId('settings-show-seed').click();
+  await popup.getByTestId('settings-seed-password').fill(TEST_PASSWORD);
+  await popup.getByTestId('settings-seed-submit').click();
+  await expect(popup.getByTestId('settings-seed-word').first()).toBeVisible();
+
+  // Copy asks first, and that confirm dialog opens over the sheet still showing
+  // the phrase: two sheets, and the keyboard belongs to the one on top.
+  await popup.getByRole('button', { name: 'Copy', exact: true }).click();
+  await expect(popup.getByText('Copy secret?')).toBeVisible();
+  // Named by its own heading, so a screen reader announces which dialog this is.
+  await expect(popup.getByRole('dialog', { name: 'Copy secret?' })).toBeVisible();
+  await expect(popup.getByRole('dialog', { name: 'Recovery phrase' })).toBeVisible();
+  await expect.poll(async () => (await focus()).sheets).toBe(2);
+  expect(await focus()).toMatchObject({ inTop: true, at: 'Close' });
+
+  // Tab reaches Cancel rather than being dragged back by the sheet underneath.
+  await popup.keyboard.press('Tab');
+  expect(await focus()).toMatchObject({ inTop: true, at: 'Cancel' });
+
+  // Escape dismisses the dialog on top and nothing else: the phrase is still
+  // there, and focus is back on the Copy button inside that sheet.
+  await popup.keyboard.press('Escape');
+  await expect(popup.getByText('Copy secret?')).toHaveCount(0);
+  await expect(popup.getByTestId('settings-seed-word')).toHaveCount(12);
+  await expect.poll(async () => (await focus()).sheets).toBe(1);
+  expect(await focus()).toMatchObject({ inTop: true, at: 'Copy' });
+
+  // And the sheet underneath has the keyboard again: Escape now closes it.
+  await popup.keyboard.press('Escape');
+  await expect(popup.getByTestId('settings-seed-word')).toHaveCount(0);
+  await expect(popup.getByTestId('settings-show-seed')).toBeVisible();
+});

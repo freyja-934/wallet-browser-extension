@@ -1,5 +1,9 @@
+import { CHAIN_TIMEOUT_MS } from './devnet';
 import { expect, test } from './fixtures';
 import { importAndUnlock, importWallet, openPopup, TEST_ADDRESS, TEST_MNEMONIC, TEST_PASSWORD } from './popup';
+
+/** A funded devnet address that is not the fixture wallet; nothing is sent to it here. */
+const UNUSED = 'So11111111111111111111111111111111111111112';
 
 test('import then reopen shows Unlock, not Create', async ({ context, extensionId }) => {
   const created = await openPopup(context, extensionId);
@@ -108,9 +112,24 @@ test('the Send sheet keeps keyboard focus inside it and hands it back on Escape'
   // It came round again rather than running out of controls.
   expect(walked).toContain('Close');
 
+  // Stepping to Review unmounts the control that had focus, so the sheet takes
+  // it again: focus lands on the review step rather than falling to the body.
+  await expect(popup.getByTestId('send-available')).not.toHaveText('\u2014', { timeout: CHAIN_TIMEOUT_MS });
+  await popup.getByTestId('send-recipient').fill(UNUSED);
+  await popup.getByTestId('send-amount').fill('0.001');
+  await popup.getByTestId('send-ack').check();
+  await popup.getByTestId('send-continue').click();
+  await expect(popup.getByTestId('send-review')).toBeVisible();
+  const onReview = await popup.evaluate(() => {
+    const element = document.activeElement as HTMLElement | null;
+    const sheet = document.querySelector('[role="dialog"]');
+    return { inside: Boolean(element && sheet?.contains(element)), at: element?.textContent?.trim() ?? '' };
+  });
+  expect(onReview).toEqual({ inside: true, at: 'Back' });
+
   // Escape closes the sheet and gives focus back to the button that opened it.
   await popup.keyboard.press('Escape');
-  await expect(popup.getByTestId('send-recipient')).toHaveCount(0);
+  await expect(popup.getByTestId('send-review')).toHaveCount(0);
   await expect
     .poll(() => popup.evaluate(() => document.activeElement?.getAttribute('data-testid') ?? ''), { timeout: 5_000 })
     .toBe('open-send');

@@ -408,7 +408,14 @@ export function Settings() {
         </CardContent>
       </Card>
 
-      <Modal isOpen={showSeedPhrase} onClose={() => { setShowSeedPhrase(false); setSeedPhrase(''); setPassword(''); }}>
+      {/* The sheet swaps the password prompt for the phrase while it stays open, so
+          `focusKey` moves focus onto the revealed step rather than leaving it on an
+          unmounted field. */}
+      <Modal
+        isOpen={showSeedPhrase}
+        onClose={() => { setShowSeedPhrase(false); setSeedPhrase(''); setPassword(''); }}
+        focusKey={seedPhrase ? 'phrase' : 'password'}
+      >
         {!seedPhrase ? (
           <>
             <ModalHeader>Password required</ModalHeader>
@@ -488,7 +495,11 @@ export function Settings() {
         </ModalFooter>
       </Modal>
 
-      <Modal isOpen={showPrivateKey} onClose={() => { setShowPrivateKey(false); setPrivateKey(''); setPassword(''); }}>
+      <Modal
+        isOpen={showPrivateKey}
+        onClose={() => { setShowPrivateKey(false); setPrivateKey(''); setPassword(''); }}
+        focusKey={privateKey ? 'key' : 'password'}
+      >
         {!privateKey ? (
           <>
             <ModalHeader>Password required</ModalHeader>
