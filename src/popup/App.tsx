@@ -1,13 +1,22 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import { Toaster } from 'react-hot-toast';
 import { Dashboard } from '../components/Dashboard';
 import { LoadingScreen } from '../components/common/LoadingScreen';
+import { PopupFrame } from '../components/ui/Atmosphere';
 import { UnlockScreen } from '../components/wallet/UnlockScreen';
-import { WalletCreationFlow } from '../components/wallet/WalletCreationFlow';
 import { syncSettings } from '../hooks/useSettings';
 import { initializeWallet } from '../store/slices/walletSlice';
 import { useAppDispatch, useAppSelector } from '../store/store';
+
+/**
+ * Onboarding is the only screen that needs BIP39, and its wordlist is a quarter
+ * of the popup's JS. Loading it on demand keeps it out of the entry that every
+ * unlock and every dashboard open pays for.
+ */
+const WalletCreationFlow = lazy(() =>
+  import('../components/wallet/WalletCreationFlow').then((m) => ({ default: m.WalletCreationFlow })),
+);
 
 const toasterConfig = {
   position: 'top-center' as const,
@@ -74,7 +83,11 @@ function App() {
     return (
       <>
         <Toaster {...toasterConfig} />
-        <WalletCreationFlow />
+        {/* The fallback is the same frame the flow itself renders, so the
+            backdrop is already painted and the chunk arrives without a flash. */}
+        <Suspense fallback={<PopupFrame atmosphere="still" focus="mark">{null}</PopupFrame>}>
+          <WalletCreationFlow />
+        </Suspense>
       </>
     );
   }
