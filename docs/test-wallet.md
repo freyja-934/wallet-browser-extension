@@ -39,3 +39,13 @@ funds skip with the balance and the shortfall, everything else runs. See `e2e/de
 ## Cost of a test run
 
 A full `just e2e` spends 10000 lamports from the fixture (two fee-only self-transfers on devnet: the dApp `signAndSend` approval and the popup send test). Funds never leave the fixture address; top it up at https://faucet.solana.com when it runs low.
+
+## Screenshots
+
+`node scripts/capture-screenshots.mjs` drives the real extension with this fixture and writes
+`docs/store/screenshots/raw/`; `node scripts/compose-store-images.mjs` lays those out into the
+listing images. Build the cluster you want first, e.g.
+`VITE_NETWORK=devnet CINDER_OUT_DIR=dist-shots pnpm build:extension`, then run with the same
+`CINDER_OUT_DIR`. The capture rejects the approval it opens, so nothing is ever broadcast. The
+approval shots must be captured on Devnet with a funded fixture: on Mainnet this address cannot
+pay a fee, so the simulation correctly fails and no balance change is shown.

@@ -7,12 +7,12 @@ Self-custodial Solana wallet for Chrome (Manifest V3). The encrypted keyring liv
 This is a portfolio implementation. It does not impersonate Phantom. It has not been audited. Do not put mainnet funds on it that you cannot lose.
 
 <p align="center">
-  <img src="docs/store/screenshots/02-home-1280x800.png" width="72%" alt="Cinder Wallet home — portfolio and assets" />
+  <img src="docs/store/screenshots/01-home-1280x800.png" width="72%" alt="Cinder Wallet home — portfolio and assets" />
 </p>
 <p align="center">
-  <img src="docs/store/screenshots/01-unlock-1280x800.png" width="32%" alt="Unlock" />
-  <img src="docs/store/screenshots/03-nfts-1280x800.png" width="32%" alt="NFTs" />
-  <img src="docs/store/screenshots/04-activity-1280x800.png" width="32%" alt="Activity" />
+  <img src="docs/store/screenshots/02-approve-1280x800.png" width="32%" alt="Approval with a simulated balance change" />
+  <img src="docs/store/screenshots/03-connect-1280x800.png" width="32%" alt="Connect consent screen" />
+  <img src="docs/store/screenshots/04-send-1280x800.png" width="32%" alt="Send review with a network-quoted fee" />
 </p>
 
 ## What you get, with and without an RPC key
