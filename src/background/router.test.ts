@@ -2,20 +2,21 @@ import { Message, PublicKey, SystemProgram, Transaction, TransactionMessage, Ver
 import bs58 from 'bs58';
 import nacl from 'tweetnacl';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MAX_TRANSACTION_BYTES } from '../lib/bridge';
-import type { PendingApproval, WalletPublicState } from '../lib/messages';
+import { MAX_TRANSACTION_BYTES, SINGLE_SEND_MESSAGE } from '../lib/bridge';
+import type { PendingApproval, WalletAccountInfo, WalletPublicState } from '../lib/messages';
 import type { PreviewResult } from '../lib/preview';
 import { installChromeStub, STUB_EXTENSION_ID, uninstallChromeStub, type ChromeStub } from '../test/chrome-stub';
 import { TEST_ADDRESS, TEST_MNEMONIC, TEST_PASSWORD } from '../test/fixtures';
 import { installApprovalLifecycle, onWindowRemoved } from './approvals';
 import { resetKeyringForTests } from './keyring';
-import { CONFIRMATION_POLL_MS, CONFIRMATION_TIMEOUT_MS, handleMessage } from './router';
+import { CONFIRMATION_MARGIN_MS, CONFIRMATION_POLL_MS, CONFIRMATION_TIMEOUT_MS, handleMessage } from './router';
 
 /** The RPC the router broadcasts through, replaced so a test can hold a broadcast open. */
 const rpc = vi.hoisted(() => ({
   sendRawTransaction: vi.fn<[Uint8Array, unknown], Promise<string>>(),
   getSignatureStatuses: vi.fn<[string[]], Promise<{ value: Array<{ err: unknown; confirmationStatus?: string } | null> }>>(),
   getMultipleAccountsInfo: vi.fn<[unknown[]], Promise<unknown[]>>(),
+  getMultipleAccountsInfoAndContext: vi.fn<[unknown[]], Promise<{ context: { slot: number }; value: unknown[] }>>(),
   getAddressLookupTable: vi.fn<[unknown], Promise<{ value: unknown }>>(),
   simulateTransaction: vi.fn<[unknown, unknown], Promise<{ value: unknown }>>(),
 }));
@@ -24,6 +25,7 @@ vi.mock('./transfers', () => ({
     sendRawTransaction: rpc.sendRawTransaction,
     getSignatureStatuses: rpc.getSignatureStatuses,
     getMultipleAccountsInfo: rpc.getMultipleAccountsInfo,
+    getMultipleAccountsInfoAndContext: rpc.getMultipleAccountsInfoAndContext,
     getAddressLookupTable: rpc.getAddressLookupTable,
     simulateTransaction: rpc.simulateTransaction,
   }),
@@ -45,6 +47,7 @@ beforeEach(() => {
   rpc.sendRawTransaction.mockReset();
   rpc.getSignatureStatuses.mockReset();
   rpc.getMultipleAccountsInfo.mockReset();
+  rpc.getMultipleAccountsInfoAndContext.mockReset();
   rpc.getAddressLookupTable.mockReset();
   rpc.simulateTransaction.mockReset();
 });
@@ -474,9 +477,9 @@ describe('handleMessage', () => {
       await expect(handleMessage({ type: 'SIGN_TRANSACTION', transactions: [transaction] }, page, BASE)).rejects.toThrow(
         'Invalid transactions',
       );
-      await expect(handleMessage({ type: 'SIGN_TRANSACTION', transactions: transaction }, page, BASE)).rejects.toThrow(
-        'Invalid transactions',
-      );
+      // The same value where the batch should be: a long list of non-arrays trips the item cap first.
+      const asBatch = Array.isArray(transaction) && transaction.length > 10 ? 'At most 10 transactions per request' : 'Invalid transactions';
+      await expect(handleMessage({ type: 'SIGN_TRANSACTION', transactions: transaction }, page, BASE)).rejects.toThrow(asBatch);
       await expect(handleMessage({ type: 'PREVIEW_TRANSACTION', transaction }, popup, BASE)).rejects.toThrow(
         'Invalid transaction',
       );
@@ -719,18 +722,24 @@ describe('batched sign requests', () => {
     expect(rpc.sendRawTransaction).not.toHaveBeenCalled();
   });
 
-  it('SIGN_AND_SEND_TRANSACTION broadcasts every item in order and returns one 64-byte signature each', async () => {
+  it('SIGN_AND_SEND_TRANSACTION takes one transaction: two are refused before a window, one is broadcast', async () => {
     await connected();
-    const second = Array.from({ length: 64 }, (_, i) => 63 - i);
-    rpc.sendRawTransaction.mockResolvedValueOnce(SIGNATURE).mockResolvedValueOnce(bs58.encode(Uint8Array.from(second)));
+    // A batch broadcast is not atomic and its confirmation waits could outlive the page.
+    await expect(
+      handleMessage({ type: 'SIGN_AND_SEND_TRANSACTION', transactions: [selfTransfer(), selfTransfer()] }, page, BASE),
+    ).rejects.toThrow(SINGLE_SEND_MESSAGE);
+    expect(chromeStub.windows.created()).toHaveLength(1);
+    expect(chromeStub.storage.session.snapshot().cinder_pending ?? {}).toEqual({});
+
+    rpc.sendRawTransaction.mockResolvedValueOnce(SIGNATURE);
     const { pendingId } = (await handleMessage(
-      { type: 'SIGN_AND_SEND_TRANSACTION', transactions: [selfTransfer(), selfTransfer()] },
+      { type: 'SIGN_AND_SEND_TRANSACTION', transactions: [selfTransfer()] },
       page,
       BASE,
     )) as { pendingId: string };
     await approve(pendingId);
-    await expect(poll(pendingId)).resolves.toEqual({ status: 'approved', value: { signatures: [SIGNATURE_BYTES, second] } });
-    expect(rpc.sendRawTransaction).toHaveBeenCalledTimes(2);
+    await expect(poll(pendingId)).resolves.toEqual({ status: 'approved', value: { signatures: [SIGNATURE_BYTES] } });
+    expect(rpc.sendRawTransaction).toHaveBeenCalledTimes(1);
     expect(rpc.sendRawTransaction.mock.calls[0][1]).toEqual({ skipPreflight: false });
     expect(rpc.getSignatureStatuses).not.toHaveBeenCalled();
   });
@@ -798,6 +807,60 @@ describe('the chain a page names', () => {
     expect(chromeStub.storage.session.snapshot().cinder_pending ?? {}).toEqual({});
     // Now devnet is the active cluster.
     await expect(sign('solana:devnet')).resolves.toMatchObject({ pendingId: expect.any(String) });
+  });
+
+  it('records the cluster a request was enqueued on', async () => {
+    await connected();
+    const { pendingId } = (await handleMessage({ type: 'SIGN_TRANSACTION', transactions: [selfTransfer()] }, page, BASE)) as {
+      pendingId: string;
+    };
+    const { request } = (await handleMessage({ type: 'GET_PENDING_REQUEST', id: pendingId }, popup, BASE)) as {
+      request: PendingApproval | null;
+    };
+    expect(request?.clusterAtEnqueue).toBe('mainnet-beta');
+    expect(request).not.toHaveProperty('chain');
+  });
+
+  it('switching the cluster in Settings rejects a pending transaction request as Network changed', async () => {
+    await connected();
+    await connectPage(otherPage);
+    // One named the chain, one did not; both were built for mainnet.
+    const named = (await sign('solana:mainnet')) as { pendingId: string };
+    const unnamed = (await handleMessage({ type: 'SIGN_TRANSACTION', transactions: [selfTransfer()] }, otherPage, BASE)) as {
+      pendingId: string;
+    };
+    const [, , namedWindow, unnamedWindow] = chromeStub.windows.created();
+
+    await handleMessage({ type: 'UPDATE_SETTINGS', settings: { cluster: 'devnet' } }, popup, BASE);
+    await expect(poll(named.pendingId)).resolves.toEqual({ status: 'rejected', error: 'Network changed' });
+    await expect(poll(unnamed.pendingId, otherPage)).resolves.toEqual({ status: 'rejected', error: 'Network changed' });
+    expect(chromeStub.windows.removed()).toEqual([namedWindow.id, unnamedWindow.id]);
+    await expect(approve(named.pendingId)).rejects.toThrow('Approval expired');
+    expect(rpc.sendRawTransaction).not.toHaveBeenCalled();
+
+    // A message request is not chain-bound and survives the switch; an unrelated setting changes nothing.
+    const { pendingId: message } = (await handleMessage({ type: 'SIGN_MESSAGE', messages: [[1]] }, page, BASE)) as {
+      pendingId: string;
+    };
+    await handleMessage({ type: 'UPDATE_SETTINGS', settings: { cluster: 'mainnet-beta', autoLockTimeout: 5 } }, popup, BASE);
+    await expect(poll(message)).resolves.toEqual({ status: 'pending' });
+  });
+
+  it('Approve re-checks the cluster: a switch the router did not see is refused at claim time', async () => {
+    await connected();
+    const { pendingId } = (await handleMessage(
+      { type: 'SIGN_AND_SEND_TRANSACTION', transactions: [selfTransfer()], chain: 'solana:mainnet' },
+      page,
+      BASE,
+    )) as { pendingId: string };
+    // Flip the stored cluster underneath the worker (another worker instance, a restored profile).
+    const settings = chromeStub.storage.local.snapshot().cinder_settings as Record<string, unknown>;
+    await chromeStub.storage.local.set({ cinder_settings: { ...settings, cluster: 'devnet' } });
+
+    await expect(approve(pendingId)).rejects.toThrow('Network changed');
+    expect(rpc.sendRawTransaction).not.toHaveBeenCalled();
+    await expect(poll(pendingId)).resolves.toEqual({ status: 'rejected', error: 'Network changed' });
+    await expect(approve(pendingId)).rejects.toThrow('Approval expired');
   });
 
   it('refuses testnet and localnet whatever the cluster', async () => {
@@ -900,6 +963,110 @@ describe('send options', () => {
   });
 });
 
+describe('the commitment wait and the page deadline', () => {
+  async function pendingSend(deadlineFromNow: number): Promise<string> {
+    await createFixtureWallet();
+    await connectPage(page);
+    const { pendingId } = (await handleMessage(
+      { type: 'SIGN_AND_SEND_TRANSACTION', transactions: [selfTransfer()], options: { commitment: 'finalized' } },
+      page,
+      BASE,
+    )) as { pendingId: string };
+    const pending = chromeStub.storage.session.snapshot().cinder_pending as Record<string, PendingApproval>;
+    pending[pendingId].deadline = Date.now() + deadlineFromNow;
+    await chromeStub.storage.session.set({ cinder_pending: pending });
+    return pendingId;
+  }
+
+  it('stops polling CONFIRMATION_MARGIN_MS before the deadline, well inside the 30 s cap', async () => {
+    // 10 s to the deadline: the wait may take 5 s, not 30.
+    const pendingId = await pendingSend(10_000);
+    rpc.sendRawTransaction.mockResolvedValueOnce(SIGNATURE);
+    const start = Date.now();
+    let now = start;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    rpc.getSignatureStatuses.mockImplementation(async () => {
+      // Each poll costs 4 s of wall clock; the level is never reached.
+      now += 4_000;
+      return { value: [{ err: null, confirmationStatus: 'processed' }] };
+    });
+    try {
+      await expect(approve(pendingId)).resolves.toEqual({});
+    } finally {
+      clock.mockRestore();
+    }
+    // First poll at t+0 (deadline 10 s - 5 s margin = 5 s budget), second at t+4 s, none at t+8 s.
+    expect(rpc.getSignatureStatuses).toHaveBeenCalledTimes(2);
+    expect(now - start).toBeLessThan(10_000 - CONFIRMATION_MARGIN_MS + 4_000);
+    await expect(poll(pendingId)).resolves.toEqual({ status: 'approved', value: { signatures: [SIGNATURE_BYTES] } });
+  });
+
+  it('does not poll at all when the deadline is already within the margin', async () => {
+    const pendingId = await pendingSend(CONFIRMATION_MARGIN_MS - 1_000);
+    rpc.sendRawTransaction.mockResolvedValueOnce(SIGNATURE);
+    await expect(approve(pendingId)).resolves.toEqual({});
+    expect(rpc.getSignatureStatuses).not.toHaveBeenCalled();
+    await expect(poll(pendingId)).resolves.toEqual({ status: 'approved', value: { signatures: [SIGNATURE_BYTES] } });
+  });
+
+  it('keeps the 30 s cap when the deadline is far away', async () => {
+    const pendingId = await pendingSend(CONFIRMATION_TIMEOUT_MS * 4);
+    rpc.sendRawTransaction.mockResolvedValueOnce(SIGNATURE);
+    const start = Date.now();
+    let now = start;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    rpc.getSignatureStatuses.mockImplementation(async () => {
+      now = start + CONFIRMATION_TIMEOUT_MS + CONFIRMATION_POLL_MS;
+      return { value: [{ err: null, confirmationStatus: 'confirmed' }] };
+    });
+    try {
+      await expect(approve(pendingId)).resolves.toEqual({});
+    } finally {
+      clock.mockRestore();
+    }
+    expect(rpc.getSignatureStatuses).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('account order', () => {
+  const SECOND = 'So11111111111111111111111111111111111111112';
+
+  /** Two accounts stored the way the keyring keeps them, the second not derived (its address never signs here). */
+  async function twoAccounts(): Promise<void> {
+    await createFixtureWallet();
+    const { accounts } = (await handleMessage({ type: 'GET_STATE' }, popup, BASE)).state as WalletPublicState;
+    const second: WalletAccountInfo = { address: SECOND, name: 'Account 2', derivationPath: "m/44'/501'/1'/0'", index: 1 };
+    await chromeStub.storage.local.set({ cinder_accounts: { accounts: [...accounts, second] } });
+  }
+
+  it('puts the active account first in connect answers, GET_ACCOUNTS, and the accountsChanged event', async () => {
+    await twoAccounts();
+    await connectPage(page);
+    await expect(handleMessage({ type: 'WALLET_CONNECT' }, page, BASE)).resolves.toEqual({
+      accounts: [TEST_ADDRESS, SECOND],
+      cluster: 'mainnet-beta',
+    });
+
+    await handleMessage({ type: 'SWITCH_ACCOUNT', index: 1 }, popup, BASE);
+    await expect(handleMessage({ type: 'WALLET_CONNECT' }, page, BASE)).resolves.toEqual({
+      accounts: [SECOND, TEST_ADDRESS],
+      cluster: 'mainnet-beta',
+    });
+    await expect(handleMessage({ type: 'GET_ACCOUNTS' }, page, BASE)).resolves.toEqual({ accounts: [SECOND, TEST_ADDRESS] });
+    const event = chromeStub.tabs.sent().at(-1);
+    expect(event?.message).toMatchObject({ type: 'WALLET_EVENT', event: 'accountsChanged', accounts: [SECOND, TEST_ADDRESS] });
+
+    // A fresh connect approval answers the same way.
+    await handleMessage({ type: 'WALLET_DISCONNECT' }, page, BASE);
+    const { pendingId } = (await handleMessage({ type: 'WALLET_CONNECT' }, page, BASE)) as { pendingId: string };
+    await approve(pendingId);
+    await expect(poll(pendingId)).resolves.toEqual({
+      status: 'approved',
+      value: { connected: true, accounts: [SECOND, TEST_ADDRESS], publicKey: SECOND, cluster: 'mainnet-beta' },
+    });
+  });
+});
+
 describe('the signMessage guard', () => {
   it('refuses to sign serialized transaction message bytes as a message, before opening a window', async () => {
     await createFixtureWallet();
@@ -938,9 +1105,10 @@ describe('PREVIEW_TRANSACTION', () => {
   it('simulates with replaceRecentBlockhash and the writable accounts, and reports the fee as the SOL change', async () => {
     await createFixtureWallet();
     const owner = new PublicKey(TEST_ADDRESS);
-    rpc.getMultipleAccountsInfo.mockResolvedValueOnce([
-      { executable: false, owner: SystemProgram.programId, lamports: 1_000_000, data: Buffer.alloc(0) },
-    ]);
+    rpc.getMultipleAccountsInfoAndContext.mockResolvedValueOnce({
+      context: { slot: 4242 },
+      value: [{ executable: false, owner: SystemProgram.programId, lamports: 1_000_000, data: Buffer.alloc(0) }],
+    });
     rpc.simulateTransaction.mockResolvedValueOnce({
       value: {
         err: null,
@@ -954,22 +1122,25 @@ describe('PREVIEW_TRANSACTION', () => {
     expect(result.diff).toEqual({ sol: { pre: '1000000', post: '995000' }, tokens: [], fee: '5000', partial: false });
     expect(result.instructions.map((ix) => ix.label)).toEqual(['Transfer SOL']);
 
-    const [keys] = rpc.getMultipleAccountsInfo.mock.calls[0];
+    const [keys] = rpc.getMultipleAccountsInfoAndContext.mock.calls[0];
     expect((keys as PublicKey[]).map((key) => key.toBase58())).toEqual([owner.toBase58()]);
     const [tx, config] = rpc.simulateTransaction.mock.calls[0];
     expect(tx).toBeInstanceOf(VersionedTransaction);
+    // The diff is relative to the slot the pre-state was read at.
     expect(config).toEqual({
       sigVerify: false,
       replaceRecentBlockhash: true,
       innerInstructions: true,
       accounts: { encoding: 'base64', addresses: [owner.toBase58()] },
+      minContextSlot: 4242,
     });
     expect(rpc.getAddressLookupTable).not.toHaveBeenCalled();
+    expect(rpc.getMultipleAccountsInfo).not.toHaveBeenCalled();
   });
 
   it('a dead RPC leaves the decoded instructions with the error and no diff', async () => {
     await createFixtureWallet();
-    rpc.getMultipleAccountsInfo.mockRejectedValueOnce(new Error('403 Forbidden'));
+    rpc.getMultipleAccountsInfoAndContext.mockRejectedValueOnce(new Error('403 Forbidden'));
     const { preview: result } = await preview(selfTransfer());
     expect(result).toMatchObject({ success: false, error: '403 Forbidden', signerOk: true, unreadable: false });
     expect(result.instructions.map((ix) => ix.label)).toEqual(['Transfer SOL']);
@@ -991,7 +1162,7 @@ describe('PREVIEW_TRANSACTION', () => {
       signerOk: false,
       error: 'This transaction does not require a signature from your account',
     });
-    expect(rpc.getMultipleAccountsInfo).not.toHaveBeenCalled();
+    expect(rpc.getMultipleAccountsInfoAndContext).not.toHaveBeenCalled();
     expect(rpc.simulateTransaction).not.toHaveBeenCalled();
   });
 

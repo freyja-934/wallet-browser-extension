@@ -1,4 +1,10 @@
-import { PAGE_TIMEOUT_MS, type ApprovalKind, type PendingApproval } from '../lib/messages';
+import {
+  CHAIN_FOR_CLUSTER,
+  PAGE_TIMEOUT_MS,
+  type ApprovalKind,
+  type PendingApproval,
+  type WalletSettings,
+} from '../lib/messages';
 import * as origins from './origins';
 import { sessionArea, withLock } from './session-store';
 
@@ -25,6 +31,8 @@ const LOCK = 'cinder_approvals';
 export const APPROVAL_TTL_MS = 5 * 60 * 1000;
 
 export const EXPIRED_MESSAGE = 'Approval expired — unlock and retry the dApp request';
+/** A transaction request whose cluster changed underneath it, pending or at Approve. */
+export const NETWORK_CHANGED_MESSAGE = 'Network changed';
 
 export type ApprovalResult =
   | { status: 'pending' }
@@ -105,18 +113,30 @@ export async function enqueueApproval(
       ...extra,
     };
 
-    const url = chrome.runtime.getURL(`approve.html?id=${encodeURIComponent(request.id)}`);
-    const created = await chrome.windows.create({
-      url,
-      type: 'popup',
-      width: 400,
-      height: 720,
-      focused: true,
-    });
-    if (typeof created?.id === 'number') request.windowId = created.id;
-
+    // The record first: a write that fails opens nothing, and a window that
+    // fails to open leaves no record behind for the origin to trip over.
     pending[request.id] = request;
     await writeMap(PENDING_KEY, pending);
+
+    const url = chrome.runtime.getURL(`approve.html?id=${encodeURIComponent(request.id)}`);
+    let created: { id?: number } | undefined;
+    try {
+      created = await chrome.windows.create({
+        url,
+        type: 'popup',
+        width: 400,
+        height: 720,
+        focused: true,
+      });
+    } catch (error) {
+      delete pending[request.id];
+      await writeMap(PENDING_KEY, pending);
+      throw error;
+    }
+    if (typeof created?.id === 'number') {
+      request.windowId = created.id;
+      await writeMap(PENDING_KEY, pending);
+    }
     return request.id;
   });
 }
@@ -283,6 +303,35 @@ export async function rejectForOrigin(origin: string, reason: string): Promise<s
     }
     return requests.map((request) => request.id);
   });
+}
+
+/**
+ * True when `request` can still be signed on `cluster`: connect and message
+ * requests always (a message signature is not chain-bound); a transaction
+ * request only when the chain the page named, or failing that the cluster it
+ * was enqueued on, is the active one.
+ */
+export function onCluster(request: PendingApproval, cluster: WalletSettings['cluster']): boolean {
+  if (request.kind !== 'signTransaction' && request.kind !== 'signAndSendTransaction') return true;
+  if (request.chain !== undefined) return request.chain === CHAIN_FOR_CLUSTER[cluster];
+  return request.clusterAtEnqueue === undefined || request.clusterAtEnqueue === cluster;
+}
+
+/**
+ * The active cluster changed: reject every pending transaction request that
+ * was built for the old one and close its window. Returns the ids.
+ */
+export async function rejectForClusterChange(cluster: WalletSettings['cluster']): Promise<string[]> {
+  const rejected = await withLock(LOCK, async () => {
+    const pending = await readMap<PendingApproval>(PENDING_KEY);
+    const requests = Object.values(pending).filter((entry) => !onCluster(entry, cluster));
+    for (const request of requests) {
+      await settle(PENDING_KEY, pending, request.id, { status: 'rejected', error: NETWORK_CHANGED_MESSAGE });
+    }
+    return requests;
+  });
+  await closeWindows(rejected);
+  return rejected.map((request) => request.id);
 }
 
 /**

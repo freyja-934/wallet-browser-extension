@@ -6,7 +6,7 @@
  * Delivery is best effort: a tab whose content script is gone simply drops it.
  */
 
-import type { WalletEventName } from '../lib/messages';
+import type { WalletEventName, WalletPublicState } from '../lib/messages';
 import { getPublicState, getSettings, setLockHooks } from './keyring';
 import * as origins from './origins';
 
@@ -27,11 +27,22 @@ export interface WalletEventMessage {
   cluster: string;
 }
 
-/** The account list pages may see right now, and the active cluster. */
+/**
+ * Every account's address with the active one first: Wallet Standard has no
+ * "active account", so `accounts[0]` is what a dApp treats as the one to use.
+ */
+export function addressesActiveFirst(state: Pick<WalletPublicState, 'accounts' | 'activeAccountIndex'>): string[] {
+  const addresses = state.accounts.map((account) => account.address);
+  const active = addresses[state.activeAccountIndex];
+  if (active === undefined) return addresses;
+  return [active, ...addresses.filter((_, i) => i !== state.activeAccountIndex)];
+}
+
+/** The account list pages may see right now, active first, and the active cluster. */
 export async function snapshot(): Promise<{ accounts: string[]; cluster: string }> {
   const [state, settings] = await Promise.all([getPublicState(), getSettings()]);
   return {
-    accounts: state.isLocked ? [] : state.accounts.map((account) => account.address),
+    accounts: state.isLocked ? [] : addressesActiveFirst(state),
     cluster: settings.cluster,
   };
 }

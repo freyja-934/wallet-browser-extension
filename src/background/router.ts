@@ -8,6 +8,7 @@ import {
   type Commitment,
   type PendingApproval,
   type SendOptions,
+  type WalletPublicState,
   type WalletSettings,
 } from '../lib/messages';
 import { parseRequest, type WalletRequest, type WalletResponse } from '../lib/protocol';
@@ -36,11 +37,14 @@ import {
   enqueueApproval,
   getApprovalResult,
   getPending,
+  NETWORK_CHANGED_MESSAGE,
+  onCluster,
   rejectApproval,
+  rejectForClusterChange,
   rejectForOrigin,
   settleClaimed,
 } from './approvals';
-import { sendToConnected, sendWalletEvent, snapshot } from './events';
+import { addressesActiveFirst, sendToConnected, sendWalletEvent, snapshot } from './events';
 import * as origins from './origins';
 import { getConnection, sendTransfer } from './transfers';
 
@@ -93,8 +97,9 @@ async function requireConnected(origin: string): Promise<void> {
   if (!(await origins.isConnected(origin))) throw new Error('Not connected');
 }
 
-function addresses(state: { accounts: { address: string }[] }): string[] {
-  return state.accounts.map((account) => account.address);
+/** Active account first: a dApp takes `accounts[0]` as the one to use. */
+function addresses(state: Pick<WalletPublicState, 'accounts' | 'activeAccountIndex'>): string[] {
+  return addressesActiveFirst(state);
 }
 
 function assertNever(_request: never): never {
@@ -107,16 +112,17 @@ const CLUSTER_LABEL: Record<WalletSettings['cluster'], string> = { 'mainnet-beta
  * A page may name the chain it built the transaction for. No chain means the
  * active cluster; testnet and localnet have no cluster here; the other cluster
  * is refused with a hint, since the wallet does not switch on a page's behalf.
+ * Returns the active cluster, which the pending request records.
  */
-async function assertChain(chain: string | undefined): Promise<void> {
-  if (chain === undefined) return;
-  if ((UNSUPPORTED_CHAINS as readonly string[]).includes(chain)) {
+async function assertChain(chain: string | undefined): Promise<WalletSettings['cluster']> {
+  if (chain !== undefined && (UNSUPPORTED_CHAINS as readonly string[]).includes(chain)) {
     throw new Error('Cinder does not support that network');
   }
   const { cluster } = await getSettings();
-  if (chain !== CHAIN_FOR_CLUSTER[cluster]) {
+  if (chain !== undefined && chain !== CHAIN_FOR_CLUSTER[cluster]) {
     throw new Error(`Cinder is on ${CLUSTER_LABEL[cluster]}; switch networks in Settings`);
   }
+  return cluster;
 }
 
 async function dispatch(request: WalletRequest, caller: Caller): Promise<WalletResponse> {
@@ -132,6 +138,8 @@ async function dispatch(request: WalletRequest, caller: Caller): Promise<WalletR
       const before = (await getSettings()).cluster;
       const settings = await updateSettings(request.settings);
       if (settings.cluster !== before) {
+        // A transaction waiting for Approve was built for the old cluster; it cannot be signed now.
+        await rejectForClusterChange(settings.cluster);
         const { accounts } = await snapshot();
         await sendToConnected('clusterChanged', { accounts, cluster: settings.cluster });
       }
@@ -195,11 +203,12 @@ async function dispatch(request: WalletRequest, caller: Caller): Promise<WalletR
     case 'SIGN_TRANSACTION':
     case 'SIGN_AND_SEND_TRANSACTION': {
       await requireConnected(origin);
-      await assertChain(request.chain);
+      const clusterAtEnqueue = await assertChain(request.chain);
       const kind = request.type === 'SIGN_AND_SEND_TRANSACTION' ? 'signAndSendTransaction' : 'signTransaction';
       const extra: Partial<PendingApproval> = {
         ...frame,
         transactions: request.transactions.map((transaction) => [...transaction]),
+        clusterAtEnqueue,
       };
       if (request.chain !== undefined) extra.chain = request.chain;
       if (request.options !== undefined) extra.options = { ...request.options };
@@ -219,6 +228,9 @@ async function dispatch(request: WalletRequest, caller: Caller): Promise<WalletR
       const pending = await claimApproval(request.id, { requireConnected: true });
       let value: Record<string, unknown>;
       try {
+        // The cluster may have changed since the request was enqueued (and since the
+        // window rendered its preview): a transaction built for the other one is refused here.
+        if (!onCluster(pending, (await getSettings()).cluster)) throw new Error(NETWORK_CHANGED_MESSAGE);
         value = await fulfillApproval(pending);
       } catch (error) {
         // Whatever failed, the request is finished: it must never be approvable again.
@@ -295,7 +307,9 @@ export async function fulfillApproval(request: PendingApproval): Promise<Record<
     const signatures: number[][] = [];
     for (const bytes of signed) {
       const signature = await connection.sendRawTransaction(bytes, sendOptionsFor(request.options));
-      if (request.options?.commitment) await waitForCommitment(connection, signature, request.options.commitment);
+      if (request.options?.commitment) {
+        await waitForCommitment(connection, signature, request.options.commitment, request.deadline);
+      }
       // Wallet Standard wants the 64 raw signature bytes; the RPC hands back base58.
       signatures.push([...bs58.decode(signature)]);
     }
@@ -322,18 +336,22 @@ const COMMITMENT_RANK: Record<Commitment, number> = { processed: 0, confirmed: 1
 /** How long a `commitment` may hold the page's answer; after this the signature is returned as sent. */
 export const CONFIRMATION_TIMEOUT_MS = 30_000;
 export const CONFIRMATION_POLL_MS = 500;
+/** The wait stops this long before the request's page deadline, so the answer always lands before the page gives up. */
+export const CONFIRMATION_MARGIN_MS = 5_000;
 
 /**
  * Poll `getSignatureStatuses` until the transaction reaches `commitment` or has
- * landed with an error, giving up after `CONFIRMATION_TIMEOUT_MS`. Never throws:
- * the transaction was already broadcast, so the page always gets its signature.
+ * landed with an error, giving up after `CONFIRMATION_TIMEOUT_MS` or
+ * `CONFIRMATION_MARGIN_MS` before `requestDeadline`, whichever is sooner. Never
+ * throws: the transaction was already broadcast, so the page always gets its signature.
  */
 async function waitForCommitment(
   connection: Pick<Connection, 'getSignatureStatuses'>,
   signature: string,
   commitment: Commitment,
+  requestDeadline: number,
 ): Promise<void> {
-  const deadline = Date.now() + CONFIRMATION_TIMEOUT_MS;
+  const deadline = Math.min(Date.now() + CONFIRMATION_TIMEOUT_MS, requestDeadline - CONFIRMATION_MARGIN_MS);
   while (Date.now() < deadline) {
     try {
       const { value } = await connection.getSignatureStatuses([signature]);
@@ -377,11 +395,19 @@ function mintDecimals(mints: PublicKey[], infos: (AccountInfo<Buffer> | null)[])
  * The preview for the approval window. Every network read goes through the
  * rotated connection and is fetched lazily, so an endpoint failure reaches the
  * screen as a decode-only preview with the error, never as a thrown message.
+ *
+ * The balance diff is relative to the slot the pre-state was read at: the
+ * accounts come from `getMultipleAccountsInfoAndContext`, and its
+ * `context.slot` is passed to `simulateTransaction` as `minContextSlot`, so a
+ * simulation on a node behind that slot is refused rather than diffed against
+ * older state. `buildPreview` always reads accounts before it simulates, so the
+ * slot travels between the two deps here and the pure pipeline is unchanged.
  */
 export async function previewTransaction(bytes: Uint8Array): Promise<{ preview: PreviewResult }> {
   const state = await getPublicState();
   const active = state.accounts[state.activeAccountIndex]?.address;
   if (state.isLocked || !active) throw new Error('Wallet is locked');
+  let preStateSlot: number | undefined;
   const preview = await buildPreview(bytes, {
     owner: new PublicKey(active),
     fetchLookupTables: async (keys) => {
@@ -391,7 +417,8 @@ export async function previewTransaction(bytes: Uint8Array): Promise<{ preview: 
     },
     fetchAccounts: async (keys) => {
       const connection = await getConnection();
-      const infos = await connection.getMultipleAccountsInfo(keys);
+      const { context, value: infos } = await connection.getMultipleAccountsInfoAndContext(keys);
+      preStateSlot = context.slot;
       return new Map(keys.map((key, i) => [key.toBase58(), infos[i] ?? null]));
     },
     fetchMintDecimals: async (mints) => {
@@ -406,6 +433,8 @@ export async function previewTransaction(bytes: Uint8Array): Promise<{ preview: 
         replaceRecentBlockhash: true,
         innerInstructions: true,
         accounts: { encoding: 'base64', addresses },
+        // Never diff against state older than the pre-state read.
+        ...(preStateSlot !== undefined ? { minContextSlot: preStateSlot } : {}),
       });
       return simulation.value;
     },

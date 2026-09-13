@@ -11,8 +11,16 @@ import {
 export const MAX_TRANSACTION_BYTES = 1232;
 /** Upper bound for signMessage payloads forwarded from a page. */
 export const MAX_MESSAGE_BYTES = 64 * 1024;
-/** Most items one `signTransaction` / `signAndSendTransaction` / `signMessage` call may carry. */
+/** Most items one `signTransaction` / `signMessage` call may carry. */
 export const MAX_BATCH_ITEMS = 10;
+/** Most bytes one batch may carry in total, whatever the item count. */
+export const MAX_REQUEST_BYTES = 256 * 1024;
+/**
+ * `signAndSendTransaction` takes exactly one transaction: a batch is not atomic
+ * (the second may fail after the first landed) and a chain of confirmation
+ * waits could outlive the page's timeout. wallet-adapter only ever sends one.
+ */
+export const SINGLE_SEND_MESSAGE = 'signAndSendTransaction accepts one transaction per request';
 
 export interface RuntimeMessage {
   type: DappMessageType;
@@ -46,14 +54,24 @@ export function validateByteArray(value: unknown, max: number, field: string, al
 }
 
 /**
- * One batch: 1 to `MAX_BATCH_ITEMS` byte arrays, each validated by
- * `validateByteArray`. Throws `Invalid <field>` for the list or any item.
+ * One batch: 1 to `MAX_BATCH_ITEMS` byte arrays totalling at most
+ * `MAX_REQUEST_BYTES`, each validated by `validateByteArray`. Throws
+ * `Invalid <field>` for a missing or empty list or a bad item,
+ * `At most 10 <field> per request` past the item cap, and `Request too large`
+ * past the byte cap.
  */
 export function validateByteArrays(value: unknown, max: number, field: string, allowEmptyItem = false): number[][] {
-  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_BATCH_ITEMS) {
-    throw new Error(`Invalid ${field}`);
-  }
+  if (!Array.isArray(value) || value.length === 0) throw new Error(`Invalid ${field}`);
+  if (value.length > MAX_BATCH_ITEMS) throw new Error(`At most ${MAX_BATCH_ITEMS} ${field} per request`);
+  const total = value.reduce<number>((sum, item) => sum + (Array.isArray(item) ? item.length : 0), 0);
+  if (total > MAX_REQUEST_BYTES) throw new Error('Request too large');
   return value.map((item) => validateByteArray(item, max, field, allowEmptyItem));
+}
+
+/** `validateByteArrays` for `signAndSendTransaction`: the same checks, but never more than one item. */
+export function validateSingleTransaction(value: unknown): number[][] {
+  if (Array.isArray(value) && value.length > 1) throw new Error(SINGLE_SEND_MESSAGE);
+  return validateByteArrays(value, MAX_TRANSACTION_BYTES, 'transactions');
 }
 
 const COMMITMENTS: readonly string[] = ['processed', 'confirmed', 'finalized'];
@@ -127,7 +145,10 @@ export function buildRuntimeMessage(type: unknown, payload: unknown, origin: str
       const message: RuntimeMessage = {
         type,
         origin,
-        transactions: validateByteArrays(input.transactions, MAX_TRANSACTION_BYTES, 'transactions'),
+        transactions:
+          type === 'SIGN_AND_SEND_TRANSACTION'
+            ? validateSingleTransaction(input.transactions)
+            : validateByteArrays(input.transactions, MAX_TRANSACTION_BYTES, 'transactions'),
       };
       const chain = validateChain(input.chain);
       if (chain !== undefined) message.chain = chain;

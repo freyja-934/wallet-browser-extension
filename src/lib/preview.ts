@@ -37,7 +37,10 @@ export interface SimulationValue {
 /**
  * What the preview needs from the network, injected so the pipeline is a pure
  * function of bytes and answers. Each may throw; a failure leaves the decoded
- * instructions in place and reports the message.
+ * instructions in place and reports the message. `fetchAccounts` is always
+ * called before `simulate`, so a caller that wants the diff pinned to one slot
+ * can carry the read's context slot into the simulation as `minContextSlot`
+ * (the router does).
  */
 export interface PreviewDeps {
   /** The active account: the signer check and the owner whose balances the diff reports. */
@@ -73,7 +76,11 @@ export interface PreviewDiff {
 export interface PreviewResult {
   /** True only when the simulation ran and reported no error. */
   success: boolean;
-  /** Decode error, RPC error, the signer check, or the simulation's own error. */
+  /**
+   * Decode error, RPC error, the signer check, or the simulation's own error.
+   * A lookup-table read that failed while the simulation passed is a `warnings`
+   * entry instead, so the status line and the banners never contradict.
+   */
   error?: string;
   logs?: string[];
   unitsConsumed?: number;
@@ -99,13 +106,15 @@ export const MAX_SIMULATED_ACCOUNTS = 32;
 
 const LAMPORTS_PER_SIGNATURE = 5_000n;
 const DEFAULT_COMPUTE_UNITS_PER_INSTRUCTION = 200_000n;
-const MAX_COMPUTE_UNITS = 1_400_000n;
+/** The runtime's per-transaction ceiling; a `SetComputeUnitLimit` above it is clamped, never charged. */
+export const MAX_COMPUTE_UNITS = 1_400_000n;
 
 /**
  * The fee the runtime charges when the message lands: `LAMPORTS_PER_SIGNATURE`
  * per required signature, plus a priority fee when a compute-budget
  * `SetComputeUnitPrice` (index 3, u64 micro-lamports) is present, over the
- * `SetComputeUnitLimit` (index 2, u32) or the default per-instruction budget.
+ * `SetComputeUnitLimit` (index 2, u32, clamped to `MAX_COMPUTE_UNITS`) or the
+ * default per-instruction budget.
  */
 export function estimatedFeeLamports(tx: VersionedTransaction, lookupTables?: AddressLookupTableAccount[]): bigint {
   const message = tx.message;
@@ -126,7 +135,8 @@ export function estimatedFeeLamports(tx: VersionedTransaction, lookupTables?: Ad
     if (data.length >= 9 && data[0] === 3) price = data.readBigUInt64LE(1);
   }
   if (price !== undefined && price > 0n) {
-    const units = limit ?? (others * DEFAULT_COMPUTE_UNITS_PER_INSTRUCTION > MAX_COMPUTE_UNITS ? MAX_COMPUTE_UNITS : others * DEFAULT_COMPUTE_UNITS_PER_INSTRUCTION);
+    const requested = limit ?? others * DEFAULT_COMPUTE_UNITS_PER_INSTRUCTION;
+    const units = requested > MAX_COMPUTE_UNITS ? MAX_COMPUTE_UNITS : requested;
     // Micro-lamports per unit, rounded up as the runtime does.
     fee += (units * price + 999_999n) / 1_000_000n;
   }
@@ -197,6 +207,8 @@ export async function buildPreview(bytes: Uint8Array, deps: PreviewDeps): Promis
   const unreadable = raw.some((ix) => 'unreadable' in ix);
   const instructions = raw.map(decodeInstruction);
   const warnings = collectWarnings(instructions);
+  // The table failure is a warning of its own: the affected instructions already read as unreadable.
+  if (tableError !== undefined) warnings.push({ level: 'warn', message: tableError });
   const signerOk = requiredSigners(tx).some((key) => key.equals(deps.owner));
   const base = { instructions, warnings, signerOk, unreadable };
 
@@ -213,13 +225,13 @@ export async function buildPreview(bytes: Uint8Array, deps: PreviewDeps): Promis
     pre = await deps.fetchAccounts(keys);
     value = await deps.simulate(tx, addresses);
   } catch (error) {
-    return { ...base, success: false, error: tableError ?? errorText(error, 'Simulation failed') };
+    return { ...base, success: false, error: errorText(error, 'Simulation failed') };
   }
 
   const result: PreviewResult = {
     ...base,
     success: !value.err,
-    error: value.err ? JSON.stringify(value.err) : tableError,
+    error: value.err ? JSON.stringify(value.err) : undefined,
     logs: value.logs ?? [],
     unitsConsumed: value.unitsConsumed,
   };

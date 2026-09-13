@@ -142,13 +142,15 @@ export function requiredSigners(tx: VersionedTransaction): PublicKey[] {
  * also be a valid transaction signature. The signMessage guard.
  */
 export function isTransactionMessage(bytes: Uint8Array): boolean {
-  let message: VersionedMessage;
+  let again: Uint8Array;
   try {
-    message = VersionedMessage.deserialize(bytes);
+    // Both steps may throw: web3.js re-serializes into a packet-sized buffer, so a
+    // message it cannot fit back into 1232 bytes cannot be a valid transaction message.
+    const message: VersionedMessage = VersionedMessage.deserialize(bytes);
+    again = message.serialize();
   } catch {
     return false;
   }
-  const again = message.serialize();
   if (again.length !== bytes.length) return false;
   for (let i = 0; i < bytes.length; i += 1) {
     if (again[i] !== bytes[i]) return false;

@@ -10,10 +10,12 @@ import {
   getApprovalResult,
   getPending,
   installApprovalLifecycle,
+  onCluster,
   onTabRemoved,
   onWindowRemoved,
   rejectAll,
   rejectApproval,
+  rejectForClusterChange,
   rejectForOrigin,
   settleClaimed,
 } from './approvals';
@@ -93,6 +95,85 @@ describe('enqueueApproval', () => {
     await expect(enqueueApproval('connect', A)).rejects.toThrow('Session storage unavailable');
     expect(chromeStub.windows.created()).toEqual([]);
     expect(chromeStub.storage.local.snapshot()).toEqual({});
+  });
+
+  it('writes the pending record before opening the window, so a failed write opens nothing', async () => {
+    // The window sees its own request already stored.
+    const create = chromeStub.windows.create;
+    let storedWhenOpened: StoredPending | undefined;
+    chromeStub.windows.create = async (options) => {
+      storedWhenOpened = Object.values(pendingMap())[0];
+      return create(options);
+    };
+    const id = await enqueueApproval('connect', A, { tabId: 7 });
+    expect(storedWhenOpened).toMatchObject({ origin: A, tabId: 7 });
+    expect(storedWhenOpened?.windowId).toBeUndefined();
+    expect(pendingMap()[id]?.windowId).toBe(chromeStub.windows.created()[0].id);
+
+    // A write that fails: no window.
+    chromeStub.windows.create = create;
+    const set = chromeStub.storage.session.set;
+    chromeStub.storage.session.set = async () => {
+      throw new Error('QUOTA_BYTES exceeded');
+    };
+    await expect(enqueueApproval('connect', B)).rejects.toThrow('QUOTA_BYTES exceeded');
+    chromeStub.storage.session.set = set;
+    expect(chromeStub.windows.created()).toHaveLength(1);
+    expect(Object.values(pendingMap()).map((request) => request.origin)).toEqual([A]);
+  });
+
+  it('a window that fails to open leaves no record behind', async () => {
+    chromeStub.windows.create = async () => {
+      throw new Error('No current window');
+    };
+    await expect(enqueueApproval('connect', A)).rejects.toThrow('No current window');
+    expect(pendingMap()).toEqual({});
+    // The origin may ask again once the browser can open windows.
+    chromeStub.windows.create = async () => ({ id: 1 });
+    await expect(enqueueApproval('connect', A)).resolves.toEqual(expect.any(String));
+  });
+});
+
+describe('onCluster / rejectForClusterChange', () => {
+  it('a transaction request follows the chain it named, else the cluster it was enqueued on', () => {
+    const base = { id: 'x', origin: A, createdAt: 0, deadline: 1 };
+    const sign = { ...base, kind: 'signTransaction' as const, transactions: [[1]] };
+    expect(onCluster({ ...sign, chain: 'solana:mainnet' }, 'mainnet-beta')).toBe(true);
+    expect(onCluster({ ...sign, chain: 'solana:mainnet' }, 'devnet')).toBe(false);
+    expect(onCluster({ ...sign, clusterAtEnqueue: 'devnet' }, 'devnet')).toBe(true);
+    expect(onCluster({ ...sign, clusterAtEnqueue: 'devnet' }, 'mainnet-beta')).toBe(false);
+    // The chain wins over the enqueue cluster when both are present.
+    expect(onCluster({ ...sign, chain: 'solana:devnet', clusterAtEnqueue: 'mainnet-beta' }, 'devnet')).toBe(true);
+    // A record from before the field existed is not rejected.
+    expect(onCluster(sign, 'devnet')).toBe(true);
+    expect(onCluster({ ...sign, kind: 'signAndSendTransaction', clusterAtEnqueue: 'mainnet-beta' }, 'devnet')).toBe(false);
+    // Connect and message requests are not chain-bound.
+    expect(onCluster({ ...base, kind: 'connect' }, 'devnet')).toBe(true);
+    expect(onCluster({ ...base, kind: 'signMessage', messages: [[1]], clusterAtEnqueue: 'mainnet-beta' }, 'devnet')).toBe(true);
+  });
+
+  it('rejects the pending transaction requests built for another cluster and closes their windows', async () => {
+    const byChain = await enqueueApproval('signTransaction', A, { transactions: [[1]], chain: 'solana:mainnet' });
+    const byEnqueue = await enqueueApproval('signAndSendTransaction', B, { transactions: [[1]], clusterAtEnqueue: 'mainnet-beta' });
+    const message = await enqueueApproval('signMessage', 'https://c.example', { messages: [[1]], clusterAtEnqueue: 'mainnet-beta' });
+    const connect = await enqueueApproval('connect', 'https://d.example');
+    const [chainWindow, enqueueWindow] = chromeStub.windows.created();
+
+    expect(await rejectForClusterChange('devnet')).toEqual([byChain, byEnqueue]);
+    await expect(getApprovalResult(byChain)).resolves.toEqual({ status: 'rejected', error: 'Network changed' });
+    await expect(getApprovalResult(byEnqueue)).resolves.toEqual({ status: 'rejected', error: 'Network changed' });
+    await expect(getApprovalResult(message)).resolves.toEqual({ status: 'pending' });
+    await expect(getApprovalResult(connect)).resolves.toEqual({ status: 'pending' });
+    expect(chromeStub.windows.removed()).toEqual([chainWindow.id, enqueueWindow.id]);
+    // Switching back changes nothing that is still pending.
+    expect(await rejectForClusterChange('mainnet-beta')).toEqual([]);
+  });
+
+  it('leaves a claimed request alone', async () => {
+    const id = await enqueueApproval('signTransaction', A, { transactions: [[1]], chain: 'solana:mainnet' });
+    await claimApproval(id);
+    expect(await rejectForClusterChange('devnet')).toEqual([]);
+    await expect(getApprovalResult(id)).resolves.toEqual({ status: 'pending' });
   });
 });
 

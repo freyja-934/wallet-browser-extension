@@ -133,6 +133,11 @@ export interface PendingApproval {
   messages?: number[][];
   /** The chain the page named, when it named one; already checked against the active cluster. */
   chain?: string;
+  /**
+   * The active cluster when a transaction request was enqueued. When the page named
+   * no chain this is what its transaction was built for; a cluster change rejects it.
+   */
+  clusterAtEnqueue?: WalletSettings['cluster'];
   options?: SendOptions;
 }
 

@@ -6,6 +6,7 @@ import {
   validateByteArrays,
   validateChain,
   validateSendOptions,
+  validateSingleTransaction,
 } from './bridge';
 import {
   isExtensionMessageType,
@@ -284,7 +285,10 @@ export function parseRequest(input: unknown): WalletRequest {
       // Validated again here even though the bridge already did: the worker trusts no page-side check.
       const request: Extract<WalletRequest, { type: typeof type }> = {
         type,
-        transactions: validateByteArrays(raw.transactions, MAX_TRANSACTION_BYTES, 'transactions'),
+        transactions:
+          type === 'SIGN_AND_SEND_TRANSACTION'
+            ? validateSingleTransaction(raw.transactions)
+            : validateByteArrays(raw.transactions, MAX_TRANSACTION_BYTES, 'transactions'),
       };
       const chain = validateChain(raw.chain);
       if (chain !== undefined) request.chain = chain;

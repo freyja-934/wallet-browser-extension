@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { buildRuntimeMessage, MAX_BATCH_ITEMS, MAX_MESSAGE_BYTES, MAX_TRANSACTION_BYTES } from './bridge';
+import {
+  buildRuntimeMessage,
+  MAX_BATCH_ITEMS,
+  MAX_MESSAGE_BYTES,
+  MAX_REQUEST_BYTES,
+  MAX_TRANSACTION_BYTES,
+  SINGLE_SEND_MESSAGE,
+} from './bridge';
 import { DAP_MESSAGE_TYPES, EXTENSION_MESSAGE_TYPES } from './messages';
 
 const ORIGIN = 'https://dapp.example';
@@ -98,13 +105,38 @@ describe('buildRuntimeMessage', () => {
     expect(() => buildRuntimeMessage('SIGN_MESSAGE', { message: bytes }, ORIGIN)).toThrow('Invalid messages');
   });
 
-  it('accepts up to MAX_BATCH_ITEMS items and refuses one more', () => {
+  it('accepts up to MAX_BATCH_ITEMS items and refuses one more, naming the cap', () => {
     const full = Array.from({ length: MAX_BATCH_ITEMS }, (_, i) => [i]);
     expect(buildRuntimeMessage('SIGN_TRANSACTION', { transactions: full }, ORIGIN).transactions).toEqual(full);
     expect(buildRuntimeMessage('SIGN_MESSAGE', { messages: full }, ORIGIN).messages).toEqual(full);
     const over = [...full, [0]];
-    expect(() => buildRuntimeMessage('SIGN_TRANSACTION', { transactions: over }, ORIGIN)).toThrow('Invalid transactions');
-    expect(() => buildRuntimeMessage('SIGN_MESSAGE', { messages: over }, ORIGIN)).toThrow('Invalid messages');
+    expect(() => buildRuntimeMessage('SIGN_TRANSACTION', { transactions: over }, ORIGIN)).toThrow(
+      'At most 10 transactions per request',
+    );
+    expect(() => buildRuntimeMessage('SIGN_MESSAGE', { messages: over }, ORIGIN)).toThrow('At most 10 messages per request');
+  });
+
+  it('takes exactly one transaction for SIGN_AND_SEND_TRANSACTION', () => {
+    expect(buildRuntimeMessage('SIGN_AND_SEND_TRANSACTION', { transactions: [[1]] }, ORIGIN).transactions).toEqual([[1]]);
+    expect(() => buildRuntimeMessage('SIGN_AND_SEND_TRANSACTION', { transactions: [[1], [2]] }, ORIGIN)).toThrow(
+      SINGLE_SEND_MESSAGE,
+    );
+    // Over the batch cap too, the answer is the one-per-request rule, not the batch cap.
+    const many = Array.from({ length: MAX_BATCH_ITEMS + 1 }, (_, i) => [i]);
+    expect(() => buildRuntimeMessage('SIGN_AND_SEND_TRANSACTION', { transactions: many }, ORIGIN)).toThrow(SINGLE_SEND_MESSAGE);
+    // An empty batch is still simply invalid.
+    expect(() => buildRuntimeMessage('SIGN_AND_SEND_TRANSACTION', { transactions: [] }, ORIGIN)).toThrow('Invalid transactions');
+  });
+
+  it('caps the bytes of a whole batch at MAX_REQUEST_BYTES', () => {
+    // Five messages at the per-item cap: within the item count, past the byte cap.
+    const item = new Array(MAX_MESSAGE_BYTES).fill(0);
+    expect(MAX_MESSAGE_BYTES * 5).toBeGreaterThan(MAX_REQUEST_BYTES);
+    expect(() => buildRuntimeMessage('SIGN_MESSAGE', { messages: [item, item, item, item, item] }, ORIGIN)).toThrow(
+      'Request too large',
+    );
+    // Exactly at the cap is fine.
+    expect(buildRuntimeMessage('SIGN_MESSAGE', { messages: [item, item, item, item] }, ORIGIN).messages).toHaveLength(4);
   });
 
   it('copies a known chain, drops an absent one, and refuses anything else', () => {

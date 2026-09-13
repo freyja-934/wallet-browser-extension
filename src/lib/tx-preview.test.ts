@@ -404,6 +404,19 @@ describe('isTransactionMessage', () => {
     expect(isTransactionMessage(new VersionedTransaction(v0).serialize())).toBe(false);
   });
 
+  it('is false, without throwing, for a message far larger than a packet', () => {
+    // web3.js may parse a large "message" and then fail to re-serialize it into
+    // its 1232-byte packet buffer; that throw is a "no", not an error.
+    const large = new TextEncoder().encode('x'.repeat(60 * 1024));
+    expect(() => isTransactionMessage(large)).not.toThrow();
+    expect(isTransactionMessage(large)).toBe(false);
+    // The same shape with a plausible header byte sequence.
+    const framed = new Uint8Array(60 * 1024);
+    framed.set([1, 0, 1, 255], 0);
+    expect(() => isTransactionMessage(framed)).not.toThrow();
+    expect(isTransactionMessage(framed)).toBe(false);
+  });
+
   it('is false when the bytes parse but do not round-trip, since no valid signature could cover them', () => {
     const legacy = Message.compile({ payerKey: payer, recentBlockhash: PublicKey.default.toBase58(), instructions });
     const trailing = Buffer.concat([legacy.serialize(), Buffer.from([0])]);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_BATCH_ITEMS, MAX_MESSAGE_BYTES, MAX_TRANSACTION_BYTES } from './bridge';
+import { MAX_BATCH_ITEMS, MAX_MESSAGE_BYTES, MAX_REQUEST_BYTES, MAX_TRANSACTION_BYTES, SINGLE_SEND_MESSAGE } from './bridge';
 import { EXTENSION_MESSAGE_TYPES, type ExtensionMessageType } from './messages';
 import { MAX_HELIUS_KEY_LENGTH, parseRequest, PROTOCOL_COVERS_ALLOWLIST } from './protocol';
 
@@ -47,7 +47,7 @@ const cases: Record<ExtensionMessageType, Case> = {
     error: 'Invalid transactions',
   },
   SIGN_AND_SEND_TRANSACTION: {
-    valid: { transactions: [[0, 255], [7]], chain: 'solana:mainnet', options: { skipPreflight: true, commitment: 'confirmed' } },
+    valid: { transactions: [[0, 255]], chain: 'solana:mainnet', options: { skipPreflight: true, commitment: 'confirmed' } },
     malformed: { transactions: 'AQ==' },
     error: 'Invalid transactions',
   },
@@ -160,19 +160,43 @@ describe('parseRequest', () => {
     });
     expect(parseRequest({ type: 'SIGN_MESSAGE', messages: full })).toStrictEqual({ type: 'SIGN_MESSAGE', messages: full });
     const over = [...full, [1]];
+    expect(() => parseRequest({ type: 'SIGN_TRANSACTION', transactions: over })).toThrow('At most 10 transactions per request');
     for (const type of ['SIGN_TRANSACTION', 'SIGN_AND_SEND_TRANSACTION'] as const) {
-      expect(() => parseRequest({ type, transactions: over })).toThrow('Invalid transactions');
       expect(() => parseRequest({ type, transactions: [] })).toThrow('Invalid transactions');
       expect(() => parseRequest({ type, transactions: [[]] })).toThrow('Invalid transactions');
-      expect(() => parseRequest({ type, transactions: [[1], 'x'] })).toThrow('Invalid transactions');
       expect(() => parseRequest({ type, transactions: [new Array(MAX_TRANSACTION_BYTES + 1).fill(0)] })).toThrow(
         'Invalid transactions',
       );
     }
-    expect(() => parseRequest({ type: 'SIGN_MESSAGE', messages: over })).toThrow('Invalid messages');
+    expect(() => parseRequest({ type: 'SIGN_TRANSACTION', transactions: [[1], 'x'] })).toThrow('Invalid transactions');
+    expect(() => parseRequest({ type: 'SIGN_MESSAGE', messages: over })).toThrow('At most 10 messages per request');
     expect(() => parseRequest({ type: 'SIGN_MESSAGE', messages: [] })).toThrow('Invalid messages');
     // PREVIEW_TRANSACTION still takes one transaction.
     expect(() => parseRequest({ type: 'PREVIEW_TRANSACTION', transactions: [[1]] })).toThrow('Invalid transaction');
+  });
+
+  it('takes exactly one transaction on SIGN_AND_SEND_TRANSACTION', () => {
+    expect(parseRequest({ type: 'SIGN_AND_SEND_TRANSACTION', transactions: [[1]] })).toStrictEqual({
+      type: 'SIGN_AND_SEND_TRANSACTION',
+      transactions: [[1]],
+    });
+    expect(() => parseRequest({ type: 'SIGN_AND_SEND_TRANSACTION', transactions: [[1], [2]] })).toThrow(SINGLE_SEND_MESSAGE);
+    const many = Array.from({ length: MAX_BATCH_ITEMS + 1 }, (_, i) => [i + 1]);
+    expect(() => parseRequest({ type: 'SIGN_AND_SEND_TRANSACTION', transactions: many })).toThrow(SINGLE_SEND_MESSAGE);
+    // A second item that is not even a byte array is refused for its count first.
+    expect(() => parseRequest({ type: 'SIGN_AND_SEND_TRANSACTION', transactions: [[1], 'x'] })).toThrow(SINGLE_SEND_MESSAGE);
+  });
+
+  it('caps a batch at MAX_REQUEST_BYTES in total', () => {
+    const item = new Array(MAX_MESSAGE_BYTES).fill(0);
+    expect(MAX_MESSAGE_BYTES * 5).toBeGreaterThan(MAX_REQUEST_BYTES);
+    expect(() => parseRequest({ type: 'SIGN_MESSAGE', messages: [item, item, item, item, item] })).toThrow('Request too large');
+    expect(parseRequest({ type: 'SIGN_MESSAGE', messages: [item, item, item, item] }).type).toBe('SIGN_MESSAGE');
+    // Ten full-size transactions are well within it.
+    const tx = new Array(MAX_TRANSACTION_BYTES).fill(0);
+    expect(parseRequest({ type: 'SIGN_TRANSACTION', transactions: Array.from({ length: MAX_BATCH_ITEMS }, () => tx) }).type).toBe(
+      'SIGN_TRANSACTION',
+    );
   });
 
   it('accepts the four Solana chain ids on a sign request, drops an absent one, and refuses others', () => {

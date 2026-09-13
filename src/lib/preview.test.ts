@@ -14,6 +14,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildPreview,
   estimatedFeeLamports,
+  MAX_COMPUTE_UNITS,
   MAX_SIMULATED_ACCOUNTS,
   NOT_A_SIGNER_ERROR,
   UNREADABLE_TRANSACTION_WARNING,
@@ -289,7 +290,8 @@ describe('buildPreview', () => {
     // The table entry is writable and made it into the simulated set.
     expect(d.simulate.mock.calls[0][1]).toEqual([payer.toBase58(), other.toBase58()]);
 
-    // Without the table the instruction is unreadable and the preview says so, even though the simulation passed.
+    // Without the table the instruction is unreadable and the preview says so, even though the
+    // simulation passed: the table failure is a warning, never an `error` beside `success: true`.
     const missing = await buildPreview(
       serialized,
       deps({
@@ -301,9 +303,38 @@ describe('buildPreview', () => {
     );
     expect(missing.unreadable).toBe(true);
     expect(missing.success).toBe(true);
-    expect(missing.error).toBe('Table not found');
+    expect(missing.error).toBeUndefined();
     expect(missing.instructions.map((ix) => ix.label)).toEqual(['Unreadable instruction']);
-    expect(missing.warnings).toEqual([{ level: 'danger', message: expect.stringContaining('lookup table') }]);
+    expect(missing.warnings).toEqual([
+      { level: 'danger', message: expect.stringContaining('lookup table') },
+      { level: 'warn', message: 'Table not found' },
+    ]);
+  });
+
+  it('reports a failed table read as a warning and a failed simulation as the error, side by side', async () => {
+    const tableKey = PublicKey.unique();
+    const table = new AddressLookupTableAccount({
+      key: tableKey,
+      state: { deactivationSlot: 0n, lastExtendedSlot: 0, lastExtendedSlotStartIndex: 0, addresses: [other] },
+    });
+    const message = new TransactionMessage({
+      payerKey: payer,
+      recentBlockhash: PublicKey.default.toBase58(),
+      instructions: [SystemProgram.transfer({ fromPubkey: payer, toPubkey: other, lamports: 1 })],
+    }).compileToV0Message([table]);
+    const preview = await buildPreview(
+      new VersionedTransaction(message).serialize(),
+      deps({
+        fetchLookupTables: async () => {
+          throw new Error('Table not found');
+        },
+        simulate: async () => {
+          throw new Error('503');
+        },
+      }),
+    );
+    expect(preview).toMatchObject({ success: false, error: '503', unreadable: true });
+    expect(preview.warnings).toContainEqual({ level: 'warn', message: 'Table not found' });
   });
 });
 
@@ -331,5 +362,16 @@ describe('estimatedFeeLamports', () => {
     ]);
     // One non-budget instruction: 200000 units * 1 / 1e6 = 0.2 → 1
     expect(estimatedFeeLamports(noLimit)).toBe(5_001n);
+  });
+
+  it('clamps an explicit unit limit above the runtime maximum', () => {
+    const oversized = tx([
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 2_000_000 }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1_000 }),
+      SystemProgram.transfer({ fromPubkey: payer, toPubkey: other, lamports: 1 }),
+    ]);
+    // 1_400_000 * 1000 / 1e6 = 1400, not 2000.
+    expect(MAX_COMPUTE_UNITS).toBe(1_400_000n);
+    expect(estimatedFeeLamports(oversized)).toBe(5_000n + 1_400n);
   });
 });
