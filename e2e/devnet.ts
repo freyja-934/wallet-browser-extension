@@ -108,10 +108,13 @@ function formatSol(lamports: bigint): string {
 export async function skipUnlessFixtureHolds(needs: bigint, what: string): Promise<void> {
   const balance = await fixtureBalance();
   if (balance >= needs) return;
-  test.skip(
-    true,
+  const reason =
     `devnet fixture ${TEST_ADDRESS} holds ${formatSol(balance)} SOL; ${what} needs ${formatSol(needs)} SOL ` +
-      `(short ${formatSol(needs - balance)} SOL). Top it up at https://faucet.solana.com, then re-run. ` +
-      'An empty fixture is a faucet fact, not a wallet bug.',
-  );
+    `(short ${formatSol(needs - balance)} SOL). Top it up at https://faucet.solana.com, then re-run. ` +
+    'An empty fixture is a faucet fact, not a wallet bug.';
+  // The default `list` reporter shows a skip as a bare dash and keeps the reason in
+  // the report only. Print it too: a run that quietly skips six tests has to say why
+  // where the person watching it will actually read it.
+  console.log(`SKIP: ${reason}`);
+  test.skip(true, reason);
 }
