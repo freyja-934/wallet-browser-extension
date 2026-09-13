@@ -485,8 +485,15 @@ test('cancelling a pending approval clears it, and a late Approve is refused', a
   const id = new URL(approval.url()).searchParams.get('id');
   expect(id).toBeTruthy();
 
-  // The withdrawal the content script makes when the page gives up, driven
+  // The withdrawal that ends a request the page stopped waiting for, driven
   // straight at the worker rather than by waiting out the page's 120 s timeout.
+  // It is sent from the popup, so this exercises the extension branch of
+  // CANCEL_APPROVAL. The page branch — a cancel accepted only for the
+  // requesting origin — cannot be driven from here: the bridge forwards only
+  // dApp message types and CANCEL_APPROVAL is not one, so the content script is
+  // the only thing that sends it. That branch is covered in router.test.ts
+  // ('CANCEL_APPROVAL from the page rejects its own pending request', and from
+  // another page leaves it alone).
   const cancelled = await popup.evaluate(
     (requestId) => chrome.runtime.sendMessage({ type: 'CANCEL_APPROVAL', id: requestId }),
     id,

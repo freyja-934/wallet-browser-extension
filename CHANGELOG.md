@@ -15,11 +15,19 @@ cuts the release.
 ### Security
 
 - **SHIP-1** — A page could override the bridged message type and reach
-  popup-only worker handlers; the content script now copies only the fields each
-  dApp message accepts, and sets `type` and `origin` last.
+  popup-only worker handlers; the content script now honours only the outer
+  `type` and builds the worker message field by field from the fields that type
+  accepts, never spreading the page's payload into it. The worker binds the
+  request to the browser's view of the sender, not to any `origin` it carries.
+- **SHIP-3** — `just store` refuses to zip a build that carries an API key, so
+  a Helius key in the shell or in `.env` cannot reach the Chrome Web Store
+  bundle.
 - **SHIP-5** — Approvals are claimed before they are fulfilled and bound to a
   validated requesting origin, so nothing settles a request twice and no site
   sees or signs for an account it was never granted.
+- **SHIP-6** — A page can no longer have the wallet sign serialized transaction
+  bytes as an opaque message: such a signature is a valid transaction
+  signature, so `signMessage` refuses anything that decodes as one.
 - **SHIP-7b** — The vault carries its own KDF parameters and is written at
   600,000 PBKDF2 iterations (v1 blobs migrate on the next unlock); secrets no
   longer travel through Redux, and a second create is refused rather than
@@ -42,7 +50,9 @@ cuts the release.
 - **SHIP-7b** — Accounts can be added and renamed, and auto-lock is idle-based
   rather than a countdown from unlock.
 - **SHIP-8b** — Modals trap Tab and Shift+Tab, focus their first control on
-  open, and hand focus back to the control that opened them.
+  open and again when the sheet swaps step, hand focus back to the control that
+  opened them, and stack: a dialog opened over a sheet owns the keyboard until
+  it closes. Each sheet is named by its own heading.
 
 ### Changed
 
@@ -62,8 +72,14 @@ cuts the release.
   as Wallet Standard 1.0.0 with a valid icon; an RPC failure reaches the
   approval screen as a decode-only preview instead of a thrown error, and
   Approve stays disabled until the preview settles.
-- **SHIP-7a** — A send looks in the ledger before calling itself expired, and
-  only one send runs at a time.
+- **SHIP-7a** — A send looks in the ledger before calling itself expired, only
+  one send runs at a time, and Review blocks a token send addressed to a token
+  account rather than crediting nobody.
+- **SHIP-7b** — A recovery phrase is normalised on paste (surrounding quotes
+  dropped, case lowered, whitespace collapsed) before BIP39 validation, so a
+  phrase from a password manager or a PDF is no longer called invalid; and the
+  "I stored this phrase" attestation is a real user action rather than a
+  read-only box that ticked itself on reveal.
 
 ---
 

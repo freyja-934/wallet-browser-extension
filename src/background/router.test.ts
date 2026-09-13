@@ -1349,15 +1349,18 @@ describe('multiple accounts', () => {
  */
 describe('every arm while the wallet is locked', () => {
   interface LockedCase {
-    message: Record<string, unknown>;
+    /** A function when the message names something `setup` created. */
+    message: Record<string, unknown> | (() => Record<string, unknown>);
     /** The popup, unless this is an arm a connected page uses. */
     from?: 'page';
     /** Anything to arrange after the lock, before the message. */
-    setup?: () => void;
+    setup?: () => void | Promise<void>;
     /** The message the arm throws while locked... */
     throws?: string;
     /** ...or what its answer has to be. */
     check?: (response: WalletResponse) => Promise<void> | void;
+    /** Checked after either of those: what the arm did on its way through. */
+    after?: () => Promise<void> | void;
   }
 
   /** A queued approval is not a signature: it cannot be fulfilled until the wallet is open. */
@@ -1366,6 +1369,38 @@ describe('every arm while the wallet is locked', () => {
     expect(typeof pendingId).toBe('string');
     await expect(approve(pendingId)).rejects.toThrow('Wallet is locked');
   };
+
+  /** A token send, so the arms that pass params through are checked on all four of them. */
+  const MINT = 'So11111111111111111111111111111111111111112';
+  const SOURCE = 'GfVPzUxMDvhFJ1Xs6C9i47XQRSapTd8LHw5grGuTquyQ';
+
+  /**
+   * A real approval, enqueued by the connected page while the wallet is locked
+   * and read back the way approve.html reads the request it was opened for.
+   */
+  function lockedPendingRequestCase(): LockedCase {
+    let pendingId = '';
+    return {
+      setup: async () => {
+        ({ pendingId } = (await handleMessage(
+          { type: 'SIGN_MESSAGE', messages: [[104, 105]] },
+          page,
+          BASE,
+        )) as { pendingId: string });
+      },
+      message: () => ({ type: 'GET_PENDING_REQUEST', id: pendingId }),
+      check: (response) => {
+        const { request } = response as { request: PendingApproval | null };
+        // Everything the window renders from: what is being asked, by whom, and over what.
+        expect(request).toMatchObject({
+          id: pendingId,
+          kind: 'signMessage',
+          origin: page.origin,
+          messages: [[104, 105]],
+        });
+      },
+    };
+  }
 
   const cases: { [T in ExtensionMessageType]: LockedCase } = {
     GET_STATE: {
@@ -1477,12 +1512,12 @@ describe('every arm while the wallet is locked', () => {
       message: { type: 'PREVIEW_TRANSACTION', transaction: selfTransfer() },
       throws: 'Wallet is locked',
     },
-    GET_PENDING_REQUEST: {
-      message: { type: 'GET_PENDING_REQUEST', id: 'no-such-id' },
-      check: (response) => {
-        expect(response).toEqual({ request: null });
-      },
-    },
+    // approve.html reads the request it was opened for through this arm, and a
+    // request that arrives while locked is exactly the case where it must work:
+    // no read, no inline unlock form, and the user can never reach Approve. So
+    // this asks for a request that exists rather than for a missing id, which
+    // would answer `null` whether or not the lock let it through.
+    GET_PENDING_REQUEST: lockedPendingRequestCase(),
     POLL_APPROVAL: {
       message: { type: 'POLL_APPROVAL', id: 'no-such-id' },
       check: (response) => {
@@ -1506,18 +1541,40 @@ describe('every arm while the wallet is locked', () => {
         expect(await handleMessage({ type: 'GET_CONNECTED_SITES' }, popup, BASE)).toEqual({ sites: [] });
       },
     },
-    // Both transfer arms hand the message to the transfer module unchanged and
-    // surface its error verbatim; the lock itself lives there, in the keypair it
-    // cannot get (see `the default io` in transfers.test.ts).
+    // Neither transfer arm enforces the lock: both hand the parsed params to the
+    // transfer module and surface whatever it throws verbatim. The lock itself
+    // lives there, in the keypair it cannot get (see `the default io` in
+    // transfers.test.ts), so the mock stands in for it and what is checked here
+    // is only the pass-through — including that the call actually reached it.
     SEND_TRANSFER: {
-      message: { type: 'SEND_TRANSFER', to: TEST_ADDRESS, amountSmallest: '1' },
-      setup: () => rpc.sendTransfer.mockRejectedValue(new Error('Wallet is locked')),
+      message: { type: 'SEND_TRANSFER', to: TEST_ADDRESS, amountSmallest: '1', mint: MINT, source: SOURCE },
+      setup: () => {
+        rpc.sendTransfer.mockRejectedValue(new Error('Wallet is locked'));
+      },
       throws: 'Wallet is locked',
+      after: () => {
+        expect(rpc.sendTransfer).toHaveBeenCalledWith({
+          to: TEST_ADDRESS,
+          amountSmallest: '1',
+          mint: MINT,
+          source: SOURCE,
+        });
+      },
     },
     ESTIMATE_FEE: {
-      message: { type: 'ESTIMATE_FEE', to: TEST_ADDRESS, amountSmallest: '1' },
-      setup: () => rpc.estimateTransfer.mockRejectedValue(new Error('Wallet is locked')),
+      message: { type: 'ESTIMATE_FEE', to: TEST_ADDRESS, amountSmallest: '1', mint: MINT, source: SOURCE },
+      setup: () => {
+        rpc.estimateTransfer.mockRejectedValue(new Error('Wallet is locked'));
+      },
       throws: 'Wallet is locked',
+      after: () => {
+        expect(rpc.estimateTransfer).toHaveBeenCalledWith({
+          to: TEST_ADDRESS,
+          amountSmallest: '1',
+          mint: MINT,
+          source: SOURCE,
+        });
+      },
     },
   };
 
@@ -1525,14 +1582,16 @@ describe('every arm while the wallet is locked', () => {
     await createFixtureWallet();
     await connectPage(page);
     await handleMessage({ type: 'LOCK' }, popup, BASE);
-    testCase.setup?.();
+    await testCase.setup?.();
 
     const sender = testCase.from === 'page' ? page : popup;
+    const message = typeof testCase.message === 'function' ? testCase.message() : testCase.message;
     if (testCase.throws !== undefined) {
-      await expect(handleMessage(testCase.message, sender, BASE)).rejects.toThrow(testCase.throws);
+      await expect(handleMessage(message, sender, BASE)).rejects.toThrow(testCase.throws);
     } else {
-      await testCase.check!(await handleMessage(testCase.message, sender, BASE));
+      await testCase.check!(await handleMessage(message, sender, BASE));
     }
+    await testCase.after?.();
 
     // Whatever the arm did, it did not open the wallet, and nothing was broadcast.
     expect(stateOf(await handleMessage({ type: 'GET_STATE' }, popup, BASE)).isLocked).toBe(true);
