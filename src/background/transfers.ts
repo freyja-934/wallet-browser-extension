@@ -1,17 +1,20 @@
 import {
+  ACCOUNT_SIZE,
   createAssociatedTokenAccountIdempotentInstruction,
   createTransferCheckedInstruction,
+  getAccount,
   getAssociatedTokenAddressSync,
   getMint,
   TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
 } from '@solana/spl-token';
 import { Connection, Keypair, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
+import bs58 from 'bs58';
 import { getCluster, rpcUrlsFor } from '../config/constants';
 import { errorMessage } from '../lib/errors';
-import type { FeeEstimate, RecipientInfo } from '../lib/protocol';
+import { SendError, type FeeEstimate, type RecipientInfo } from '../lib/protocol';
 import { readyConnection } from '../lib/rpc-rotate';
-import { formatLamports } from '../lib/units';
+import { FALLBACK_FEE_LAMPORTS, formatLamports } from '../lib/units';
 import { getSettings, getKeypair } from './keyring';
 
 export async function getConnection(): Promise<Connection> {
@@ -23,6 +26,12 @@ export interface TransferParams {
   to: string;
   amountSmallest: string;
   mint?: string;
+  /**
+   * The token account the tokens leave. The popup sends the row the user picked,
+   * which is not always the associated token account; omitted, the signer's ATA
+   * is used.
+   */
+  source?: string;
 }
 
 /** The signer the worker holds and the connection it resolved. Tests pass fakes; production omits it. */
@@ -31,8 +40,8 @@ export interface TransferIo {
   signer: Keypair;
 }
 
-/** What a one-signature transaction costs when the RPC will not say. */
-export const FALLBACK_FEE_LAMPORTS = 5000n;
+/** What a one-signature transaction costs when the RPC will not say; the same figure Max uses. */
+export { FALLBACK_FEE_LAMPORTS };
 export const CONFIRM_POLL_MS = 400;
 /** Hard cap on the confirmation loop; the block-height check normally ends it well before. */
 export const CONFIRM_TIMEOUT_MS = 90_000;
@@ -49,6 +58,7 @@ interface ParsedTransfer {
   to: PublicKey;
   amount: bigint;
   mint?: PublicKey;
+  source?: PublicKey;
 }
 
 function parseParams(params: TransferParams): ParsedTransfer {
@@ -66,7 +76,14 @@ function parseParams(params: TransferParams): ParsedTransfer {
   } catch {
     throw new Error('Invalid mint address');
   }
-  return { to, amount, mint };
+  if (params.source === undefined) return { to, amount, mint };
+  let source: PublicKey;
+  try {
+    source = new PublicKey(params.source);
+  } catch {
+    throw new Error('Invalid source address');
+  }
+  return { to, amount, mint, source };
 }
 
 /** SPL Token or Token-2022 from the mint's owner; anything else is not a token this wallet can move. */
@@ -81,6 +98,8 @@ export interface BuiltTransfer {
   transaction: Transaction;
   /** Present for a token send: the program the mint lives under and its decimals. */
   mint?: { programId: PublicKey; decimals: number };
+  /** Present for a token send: the account the transfer credits, so an estimate can see whether it exists. */
+  destination?: PublicKey;
 }
 
 /**
@@ -95,9 +114,9 @@ export async function buildTransfer(connection: Connection, signer: Keypair, par
   transaction.feePayer = signer.publicKey;
 
   if (!params.mint) {
-    if (params.amount > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('Amount too large');
+    // web3.js takes lamports as a bigint, so no amount a u64 can hold has to round-trip through a number.
     transaction.add(
-      SystemProgram.transfer({ fromPubkey: signer.publicKey, toPubkey: params.to, lamports: Number(params.amount) }),
+      SystemProgram.transfer({ fromPubkey: signer.publicKey, toPubkey: params.to, lamports: params.amount }),
     );
     return { transaction };
   }
@@ -106,21 +125,55 @@ export async function buildTransfer(connection: Connection, signer: Keypair, par
   if (!mintInfo) throw new Error('Mint not found');
   const programId = tokenProgramOf(mintInfo.owner);
   const { decimals } = await getMint(connection, params.mint, 'confirmed', programId);
-  const source = getAssociatedTokenAddressSync(params.mint, signer.publicKey, true, programId);
+  const source = params.source
+    ? await checkedSource(connection, params.source, signer.publicKey, params.mint, programId)
+    : getAssociatedTokenAddressSync(params.mint, signer.publicKey, true, programId);
   const destination = getAssociatedTokenAddressSync(params.mint, params.to, true, programId);
   transaction.add(
     createAssociatedTokenAccountIdempotentInstruction(signer.publicKey, destination, params.to, params.mint, programId),
     createTransferCheckedInstruction(source, params.mint, destination, signer.publicKey, params.amount, decimals, [], programId),
   );
-  return { transaction, mint: { programId, decimals } };
+  return { transaction, mint: { programId, decimals }, destination };
 }
 
-/** What the chain says about the recipient; the popup warns on the shapes a wallet address should not have. */
-async function recipientInfo(connection: Connection, to: PublicKey): Promise<RecipientInfo> {
-  const info = await connection.getAccountInfo(to, 'confirmed');
+/**
+ * A caller-supplied source only spends what the signer owns: the account must
+ * exist under this mint's program, hold this mint, and be owned by the signer.
+ * Anything else is a stale or mistaken row, not an account this wallet can move.
+ */
+async function checkedSource(
+  connection: Connection,
+  source: PublicKey,
+  owner: PublicKey,
+  mint: PublicKey,
+  programId: PublicKey,
+): Promise<PublicKey> {
+  let account: Awaited<ReturnType<typeof getAccount>>;
+  try {
+    account = await getAccount(connection, source, 'confirmed', programId);
+  } catch {
+    throw new Error('Token account mismatch');
+  }
+  if (!account.owner.equals(owner) || !account.mint.equals(mint)) throw new Error('Token account mismatch');
+  return source;
+}
+
+/**
+ * What the chain says about the recipient; the popup warns on the shapes a wallet
+ * address should not have. For a token send `destination` is the recipient's
+ * associated token account, and `exists` is about that account — whether this
+ * send has to create (and pay rent for) it — while `walletExists` stays about the
+ * address the user typed.
+ */
+async function recipientInfo(connection: Connection, to: PublicKey, destination?: PublicKey): Promise<RecipientInfo> {
+  const [wallet, credited] = await Promise.all([
+    connection.getAccountInfo(to, 'confirmed'),
+    destination ? connection.getAccountInfo(destination, 'confirmed') : null,
+  ]);
   return {
-    exists: info !== null,
-    isTokenAccount: info !== null && TOKEN_PROGRAMS.has(info.owner.toBase58()),
+    exists: (destination ? credited : wallet) !== null,
+    walletExists: wallet !== null,
+    isTokenAccount: wallet !== null && TOKEN_PROGRAMS.has(wallet.owner.toBase58()),
     offCurve: !PublicKey.isOnCurve(to.toBytes()),
   };
 }
@@ -137,8 +190,9 @@ async function feeFor(connection: Connection, transaction: Transaction, blockhas
   }
 }
 
-async function rentExemptMin(connection: Connection): Promise<bigint> {
-  return BigInt(await connection.getMinimumBalanceForRentExemption(0));
+/** What an account of `size` bytes must hold to be rent-exempt: 0 for a bare system account. */
+async function rentExemptMin(connection: Connection, size = 0): Promise<bigint> {
+  return BigInt(await connection.getMinimumBalanceForRentExemption(size));
 }
 
 /**
@@ -148,12 +202,13 @@ async function rentExemptMin(connection: Connection): Promise<bigint> {
 export async function estimateTransfer(params: TransferParams, io?: TransferIo): Promise<FeeEstimate> {
   const { connection, signer } = io ?? (await defaultIo());
   const parsed = parseParams(params);
-  const { transaction } = await buildTransfer(connection, signer, parsed);
+  const { transaction, destination } = await buildTransfer(connection, signer, parsed);
   const { blockhash } = await connection.getLatestBlockhash('confirmed');
   const [feeLamports, rent, recipient] = await Promise.all([
     feeFor(connection, transaction, blockhash),
-    rentExemptMin(connection),
-    recipientInfo(connection, parsed.to),
+    // A token send may have to create a token account of the mint's program, not a bare one.
+    rentExemptMin(connection, parsed.mint ? ACCOUNT_SIZE : 0),
+    recipientInfo(connection, parsed.to, destination),
   ]);
   return { feeLamports: feeLamports.toString(), rentExemptMin: rent.toString(), recipient };
 }
@@ -200,30 +255,55 @@ export async function sendTransfer(params: TransferParams, io?: TransferIo): Pro
       preflightCommitment: 'confirmed',
     });
   } catch (error) {
-    throw new Error(errorMessage(error, 'Broadcast failed'));
+    // The fee payer's signature *is* the transaction's id, and it exists before the
+    // broadcast: a send that failed on the way out may still have reached the cluster,
+    // so name it rather than leaving the user nothing to look up.
+    throw new SendError('broadcast-failed', errorMessage(error, 'Broadcast failed'), signatureOf(transaction));
   }
   return confirmTransfer(connection, signature, latest.lastValidBlockHeight);
 }
 
+/** The signed transaction's own id, base58; `undefined` if it somehow carries no signature. */
+function signatureOf(transaction: Transaction): string | undefined {
+  return transaction.signature ? bs58.encode(transaction.signature) : undefined;
+}
+
+/** One look at the signature's status. `history` widens the search past the recent-status window. */
+async function statusOf(connection: Connection, signature: string, history: boolean) {
+  const { value } = await connection.getSignatureStatuses([signature], { searchTransactionHistory: history });
+  return value[0] ?? null;
+}
+
 /**
  * Poll until the signature is confirmed, has failed on-chain, or can no longer
- * land because the chain has moved past the blockhash's last valid height.
- * Transient RPC errors are retried until the hard cap.
+ * land because the chain has moved past the blockhash's last valid height. The
+ * poll reads the recent-status window only — `searchTransactionHistory` is a
+ * ledger scan, too heavy for a 400 ms loop — so before calling a send expired
+ * there is one history lookup: the transaction may have landed in the seconds
+ * between the last status read and the height check, and declaring that expired
+ * would invite the user to send twice. Transient RPC errors are retried until
+ * the hard cap; whatever the outcome, the failure carries the signature so the
+ * popup can point at the explorer.
  */
 async function confirmTransfer(connection: Connection, signature: string, lastValidBlockHeight: number): Promise<string> {
   const deadline = Date.now() + CONFIRM_TIMEOUT_MS;
   for (;;) {
     try {
-      const { value } = await connection.getSignatureStatuses([signature], { searchTransactionHistory: true });
-      const status = value[0];
+      const status = await statusOf(connection, signature, false);
       if (status?.err) throw new OnChainError(status.err);
       if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized') return signature;
-      if ((await connection.getBlockHeight('confirmed')) > lastValidBlockHeight) throw new Error(EXPIRED_MESSAGE);
+      if ((await connection.getBlockHeight('confirmed')) > lastValidBlockHeight) {
+        const landed = await statusOf(connection, signature, true);
+        if (landed?.err) throw new OnChainError(landed.err);
+        // Found at all means it is in the ledger; the blockhash cannot replay it.
+        if (landed) return signature;
+        throw new SendError('expired', EXPIRED_MESSAGE, signature);
+      }
     } catch (error) {
-      if (error instanceof OnChainError || (error instanceof Error && error.message === EXPIRED_MESSAGE)) throw error;
+      if (error instanceof OnChainError || error instanceof SendError) throw error;
       /* transient RPC failure: try again until the cap */
     }
-    if (Date.now() >= deadline) throw new Error(TIMED_OUT_MESSAGE);
+    if (Date.now() >= deadline) throw new SendError('timeout', TIMED_OUT_MESSAGE, signature);
     await new Promise((resolve) => setTimeout(resolve, CONFIRM_POLL_MS));
   }
 }

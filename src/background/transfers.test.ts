@@ -1,4 +1,6 @@
 import {
+  ACCOUNT_SIZE,
+  AccountLayout,
   ASSOCIATED_TOKEN_PROGRAM_ID,
   decodeTransferCheckedInstruction,
   getAssociatedTokenAddressSync,
@@ -8,18 +10,24 @@ import {
   TOKEN_PROGRAM_ID,
 } from '@solana/spl-token';
 import { Keypair, PublicKey, SystemProgram, Transaction, type AccountInfo, type Connection, type Message } from '@solana/web3.js';
-import { describe, expect, it, vi } from 'vitest';
+import bs58 from 'bs58';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { SendError } from '../lib/protocol';
 import {
   CONFIRM_POLL_MS,
+  CONFIRM_TIMEOUT_MS,
   EXPIRED_MESSAGE,
   estimateTransfer,
   FALLBACK_FEE_LAMPORTS,
   sendTransfer,
+  TIMED_OUT_MESSAGE,
   type TransferIo,
 } from './transfers';
 
 const SIGNATURE = '5VERv8NMvzbJMEkV8xnrLkEaWRtSz9CosKDYjCJjBRnbJLgp8uirBgmQpjKhoR4tjF3ZpRzrFmBV6UjKdiSZkQUW';
 const RENT = 890_880;
+/** What a 165-byte token account costs; the figure a token send has to fund, not the bare-account one. */
+const TOKEN_RENT = 2_039_280;
 const BLOCKHASH = Keypair.generate().publicKey.toBase58();
 const LAST_VALID = 100;
 
@@ -42,7 +50,7 @@ function fakeRpc(overrides: Partial<Record<keyof Rpc, (...args: any[]) => Promis
   const base = {
     getLatestBlockhash: vi.fn(async () => ({ blockhash: BLOCKHASH, lastValidBlockHeight: LAST_VALID })),
     getFeeForMessage: vi.fn(async (_message: Message) => ({ context: { slot: 1 }, value: 5000 as number | null })),
-    getMinimumBalanceForRentExemption: vi.fn(async () => RENT),
+    getMinimumBalanceForRentExemption: vi.fn(async (size: number) => (size === 0 ? RENT : TOKEN_RENT)),
     getAccountInfo: vi.fn(async (): Promise<AccountInfo<Buffer> | null> => null),
     getBalance: vi.fn(async () => 1_000_000_000),
     sendRawTransaction: vi.fn(async (_bytes: Uint8Array, _options?: unknown) => SIGNATURE),
@@ -80,6 +88,36 @@ function mintAccount(programId: PublicKey, decimals: number): AccountInfo<Buffer
   return account(programId, data);
 }
 
+/** An initialized token account of `mint`, owned by `owner`, under `programId`. */
+function tokenAccount(programId: PublicKey, mint: PublicKey, owner: PublicKey, amount = 1_000_000n): AccountInfo<Buffer> {
+  const data = Buffer.alloc(ACCOUNT_SIZE);
+  AccountLayout.encode(
+    {
+      mint,
+      owner,
+      amount,
+      delegateOption: 0,
+      delegate: PublicKey.default,
+      delegatedAmount: 0n,
+      state: 1,
+      isNativeOption: 0,
+      isNative: 0n,
+      closeAuthorityOption: 0,
+      closeAuthority: PublicKey.default,
+    },
+    data,
+  );
+  return account(programId, data);
+}
+
+/** A chain that answers from a table of addresses and says "no account" for anything else. */
+function chainOf(entries: Array<[PublicKey, AccountInfo<Buffer>]>) {
+  return vi.fn(async (address: PublicKey): Promise<AccountInfo<Buffer> | null> => {
+    for (const [key, info] of entries) if (address.equals(key)) return info;
+    return null;
+  });
+}
+
 /** `getAccountInfo` that knows the mint and otherwise says "no account". */
 function chainWithMint(mint: PublicKey, programId: PublicKey, decimals: number) {
   return vi.fn(async (address: PublicKey): Promise<AccountInfo<Buffer> | null> =>
@@ -104,7 +142,7 @@ describe('estimateTransfer', () => {
     expect(estimate).toEqual({
       feeLamports: '10000',
       rentExemptMin: String(RENT),
-      recipient: { exists: false, isTokenAccount: false, offCurve: false },
+      recipient: { exists: false, walletExists: false, isTokenAccount: false, offCurve: false },
     });
     // The fee lookup got a compiled message for a transfer from the signer.
     const [message] = rpc.getFeeForMessage.mock.calls[0];
@@ -128,14 +166,16 @@ describe('estimateTransfer', () => {
     const wallet = fakeRpc({ getAccountInfo: vi.fn(async () => account(SystemProgram.programId)) });
     expect((await estimateTransfer(sol('1'), io(wallet))).recipient).toEqual({
       exists: true,
+      walletExists: true,
       isTokenAccount: false,
       offCurve: false,
     });
 
     for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
-      const tokenAccount = fakeRpc({ getAccountInfo: vi.fn(async () => account(program)) });
-      expect((await estimateTransfer(sol('1'), io(tokenAccount))).recipient).toEqual({
+      const isToken = fakeRpc({ getAccountInfo: vi.fn(async () => account(program)) });
+      expect((await estimateTransfer(sol('1'), io(isToken))).recipient).toEqual({
         exists: true,
+        walletExists: true,
         isTokenAccount: true,
         offCurve: false,
       });
@@ -145,6 +185,7 @@ describe('estimateTransfer', () => {
     const rpc = fakeRpc();
     expect((await estimateTransfer({ to: pda.toBase58(), amountSmallest: '1' }, io(rpc))).recipient).toEqual({
       exists: false,
+      walletExists: false,
       isTokenAccount: false,
       offCurve: true,
     });
@@ -176,6 +217,17 @@ describe('sendTransfer (SOL)', () => {
     const rpc = fakeRpc({ getAccountInfo: vi.fn(async () => account(SystemProgram.programId)) });
     await expect(sendTransfer(sol('999500000'), io(rpc))).rejects.toThrow('Leave at least 0.00089088 SOL or send Max');
     expect(rpc.sendRawTransaction).not.toHaveBeenCalled();
+    // A SOL send may have to create a bare system account, so that is the rent it prices.
+    expect(rpc.getMinimumBalanceForRentExemption).toHaveBeenCalledWith(0);
+  });
+
+  it('refuses one lamport below the rent minimum and allows exactly it', async () => {
+    const remainder = (left: number) => sol(String(1_000_000_000 - 5000 - left));
+    const under = fakeRpc({ getAccountInfo: vi.fn(async () => account(SystemProgram.programId)) });
+    await expect(sendTransfer(remainder(RENT - 1), io(under))).rejects.toThrow('Leave at least 0.00089088 SOL or send Max');
+    expect(under.sendRawTransaction).not.toHaveBeenCalled();
+    const exact = fakeRpc({ getAccountInfo: vi.fn(async () => account(SystemProgram.programId)) });
+    await expect(sendTransfer(remainder(RENT), io(exact))).resolves.toBe(SIGNATURE);
   });
 
   it('allows emptying the account exactly (Max) and leaving at least the minimum', async () => {
@@ -201,8 +253,12 @@ describe('sendTransfer (SOL)', () => {
   });
 
   it('uses the fallback fee in the rent guard when the RPC cannot price the message', async () => {
+    // A live RPC answers or fails; the `value: null` branch is a type guard, so the
+    // case worth proving here is the one a rotating endpoint actually produces.
     const rpc = fakeRpc({
-      getFeeForMessage: vi.fn(async () => ({ context: { slot: 1 }, value: null })),
+      getFeeForMessage: vi.fn(async () => {
+        throw new Error('failed to get fee for message');
+      }),
       getAccountInfo: vi.fn(async () => account(SystemProgram.programId)),
     });
     // Exactly balance - 5000 empties the account under the fallback fee.
@@ -268,6 +324,10 @@ describe('sendTransfer (SPL)', () => {
     const decoded = decodeTransferCheckedInstruction(transfer, TOKEN_2022_PROGRAM_ID);
     expect(decoded.data.decimals).toBe(9);
     expect(decoded.data.amount).toBe(7n);
+    // The signer's own ATA is program-specific too: the classic derivation would spend nothing.
+    const source = getAssociatedTokenAddressSync(mint, signer.publicKey, true, TOKEN_2022_PROGRAM_ID);
+    expect(source.equals(getAssociatedTokenAddressSync(mint, signer.publicKey, true, TOKEN_PROGRAM_ID))).toBe(false);
+    expect(decoded.keys.source.pubkey.equals(source)).toBe(true);
   });
 
   it('sends to an off-curve owner, deriving its ATA', async () => {
@@ -292,6 +352,79 @@ describe('sendTransfer (SPL)', () => {
     expect(estimate.feeLamports).toBe('5000');
     const [message] = rpc.getFeeForMessage.mock.calls[0];
     expect(message.compiledInstructions).toHaveLength(2);
+  });
+
+  it('spends the token account it was given, even when that is not the ATA', async () => {
+    const signer = Keypair.generate();
+    // A wallet can hold several accounts of one mint; only one of them is the ATA.
+    const source = Keypair.generate().publicKey;
+    expect(source.equals(getAssociatedTokenAddressSync(mint, signer.publicKey, true, TOKEN_PROGRAM_ID))).toBe(false);
+    const rpc = fakeRpc({
+      getAccountInfo: chainOf([
+        [mint, mintAccount(TOKEN_PROGRAM_ID, 6)],
+        [source, tokenAccount(TOKEN_PROGRAM_ID, mint, signer.publicKey)],
+      ]),
+    });
+
+    await expect(sendTransfer({ ...spl('5'), source: source.toBase58() }, io(rpc, signer))).resolves.toBe(SIGNATURE);
+    const [, transfer] = broadcast(rpc).instructions;
+    const decoded = decodeTransferCheckedInstruction(transfer, TOKEN_PROGRAM_ID);
+    expect(decoded.keys.source.pubkey.equals(source)).toBe(true);
+    expect(decoded.data.amount).toBe(5n);
+  });
+
+  it('refuses a source that is not the signer\'s account of this mint', async () => {
+    const signer = Keypair.generate();
+    const source = Keypair.generate().publicKey;
+    const otherMint = Keypair.generate().publicKey;
+    const cases = [
+      ['owned by someone else', tokenAccount(TOKEN_PROGRAM_ID, mint, Keypair.generate().publicKey)],
+      ['holding another mint', tokenAccount(TOKEN_PROGRAM_ID, otherMint, signer.publicKey)],
+      ['under the other token program', tokenAccount(TOKEN_2022_PROGRAM_ID, mint, signer.publicKey)],
+      ['not a token account at all', account(SystemProgram.programId)],
+    ] as const;
+    for (const [, info] of cases) {
+      const rpc = fakeRpc({ getAccountInfo: chainOf([[mint, mintAccount(TOKEN_PROGRAM_ID, 6)], [source, info]]) });
+      await expect(sendTransfer({ ...spl('5'), source: source.toBase58() }, io(rpc, signer))).rejects.toThrow(
+        'Token account mismatch',
+      );
+      expect(rpc.sendRawTransaction).not.toHaveBeenCalled();
+    }
+  });
+
+  it('reports the recipient ATA, not the wallet, and the rent a token account needs', async () => {
+    const destination = getAssociatedTokenAddressSync(mint, recipient, true, TOKEN_PROGRAM_ID);
+    const absent = fakeRpc({ getAccountInfo: chainOf([[mint, mintAccount(TOKEN_PROGRAM_ID, 6)]]) });
+    const missing = await estimateTransfer(spl('1'), io(absent));
+    expect(missing.recipient).toEqual({ exists: false, walletExists: false, isTokenAccount: false, offCurve: false });
+    expect(missing.rentExemptMin).toBe(String(TOKEN_RENT));
+    expect(absent.getMinimumBalanceForRentExemption).toHaveBeenCalledWith(ACCOUNT_SIZE);
+
+    // The wallet is there and so is its ATA: nothing to create.
+    const present = fakeRpc({
+      getAccountInfo: chainOf([
+        [mint, mintAccount(TOKEN_PROGRAM_ID, 6)],
+        [recipient, account(SystemProgram.programId)],
+        [destination, tokenAccount(TOKEN_PROGRAM_ID, mint, recipient)],
+      ]),
+    });
+    expect((await estimateTransfer(spl('1'), io(present))).recipient).toEqual({
+      exists: true,
+      walletExists: true,
+      isTokenAccount: false,
+      offCurve: false,
+    });
+
+    // A wallet with no token account of this mint yet: the send pays for one.
+    const walletOnly = fakeRpc({
+      getAccountInfo: chainOf([
+        [mint, mintAccount(TOKEN_PROGRAM_ID, 6)],
+        [recipient, account(SystemProgram.programId)],
+      ]),
+    });
+    const estimate = await estimateTransfer(spl('1'), io(walletOnly));
+    expect(estimate.recipient.exists).toBe(false);
+    expect(estimate.recipient.walletExists).toBe(true);
   });
 });
 
@@ -346,5 +479,105 @@ describe('confirmation', () => {
     const rpc = fakeRpc({ getAccountInfo: existing(), getSignatureStatuses: statuses });
     await expect(sendTransfer(sol('1000'), io(rpc))).resolves.toBe(SIGNATURE);
     expect(statuses).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('confirmation races', () => {
+  const existing = () => vi.fn(async () => account(SystemProgram.programId));
+  /** Status reads that never find the signature in the recent window. */
+  const nothingRecent = () => vi.fn(async () => ({ context: { slot: 1 }, value: [null] as Status[] }));
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Run a send to its end, driving the 400 ms poll, and hand back whatever it threw. */
+  async function failure(promise: Promise<string>): Promise<SendError> {
+    const settled = promise.then(() => null, (error: unknown) => error as SendError);
+    await vi.advanceTimersByTimeAsync(CONFIRM_TIMEOUT_MS + CONFIRM_POLL_MS);
+    const error = await settled;
+    if (!error) throw new Error('the send resolved');
+    return error;
+  }
+
+  it('looks in the ledger before calling an expired blockhash a failure', async () => {
+    // The status window has nothing, but the transaction landed just before the height passed.
+    const statuses = vi.fn(async (_signatures: string[], options?: { searchTransactionHistory?: boolean }) => ({
+      context: { slot: 1 },
+      value: [options?.searchTransactionHistory ? { err: null, confirmationStatus: 'confirmed' } : null] as Status[],
+    }));
+    const rpc = fakeRpc({
+      getAccountInfo: existing(),
+      getSignatureStatuses: statuses,
+      getBlockHeight: vi.fn(async () => LAST_VALID + 1),
+    });
+
+    await expect(sendTransfer(sol('1000'), io(rpc))).resolves.toBe(SIGNATURE);
+    expect(statuses).toHaveBeenCalledTimes(2);
+    expect(statuses.mock.calls[0][1]).toEqual({ searchTransactionHistory: false });
+    expect(statuses.mock.calls[1][1]).toEqual({ searchTransactionHistory: true });
+  });
+
+  it('expires with the signature after exactly one height check and one ledger look', async () => {
+    const statuses = nothingRecent();
+    const height = vi.fn(async () => LAST_VALID + 1);
+    const rpc = fakeRpc({ getAccountInfo: existing(), getSignatureStatuses: statuses, getBlockHeight: height });
+
+    const error = await failure(sendTransfer(sol('1000'), io(rpc)));
+    expect(error).toBeInstanceOf(SendError);
+    expect(error.code).toBe('expired');
+    expect(error.reason).toBe(EXPIRED_MESSAGE);
+    expect(error.signature).toBe(SIGNATURE);
+    expect(error.message).toContain(SIGNATURE);
+    // One pass: the recent read, the height check it failed, and the single history look.
+    expect(height).toHaveBeenCalledTimes(1);
+    expect(statuses).toHaveBeenCalledTimes(2);
+  });
+
+  it('surfaces an on-chain failure found by the ledger look', async () => {
+    const rpc = fakeRpc({
+      getAccountInfo: existing(),
+      getSignatureStatuses: vi.fn(async (_signatures: string[], options?: { searchTransactionHistory?: boolean }) => ({
+        context: { slot: 1 },
+        value: [options?.searchTransactionHistory ? { err: { InstructionError: [0, 'Custom'] } } : null] as Status[],
+      })),
+      getBlockHeight: vi.fn(async () => LAST_VALID + 1),
+    });
+    await expect(sendTransfer(sol('1000'), io(rpc))).rejects.toThrow('Transaction failed on-chain');
+  });
+
+  it('gives up at the hard cap while the blockhash is still valid, keeping the signature', async () => {
+    const statuses = nothingRecent();
+    const rpc = fakeRpc({
+      getAccountInfo: existing(),
+      getSignatureStatuses: statuses,
+      getBlockHeight: vi.fn(async () => LAST_VALID),
+    });
+
+    const error = await failure(sendTransfer(sol('1000'), io(rpc)));
+    expect(error.code).toBe('timeout');
+    expect(error.reason).toBe(TIMED_OUT_MESSAGE);
+    expect(error.signature).toBe(SIGNATURE);
+    // 90 s of a 400 ms poll, not one look and out.
+    expect(statuses.mock.calls.length).toBeGreaterThan(CONFIRM_TIMEOUT_MS / CONFIRM_POLL_MS / 2);
+  });
+
+  it('keeps the locally computed signature when the broadcast itself fails', async () => {
+    const rpc = fakeRpc({
+      getAccountInfo: existing(),
+      sendRawTransaction: vi.fn(async () => {
+        throw new Error('Transaction simulation failed: Blockhash not found');
+      }),
+    });
+
+    const error = await failure(sendTransfer(sol('1000'), io(rpc)));
+    expect(error.code).toBe('broadcast-failed');
+    expect(error.reason).toContain('Blockhash not found');
+    // The RPC said nothing, so the id comes from the signature the wallet put on the transaction.
+    expect(error.signature).toBe(bs58.encode(broadcast(rpc).signature!));
+    expect(rpc.getSignatureStatuses).not.toHaveBeenCalled();
   });
 });

@@ -51,8 +51,8 @@ export type WalletRequest =
   | { type: 'CANCEL_APPROVAL'; id: string }
   | { type: 'GET_CONNECTED_SITES' }
   | { type: 'REVOKE_SITE'; origin: string }
-  | { type: 'SEND_TRANSFER'; to: string; amountSmallest: string; mint?: string }
-  | { type: 'ESTIMATE_FEE'; to: string; amountSmallest: string; mint?: string };
+  | { type: 'SEND_TRANSFER'; to: string; amountSmallest: string; mint?: string; source?: string }
+  | { type: 'ESTIMATE_FEE'; to: string; amountSmallest: string; mint?: string; source?: string };
 
 /** Fields of the request for one message type, without `type`. */
 export type WalletRequestPayload<T extends ExtensionMessageType> = Omit<Extract<WalletRequest, { type: T }>, 'type'>;
@@ -99,20 +99,73 @@ export interface WalletResponses {
 
 /** What the worker learned about the recipient while estimating a send. */
 export type RecipientInfo = {
-  /** The account has lamports on-chain. A SOL send to a missing account must fund its rent. */
+  /**
+   * The account the transfer credits exists on-chain: the wallet for a SOL send,
+   * the recipient's associated token account for a token send. A SOL send to a
+   * missing account must fund its rent; a token send to a missing ATA creates it.
+   */
   exists: boolean;
+  /** The wallet address itself exists, whatever its token account does. */
+  walletExists: boolean;
   /** Owned by SPL Token or Token-2022: a token account, not a wallet. */
   isTokenAccount: boolean;
   /** Not on the ed25519 curve: a PDA, so no key can sign for it. */
   offCurve: boolean;
 };
 
-/** The `ESTIMATE_FEE` response: lamports as decimal strings. Type aliases, so the router's `Record<string, unknown>` accepts them. */
+/**
+ * The `ESTIMATE_FEE` response: lamports as decimal strings. Type aliases, so the
+ * router's `Record<string, unknown>` accepts them. `rentExemptMin` is what the
+ * account this send may have to create costs: a bare system account for SOL, a
+ * token account of the mint's own program for a token send.
+ */
 export type FeeEstimate = {
   feeLamports: string;
   rentExemptMin: string;
   recipient: RecipientInfo;
 };
+
+/** How far a `SEND_TRANSFER` got before it failed. */
+export type SendErrorCode = 'expired' | 'timeout' | 'broadcast-failed';
+
+/**
+ * Separates the user-facing line from the signature in a `SEND_TRANSFER` error.
+ * A send that has already been signed has a signature whether or not it
+ * confirmed, and the popup needs it to link the explorer; the envelope carries
+ * only `error: string`, so the signature rides along in the text.
+ */
+export const SEND_SIGNATURE_SEPARATOR = ' · signature ';
+
+/** The `SEND_TRANSFER` failure shape: a line for the screen, plus the signature when one exists. */
+export type SendFailure = { message: string; signature?: string };
+
+/**
+ * A send that failed with a signature worth showing. `message` (and so anything
+ * that stringifies the error) carries the signature suffix; `parseSendError`
+ * splits it back apart.
+ */
+export class SendError extends Error {
+  readonly code: SendErrorCode;
+  readonly signature?: string;
+  /** The user-facing line on its own, without the signature suffix. */
+  readonly reason: string;
+
+  constructor(code: SendErrorCode, reason: string, signature?: string) {
+    super(signature ? `${reason}${SEND_SIGNATURE_SEPARATOR}${signature}` : reason);
+    this.name = 'SendError';
+    this.code = code;
+    this.reason = reason;
+    if (signature !== undefined) this.signature = signature;
+  }
+}
+
+/** Split a `SEND_TRANSFER` error string back into its line and its signature. */
+export function parseSendError(raw: string): SendFailure {
+  const at = raw.lastIndexOf(SEND_SIGNATURE_SEPARATOR);
+  if (at === -1) return { message: raw };
+  const signature = raw.slice(at + SEND_SIGNATURE_SEPARATOR.length);
+  return BASE58_SIGNATURE.test(signature) ? { message: raw.slice(0, at), signature } : { message: raw };
+}
 
 export type WalletResponse = WalletResponses[ExtensionMessageType];
 
@@ -158,6 +211,19 @@ function requireIndex(value: unknown, field: string): number {
 function optionalIndex(value: unknown, field: string): number | undefined {
   if (value === undefined || value === null) return undefined;
   return requireIndex(value, field);
+}
+
+/** Base58 with no 0/O/I/l, the alphabet Solana addresses use; 32 bytes encodes to 32-44 characters. */
+const BASE58_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+/** A 64-byte signature in the same alphabet. */
+const BASE58_SIGNATURE = /^[1-9A-HJ-NP-Za-km-z]{64,88}$/;
+
+/** Absent, `null`, or `''` mean "not provided"; anything else must look like an address. */
+function optionalAddress(value: unknown, field: string): string | undefined {
+  const text = optionalString(value, field);
+  if (text === undefined) return undefined;
+  if (!BASE58_ADDRESS.test(text)) invalid(field);
+  return text;
 }
 
 /** Decimal digits only: lamports or token base units, no sign, no fraction, no exponent. */
@@ -331,10 +397,17 @@ export function parseRequest(input: unknown): WalletRequest {
     }
     case 'SEND_TRANSFER':
     case 'ESTIMATE_FEE': {
-      const to = requireNonEmptyString(raw.to, 'to');
-      const amountSmallest = requireIntegerString(raw.amountSmallest, 'amountSmallest');
+      const request: Extract<WalletRequest, { type: typeof type }> = {
+        type,
+        to: requireNonEmptyString(raw.to, 'to'),
+        amountSmallest: requireIntegerString(raw.amountSmallest, 'amountSmallest'),
+      };
       const mint = optionalString(raw.mint, 'mint');
-      return mint === undefined ? { type, to, amountSmallest } : { type, to, amountSmallest, mint };
+      if (mint !== undefined) request.mint = mint;
+      // The token account the tokens leave: a row's own account, which need not be the ATA.
+      const source = optionalAddress(raw.source, 'source');
+      if (source !== undefined) request.source = source;
+      return request;
     }
     default: {
       const unreachable: never = type;

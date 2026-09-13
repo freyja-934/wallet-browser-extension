@@ -40,6 +40,20 @@ export function maxSendable(balanceSmallest: bigint, feeSmallest: bigint): bigin
   return max < 0n ? 0n : max;
 }
 
+/** What a one-signature transaction costs when no estimate has landed yet. */
+export const FALLBACK_FEE_LAMPORTS = 5000n;
+
+/**
+ * The most of an asset a send can carry. A token moves in its own units, so the
+ * whole balance goes; SOL pays the fee out of the same balance, so the fee comes
+ * off first — and until the worker has priced a message, the fixed fallback stands
+ * in, which is what Max would have used anyway.
+ */
+export function maxForAsset(balanceSmallest: bigint, feeLamports: bigint | null, isToken: boolean): bigint {
+  if (isToken) return balanceSmallest < 0n ? 0n : balanceSmallest;
+  return maxSendable(balanceSmallest, feeLamports ?? FALLBACK_FEE_LAMPORTS);
+}
+
 /** Digits with an optional point on either side: `0.5`, `.5`, `5`, `5.`. */
 const AMOUNT_SHAPE = /^(?:\d+\.?\d*|\.\d+)$/;
 

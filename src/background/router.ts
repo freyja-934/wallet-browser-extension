@@ -46,7 +46,7 @@ import {
 } from './approvals';
 import { addressesActiveFirst, sendToConnected, sendWalletEvent, snapshot } from './events';
 import * as origins from './origins';
-import { estimateTransfer, getConnection, sendTransfer } from './transfers';
+import { estimateTransfer, getConnection, sendTransfer, type TransferParams } from './transfers';
 
 /**
  * Worker entry for one runtime message. Gate on the sender first, then parse,
@@ -260,16 +260,45 @@ async function dispatch(request: WalletRequest, caller: Caller): Promise<WalletR
     }
     case 'SEND_TRANSFER':
       return {
-        signature: await sendTransfer({
+        signature: await exclusiveSend({
           to: request.to,
           amountSmallest: request.amountSmallest,
           mint: request.mint,
+          source: request.source,
         }),
       };
     case 'ESTIMATE_FEE':
-      return estimateTransfer({ to: request.to, amountSmallest: request.amountSmallest, mint: request.mint });
+      return estimateTransfer({
+        to: request.to,
+        amountSmallest: request.amountSmallest,
+        mint: request.mint,
+        source: request.source,
+      });
     default:
       return assertNever(request);
+  }
+}
+
+export const SEND_IN_PROGRESS_MESSAGE = 'A send is already in progress';
+
+/**
+ * One popup send at a time. Confirmation runs for as long as a blockhash lives,
+ * and a second `SEND_TRANSFER` in that window — a double-click, or a popup
+ * reopened on a stale Review — would sign and broadcast a second transfer of the
+ * same funds. The guard is a module-level promise: the worker is single-threaded
+ * per instance, and a worker that was evicted mid-send has no in-flight send to
+ * protect anyway.
+ */
+let sendInFlight: Promise<string> | null = null;
+
+async function exclusiveSend(params: TransferParams): Promise<string> {
+  if (sendInFlight) throw new Error(SEND_IN_PROGRESS_MESSAGE);
+  const attempt = sendTransfer(params);
+  sendInFlight = attempt;
+  try {
+    return await attempt;
+  } finally {
+    if (sendInFlight === attempt) sendInFlight = null;
   }
 }
 
