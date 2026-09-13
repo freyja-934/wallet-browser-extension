@@ -7,6 +7,35 @@ Notable changes to Cinder Wallet, newest first. The format follows
 One line per remediation phase (`docs/plans/SHIP-*`); each phase merged as its
 own pull request, and the plan it shipped against is the detailed record.
 
+## [Unreleased]
+
+### Added
+
+- **SHIP-10** — Component tests and a coverage gate, the one piece SHIP-8b
+  deferred for want of tooling that had not been authorised. `jsdom`, Testing
+  Library and `@vitest/coverage-v8` are installed, `test.include` collects
+  `.tsx`, and each component test opts into a DOM with its own
+  `// @vitest-environment jsdom` docblock rather than making the 600-odd worker
+  and library tests pay for jsdom.
+- **SHIP-10** — `BalanceCard` and `SendModal` are tested over the real query
+  layer: React Query, the services and the endpoint rotation all run, and only
+  `chrome.runtime.sendMessage` and the web3.js `Connection` are stubbed, so a
+  test fails on a real regression rather than on a mocked hook. Covered: the
+  error card, the "no endpoint reachable" guidance, a dash rather than a zero
+  while a read is in flight, the exact SOL figure the lamports say, Max filling
+  balance-minus-quoted-fee in integer units where float arithmetic would
+  produce an amount the parser refuses, the decimals error blocking Continue,
+  and the fee on Review.
+- **SHIP-10** — A `Modal` focus test covers what the Playwright suite cannot,
+  because it drives one sheet at a time: two sheets stacked, where the one on
+  top takes the keyboard, wraps Tab within itself, and Escape closes it alone.
+- **SHIP-10** — `pnpm exec vitest run --coverage` enforces a 94 percent lines
+  threshold over `src/background/**`, `src/content/**` and `src/lib/**` — the
+  code with real logic behind it. The suite measures 94.73 percent, so the gate
+  is a ratchet and not an aspiration. It is deliberately not part of
+  `just check`, which is run narrow (`just test <file>`) too often for a
+  whole-suite threshold; wiring coverage into CI is an owner decision.
+
 ## [0.3.0] — 2026-09-12
 
 Nine remediation phases over 0.2.0, the first Chrome Web Store build. The tag
@@ -89,9 +118,10 @@ Nine remediation phases over 0.2.0, the first Chrome Web Store build. The tag
 - **SHIP-9** — README's Load unpacked steps copy `.env.example` to `.env`:
   without it the unpacked build is Mainnet, not the Devnet the steps assume.
 - **SHIP-9** — `just check` is typecheck, lint and 595 unit tests in the `node`
-  environment. There are still no component tests and no coverage gate: that
-  tooling is not installed and adding it is an outstanding owner decision, not a
-  decision against it (`docs/README.md`).
+  environment. Component tests and a coverage gate were still missing at this
+  version: the tooling was not installed and adding it was an outstanding owner
+  decision, not a decision against it. SHIP-10 has since added both — see
+  Unreleased and `docs/README.md`.
 
 ### Fixed
 
