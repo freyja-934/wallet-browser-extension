@@ -4,6 +4,8 @@ on:
   pull_request:
   push:
     branches: [main]
+  # The e2e job is opt-in; see the comment on it.
+  workflow_dispatch:
 
 jobs:
   check:
@@ -17,7 +19,11 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # 24, not 20: jsdom 30 pulls undici 8, which calls
+          # `webidl.util.markAsUncloneable` and so needs a newer Node than 20.
+          # On 20 the three component-test files fail to load their environment
+          # and vitest exits 1 with "Unhandled Error" while reporting all green.
+          node-version: 24
           cache: pnpm
       - uses: extractions/setup-just@v2
       - run: just setup
@@ -33,7 +39,11 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # 24, not 20: jsdom 30 pulls undici 8, which calls
+          # `webidl.util.markAsUncloneable` and so needs a newer Node than 20.
+          # On 20 the three component-test files fail to load their environment
+          # and vitest exits 1 with "Unhandled Error" while reporting all green.
+          node-version: 24
           cache: pnpm
       - uses: extractions/setup-just@v2
       - run: just setup
@@ -47,7 +57,15 @@ jobs:
           path: cinder-wallet-store.zip
           if-no-files-found: error
 
+  # Opt-in, not part of the PR gate. The suite drives a real extension against
+  # public devnet, and `api.devnet.solana.com` rate-limits GitHub-hosted runners
+  # hard enough that a run there is decided by the faucet's mood rather than by
+  # the code: a scheduled run answered HTTP 429 and took seven specs down with
+  # it. A gate that cannot distinguish "we are throttled" from "the wallet
+  # broke" is worse than no gate, so this runs on demand (Actions → check → Run
+  # workflow) and, strictly, locally via `just e2e` against a funded fixture.
   e2e:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
       # `just ext` reads this; CI has no .env, so name the cluster the suite expects.
@@ -57,7 +75,11 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # 24, not 20: jsdom 30 pulls undici 8, which calls
+          # `webidl.util.markAsUncloneable` and so needs a newer Node than 20.
+          # On 20 the three component-test files fail to load their environment
+          # and vitest exits 1 with "Unhandled Error" while reporting all green.
+          node-version: 24
           cache: pnpm
       - uses: extractions/setup-just@v2
       - run: just setup
