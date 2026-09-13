@@ -6,6 +6,7 @@ import {
   CURRENT_VAULT_VERSION,
   decrypt,
   encrypt,
+  kdfFor,
   validatePasswordStrength,
   type EncryptedData,
 } from '../lib/encryption-simple';
@@ -95,7 +96,28 @@ function ensureMigrated(): Promise<void> {
 /** Tests only: forget that the migration ran, so a fresh stub migrates again. */
 export function resetKeyringForTests(): void {
   migration = undefined;
+  accountWrites = Promise.resolve();
   lockHooks = {};
+}
+
+let accountWrites: Promise<unknown> = Promise.resolve();
+
+/**
+ * Run account-list changes one at a time. `addAccount`, `renameAccount` and
+ * `switchAccount` each read `cinder_accounts` and write it back; two of them in
+ * flight at once would read the same list and the later write would drop the
+ * earlier one's change (an account added while a rename was in the air simply
+ * disappears). The worker has no transactions, so the chain is the lock — the
+ * same shape `ensureMigrated` uses for its one-time move.
+ */
+function serializeAccountWrite<T>(work: () => Promise<T>): Promise<T> {
+  const next = accountWrites.then(work, work);
+  // A failed change must not wedge the chain for everything queued behind it.
+  accountWrites = next.then(
+    () => undefined,
+    () => undefined
+  );
+  return next;
 }
 
 export interface LockHooks {
@@ -136,6 +158,13 @@ interface StoredVault {
 interface SessionPayload {
   seedB64: string;
   activeAccountIndex: number;
+}
+
+/** `cinder_accounts`: the public account list and the account the user last chose. */
+interface StoredAccounts {
+  accounts: WalletAccountInfo[];
+  /** Absent on lists written before the selection was persisted; unlock then starts at the first. */
+  activeAccountIndex?: number;
 }
 
 interface LegacySession {
@@ -289,14 +318,29 @@ export async function getPublicState(): Promise<WalletPublicState> {
 }
 
 async function accountsFromSession(session: SessionPayload): Promise<WalletAccountInfo[]> {
-  const stored = await localGet<{ accounts: WalletAccountInfo[] }>(ACCOUNTS_KEY);
+  const stored = await readStoredAccounts();
   if (stored?.accounts?.length) return stored.accounts;
   const seed = Buffer.from(session.seedB64, 'base64');
   return await generateAccountsFromSeed(seed, 1);
 }
 
-async function persistAccounts(accounts: WalletAccountInfo[]): Promise<void> {
-  await localSet(ACCOUNTS_KEY, { accounts });
+async function readStoredAccounts(): Promise<StoredAccounts | undefined> {
+  return localGet<StoredAccounts>(ACCOUNTS_KEY);
+}
+
+/**
+ * The account list and the selection are written together: which account the
+ * user is on is public state (it names an address, not a secret), so it belongs
+ * beside the list rather than only in the session, which a lock throws away.
+ */
+async function persistAccounts(accounts: WalletAccountInfo[], activeAccountIndex: number): Promise<void> {
+  await localSet(ACCOUNTS_KEY, { accounts, activeAccountIndex } satisfies StoredAccounts);
+}
+
+/** The stored index if it still names an account, else the first account. */
+function clampToAccounts(accounts: WalletAccountInfo[], wanted: number | undefined): number {
+  if (wanted !== undefined && accounts.some((account) => account.index === wanted)) return wanted;
+  return accounts[0]?.index ?? 0;
 }
 
 /** One place that writes the vault, so every write carries the current format. */
@@ -305,7 +349,20 @@ async function writeVault(payload: VaultPayload, password: string): Promise<void
   await localSet(VAULT_KEY, { encrypted, createdAt: Date.now() } satisfies StoredVault);
 }
 
+/**
+ * Create the one vault this installation has. An empty `mnemonic` means "make a
+ * fresh one", so a create against a vault that already exists would replace a
+ * wallet — with funds in it, and a phrase its owner has written down — with one
+ * nobody has ever seen. Nothing in the popup should ask for that twice; the
+ * worker refuses it outright rather than trusting that. Clearing the wallet
+ * (Settings → Clear all wallet data) is the way to start over.
+ */
 export async function createWallet(password: string, mnemonic?: string): Promise<WalletPublicState> {
+  if (await hasVault()) throw new Error('Wallet already exists');
+  // The same rule change-password enforces, applied where it cannot be skipped:
+  // the create screen checks it too, but the popup is not the boundary.
+  const strength = validatePasswordStrength(password);
+  if (!strength.isValid) throw new Error(strength.feedback[0] ?? 'Password is too weak');
   const seedInfo = mnemonic ? validateSeedPhrase(mnemonic) : generateSeedPhrase(12);
   if (!seedInfo.isValid) {
     throw new Error('Invalid seed phrase');
@@ -313,7 +370,7 @@ export async function createWallet(password: string, mnemonic?: string): Promise
   const seed = await mnemonicToSeedBuffer(seedInfo.mnemonic);
   const accounts = await generateAccountsFromSeed(seed, 1);
   await writeVault({ mnemonic: seedInfo.mnemonic, accounts }, password);
-  await persistAccounts(accounts);
+  await persistAccounts(accounts, 0);
   await writeSession({ seedB64: seed.toString('base64'), activeAccountIndex: 0 });
   await scheduleAutoLock();
   return getPublicState();
@@ -328,13 +385,19 @@ interface DecryptedVault {
 async function decryptVault(password: string): Promise<DecryptedVault> {
   const vault = await localGet<StoredVault>(VAULT_KEY);
   if (!vault) throw new Error('No wallet found');
+  // Outside the try on purpose: a blob this build cannot read is not a wrong
+  // password, and telling the user it is would send them off to re-type a
+  // password that was right all along. Its message travels unchanged.
+  kdfFor(vault.encrypted);
+  const version = vault.encrypted.version ?? 1;
   try {
     const bytes = await decrypt(vault.encrypted, password);
     return {
       payload: JSON.parse(new TextDecoder().decode(bytes)) as VaultPayload,
-      version: vault.encrypted.version ?? 1,
+      version,
     };
   } catch {
+    // Only the decrypt and the parse are a bad password (or a tampered blob).
     throw new Error('Invalid password');
   }
 }
@@ -352,26 +415,38 @@ async function openVault(password: string): Promise<VaultPayload> {
 
 /**
  * Establish the session from an already-decrypted payload, so the callers that
- * needed the payload anyway (export, change-password) derive the key once.
+ * needed the payload anyway derive the key exactly once.
  *
  * The account list comes from `cinder_accounts`, not the vault payload: accounts
  * added after the vault was written are not in the payload and must not vanish.
- * A session that is already open keeps its active account.
+ * The selection comes from the session when one is open and from the stored list
+ * otherwise, so a lock does not quietly move the user back to the first account —
+ * on an address they may not be watching.
  */
 async function unlockWithPayload(payload: VaultPayload): Promise<WalletPublicState> {
   const seed = await mnemonicToSeedBuffer(payload.mnemonic);
-  const stored = (await localGet<{ accounts: WalletAccountInfo[] }>(ACCOUNTS_KEY))?.accounts ?? [];
-  const names = stored.length ? stored : payload.accounts;
+  const stored = await readStoredAccounts();
+  const names = stored?.accounts?.length ? stored.accounts : payload.accounts;
   const derived = await generateAccountsFromSeed(seed, Math.max(names.length, 1));
   const accounts = derived.map((account, i) => ({ ...account, name: names[i]?.name ?? account.name }));
-  await persistAccounts(accounts);
   const previous = await readSession();
-  const activeAccountIndex =
-    previous && previous.activeAccountIndex < accounts.length ? previous.activeAccountIndex : 0;
+  const activeAccountIndex = clampToAccounts(accounts, previous?.activeAccountIndex ?? stored?.activeAccountIndex);
+  await persistAccounts(accounts, activeAccountIndex);
   await writeSession({ seedB64: seed.toString('base64'), activeAccountIndex });
   await scheduleAutoLock();
   await runHook(lockHooks.onUnlocked);
   return getPublicState();
+}
+
+/**
+ * Bring an open session up to date with a payload we just decrypted, and do
+ * nothing at all when the wallet is locked. Exporting a secret or changing the
+ * password proves the password; neither is a request to unlock, and neither may
+ * leave a session (or an auto-lock alarm) behind that the user did not ask for.
+ */
+async function refreshSessionIfOpen(payload: VaultPayload): Promise<void> {
+  if (!(await readSession())) return;
+  await unlockWithPayload(payload);
 }
 
 export async function unlock(password: string): Promise<WalletPublicState> {
@@ -416,27 +491,37 @@ export async function signMessage(message: Uint8Array, accountIndex?: number): P
 
 export async function exportSeed(password: string): Promise<string> {
   const payload = await openVault(password);
-  await unlockWithPayload(payload);
+  await refreshSessionIfOpen(payload);
   return payload.mnemonic;
 }
 
+/**
+ * The key comes from the payload just decrypted, not from the session: a locked
+ * wallet exports with the password alone and stays locked afterwards.
+ */
 export async function exportPrivateKey(password: string, accountIndex: number): Promise<string> {
-  await unlockWithPayload(await openVault(password));
-  const keypair = await getKeypair(accountIndex);
+  const payload = await openVault(password);
+  await refreshSessionIfOpen(payload);
+  const seed = await mnemonicToSeedBuffer(payload.mnemonic);
+  const { keypair } = await deriveKeypairFromSeed(seed, accountIndex);
   return bs58.encode(keypair.secretKey);
 }
 
 /**
  * The new password must pass the same strength check the create screen applies;
  * the vault is only rewritten once the current password has actually opened it,
- * so a rejected change leaves the old vault exactly as it was.
+ * so a rejected change leaves the old vault exactly as it was. A locked wallet
+ * stays locked: changing the password is not a way in.
  */
 export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
   const strength = validatePasswordStrength(newPassword);
   if (!strength.isValid) throw new Error(strength.feedback[0] ?? 'Password is too weak');
   const { payload } = await decryptVault(currentPassword);
-  const state = await unlockWithPayload(payload);
-  await writeVault({ mnemonic: payload.mnemonic, accounts: state.accounts }, newPassword);
+  // The stored list, not the payload's: accounts added since the vault was
+  // written must survive the rewrite.
+  const accounts = (await readStoredAccounts())?.accounts ?? payload.accounts;
+  await writeVault({ mnemonic: payload.mnemonic, accounts }, newPassword);
+  await refreshSessionIfOpen(payload);
 }
 
 export async function clearWallet(): Promise<WalletPublicState> {
@@ -448,11 +533,15 @@ export async function clearWallet(): Promise<WalletPublicState> {
 }
 
 export async function switchAccount(index: number): Promise<WalletPublicState> {
-  const session = await requireSession();
-  const accounts = await accountsFromSession(session);
-  if (!accounts.some((account) => account.index === index)) throw new Error('No such account');
-  await writeSession({ ...session, activeAccountIndex: index });
-  return getPublicState();
+  return serializeAccountWrite(async () => {
+    const session = await requireSession();
+    const accounts = await accountsFromSession(session);
+    if (!accounts.some((account) => account.index === index)) throw new Error('No such account');
+    await writeSession({ ...session, activeAccountIndex: index });
+    // Also on disk, so the choice survives the lock that throws the session away.
+    await persistAccounts(accounts, index);
+    return getPublicState();
+  });
 }
 
 /**
@@ -462,25 +551,33 @@ export async function switchAccount(index: number): Promise<WalletPublicState> {
  * derives from the stored count rather than from what the vault happened to hold.
  */
 export async function addAccount(): Promise<WalletPublicState> {
-  const session = await requireSession();
-  const accounts = await accountsFromSession(session);
-  const nextIndex = accounts.reduce((max, account) => Math.max(max, account.index), -1) + 1;
-  const seed = Buffer.from(session.seedB64, 'base64');
-  const [added] = await generateAccountsFromSeed(seed, 1, nextIndex);
-  await persistAccounts([...accounts, added]);
-  return getPublicState();
+  return serializeAccountWrite(async () => {
+    const session = await requireSession();
+    const accounts = await accountsFromSession(session);
+    const nextIndex = accounts.reduce((max, account) => Math.max(max, account.index), -1) + 1;
+    const seed = Buffer.from(session.seedB64, 'base64');
+    const [added] = await generateAccountsFromSeed(seed, 1, nextIndex);
+    // Adding does not move the user off the account they were on.
+    await persistAccounts([...accounts, added], session.activeAccountIndex);
+    return getPublicState();
+  });
 }
 
 /** Rename one account. Names are public data: they live beside the addresses, not in the vault. */
 export async function renameAccount(index: number, name: string): Promise<WalletPublicState> {
-  const session = await requireSession();
-  const trimmed = name.trim();
-  if (trimmed.length === 0 || trimmed.length > MAX_ACCOUNT_NAME_LENGTH) throw new Error('Invalid name');
-  const accounts = await accountsFromSession(session);
-  const at = accounts.findIndex((account) => account.index === index);
-  if (at === -1) throw new Error('No such account');
-  await persistAccounts(accounts.map((account, i) => (i === at ? { ...account, name: trimmed } : account)));
-  return getPublicState();
+  return serializeAccountWrite(async () => {
+    const session = await requireSession();
+    const trimmed = name.trim();
+    if (trimmed.length === 0 || trimmed.length > MAX_ACCOUNT_NAME_LENGTH) throw new Error('Invalid name');
+    const accounts = await accountsFromSession(session);
+    const at = accounts.findIndex((account) => account.index === index);
+    if (at === -1) throw new Error('No such account');
+    await persistAccounts(
+      accounts.map((account, i) => (i === at ? { ...account, name: trimmed } : account)),
+      session.activeAccountIndex
+    );
+    return getPublicState();
+  });
 }
 
 export async function scheduleAutoLock(): Promise<void> {

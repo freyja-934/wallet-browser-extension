@@ -9,6 +9,7 @@ import { deriveKeypairFromSeed, mnemonicToSeedBuffer } from '../lib/wallet';
 import { installChromeStub, STUB_EXTENSION_ID, uninstallChromeStub, type ChromeStub } from '../test/chrome-stub';
 import { TEST_ADDRESS, TEST_MNEMONIC, TEST_PASSWORD } from '../test/fixtures';
 import { installApprovalLifecycle, onWindowRemoved } from './approvals';
+import { addressesActiveFirst } from './events';
 import { resetKeyringForTests } from './keyring';
 import { CONFIRMATION_MARGIN_MS, CONFIRMATION_POLL_MS, CONFIRMATION_TIMEOUT_MS, handleMessage, SEND_IN_PROGRESS_MESSAGE } from './router';
 
@@ -180,6 +181,32 @@ describe('handleMessage', () => {
     expect(state.accounts[0]?.address).toBe(TEST_ADDRESS);
     expect(chromeStub.storage.session.snapshot()).toHaveProperty('cinder_session');
     expect(chromeStub.alarms.scheduled()).toHaveProperty('cinder-autolock');
+  });
+
+  it('refuses a second CREATE_WALLET rather than replacing the vault', async () => {
+    const created = await createFixtureWallet();
+    const vaultBefore = chromeStub.storage.local.snapshot().cinder_vault;
+
+    // The onboarding retry path: no phrase, so the keyring would mint a fresh one
+    // and the wallet the user just wrote down would be gone.
+    await expect(handleMessage({ type: 'CREATE_WALLET', password: TEST_PASSWORD }, popup, BASE)).rejects.toThrow(
+      'Wallet already exists',
+    );
+    await expect(
+      handleMessage({ type: 'CREATE_WALLET', password: TEST_PASSWORD, seedPhrase: TEST_MNEMONIC }, popup, BASE),
+    ).rejects.toThrow('Wallet already exists');
+
+    expect(chromeStub.storage.local.snapshot().cinder_vault).toEqual(vaultBefore);
+    const { state } = (await handleMessage({ type: 'GET_STATE' }, popup, BASE)) as { state: WalletPublicState };
+    expect(state.accounts[0]?.address).toBe(created.accounts[0]?.address);
+    expect(state.accounts[0]?.address).toBe(TEST_ADDRESS);
+  });
+
+  it('refuses a CREATE_WALLET password that fails the strength rule', async () => {
+    await expect(
+      handleMessage({ type: 'CREATE_WALLET', password: 'short', seedPhrase: TEST_MNEMONIC }, popup, BASE),
+    ).rejects.toThrow(/at least 8 characters/);
+    expect(chromeStub.storage.local.snapshot()).not.toHaveProperty('cinder_vault');
   });
 
   it('locks, then answers GET_ACCOUNTS with nothing for a connected page', async () => {
@@ -1268,8 +1295,10 @@ describe('multiple accounts', () => {
       .state as WalletPublicState;
     expect(reopened.accounts.map((account) => account.address)).toEqual([TEST_ADDRESS, second]);
     expect(reopened.accounts[1]?.name).toBe('Savings');
-    // The active account is session state: a lock forgets it and the unlock starts at the first.
-    expect(reopened.activeAccountIndex).toBe(0);
+    // Which account the user is on is public state, stored beside the list: the
+    // unlock comes back on the account they were using, not on the first one.
+    expect(reopened.activeAccountIndex).toBe(1);
+    expect(addressesActiveFirst(reopened)).toEqual([second, TEST_ADDRESS]);
   });
 
   it('refuses an account that does not exist, a blank name, and anything while locked', async () => {

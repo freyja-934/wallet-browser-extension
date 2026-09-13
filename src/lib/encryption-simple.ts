@@ -42,10 +42,18 @@ export const V1_KDF: KdfParams = { name: 'PBKDF2', hash: 'SHA-256', iterations: 
 
 /**
  * The parameters `data` was encrypted with. No `version` means v1; a versioned
- * blob must carry parameters this build understands, or it is not readable here.
+ * blob must carry a version this build knows and parameters it understands, or
+ * it is not readable here.
+ *
+ * The version is checked before the parameters: a blob from a newer build may
+ * well carry a `kdf` that looks fine to this one, and reading it with those
+ * parameters would say "wrong password" about a format this build cannot read.
  */
 export function kdfFor(data: EncryptedData): KdfParams {
   if (data.version === undefined) return V1_KDF;
+  if (!Number.isInteger(data.version) || data.version > CURRENT_VAULT_VERSION) {
+    throw new Error('Unsupported vault format');
+  }
   const kdf = data.kdf;
   if (
     !kdf ||

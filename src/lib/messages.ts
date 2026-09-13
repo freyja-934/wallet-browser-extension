@@ -73,6 +73,19 @@ export interface WalletPublicState {
   activeAccountIndex: number;
 }
 
+/**
+ * The account `activeAccountIndex` names. An account's `index` is its BIP44
+ * derivation index, not its place in the list, so look it up by that: a list
+ * that ever skips an index (or arrives in another order) would otherwise point
+ * at a different account — and show, copy, or sign for the wrong address.
+ */
+export function accountAt(
+  accounts: WalletAccountInfo[],
+  index: number
+): WalletAccountInfo | undefined {
+  return accounts.find((account) => account.index === index);
+}
+
 export interface WalletSettings {
   autoLockTimeout: number;
   preferredCurrency: string;

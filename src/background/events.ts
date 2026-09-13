@@ -33,9 +33,13 @@ export interface WalletEventMessage {
  */
 export function addressesActiveFirst(state: Pick<WalletPublicState, 'accounts' | 'activeAccountIndex'>): string[] {
   const addresses = state.accounts.map((account) => account.address);
-  const active = addresses[state.activeAccountIndex];
+  // By the account's own index, not its position: the two agree today only
+  // because the list is dense and in order, and a page must never be handed
+  // someone else's address as the active one.
+  const at = state.accounts.findIndex((account) => account.index === state.activeAccountIndex);
+  const active = at === -1 ? undefined : addresses[at];
   if (active === undefined) return addresses;
-  return [active, ...addresses.filter((_, i) => i !== state.activeAccountIndex)];
+  return [active, ...addresses.filter((_, i) => i !== at)];
 }
 
 /** The account list pages may see right now, active first, and the active cluster. */

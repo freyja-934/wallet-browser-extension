@@ -10,6 +10,7 @@ import { TEST_ADDRESS, TEST_MNEMONIC, TEST_PASSWORD } from '../test/fixtures';
 import { enqueueApproval, getApprovalResult } from './approvals';
 import * as origins from './origins';
 import {
+  addAccount,
   changePassword,
   clearWallet,
   createWallet,
@@ -18,6 +19,7 @@ import {
   getPublicState,
   getSettings,
   lock,
+  renameAccount,
   resetKeyringForTests,
   setBuildHeliusApiKeyForTests,
   setLockHooks,
@@ -395,6 +397,8 @@ describe('the vault', () => {
     expect(first.encrypted.kdf).toEqual({ name: 'PBKDF2', hash: 'SHA-256', iterations: 600_000 });
 
     // The same vault contents, encrypted a second time under the same password.
+    // A create is refused while a vault exists, so start over the supported way.
+    await clearWallet();
     resetKeyringForTests();
     await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
     const second = await readVault();
@@ -426,6 +430,49 @@ describe('the vault', () => {
     await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
     await lock();
     await expect(unlock('not-the-password')).rejects.toThrow('Invalid password');
+    expect((await getPublicState()).isLocked).toBe(true);
+  });
+
+  it('refuses a second create and leaves the first wallet exactly as it was', async () => {
+    const created = await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
+    const before = await readVault();
+
+    // No phrase means "generate one": the dangerous shape, and the one a retry
+    // in the onboarding flow used to send after it had cleared the phrase.
+    await expect(createWallet(TEST_PASSWORD)).rejects.toThrow('Wallet already exists');
+    await expect(createWallet(TEST_PASSWORD, TEST_MNEMONIC)).rejects.toThrow('Wallet already exists');
+
+    expect(await readVault()).toEqual(before);
+    const state = await getPublicState();
+    expect(state.accounts[0]?.address).toBe(created.accounts[0]?.address);
+    expect(state.accounts[0]?.address).toBe(TEST_ADDRESS);
+  });
+
+  it('refuses a weak password and writes no vault at all', async () => {
+    await expect(createWallet('short', TEST_MNEMONIC)).rejects.toThrow(/at least 8 characters/);
+    expect(chromeStub.storage.local.snapshot()).not.toHaveProperty(VAULT_KEY);
+    expect((await getPublicState()).hasVault).toBe(false);
+    // The fixture password the e2e and the popup use still passes the rule.
+    expect((await createWallet(TEST_PASSWORD, TEST_MNEMONIC)).hasVault).toBe(true);
+  });
+
+  it('reports a vault this build cannot read as a format problem, not a wrong password', async () => {
+    await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
+    await lock();
+    const vault = await readVault();
+    // A blob from some future build: the password is right, the format is not one we know.
+    await chromeStub.storage.local.set({
+      [VAULT_KEY]: {
+        ...vault,
+        encrypted: { ...vault.encrypted, kdf: { name: 'Argon2id', hash: 'SHA-256', iterations: 3 } },
+      },
+    });
+
+    await expect(unlock(TEST_PASSWORD)).rejects.toThrow('Unsupported vault format');
+    await expect(exportSeed(TEST_PASSWORD)).rejects.toThrow('Unsupported vault format');
+    // Refused, not rewritten: the blob is still there for a build that understands it.
+    expect((await readVault()).encrypted.ciphertext).toBe(vault.encrypted.ciphertext);
+    expect((await readVault()).encrypted.kdf?.name).toBe('Argon2id');
     expect((await getPublicState()).isLocked).toBe(true);
   });
 
@@ -501,5 +548,69 @@ describe('the session', () => {
     await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
     expect(await exportSeed(TEST_PASSWORD)).toBe(TEST_MNEMONIC);
     await expect(exportSeed('not-the-password')).rejects.toThrow('Invalid password');
+  });
+
+  it('keeps the account the user chose across a lock and unlock', async () => {
+    await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
+    await addAccount();
+    expect((await switchAccount(1)).activeAccountIndex).toBe(1);
+
+    await lock();
+    const unlocked = await unlock(TEST_PASSWORD);
+    // The session is gone, so the choice came back from cinder_accounts.
+    expect(unlocked.activeAccountIndex).toBe(1);
+    expect(unlocked.accounts).toHaveLength(2);
+  });
+
+  it('falls back to the first account when the stored selection no longer exists', async () => {
+    await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
+    await lock();
+    // A list of one with a selection pointing past it, as an interrupted write could leave.
+    const stored = (await chromeStub.storage.local.get(ACCOUNTS_KEY))[ACCOUNTS_KEY] as {
+      accounts: WalletAccountInfo[];
+    };
+    await chromeStub.storage.local.set({ [ACCOUNTS_KEY]: { ...stored, activeAccountIndex: 4 } });
+
+    expect((await unlock(TEST_PASSWORD)).activeAccountIndex).toBe(0);
+  });
+});
+
+describe('exporting a secret', () => {
+  it('does not unlock a locked wallet as a side effect', async () => {
+    await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
+    const expected = await exportPrivateKey(TEST_PASSWORD, 0);
+    await lock();
+    await chromeStub.alarms.clear('cinder-autolock');
+    let unlockedHook = 0;
+    setLockHooks({ onUnlocked: () => { unlockedHook += 1; } });
+
+    expect(await exportSeed(TEST_PASSWORD)).toBe(TEST_MNEMONIC);
+    expect(await exportPrivateKey(TEST_PASSWORD, 0)).toBe(expected);
+    await changePassword(TEST_PASSWORD, 'TestWallet2!');
+
+    // The password proved the export; it did not ask for a session.
+    expect((await getPublicState()).isLocked).toBe(true);
+    expect(chromeStub.storage.session.snapshot()).not.toHaveProperty('cinder_session');
+    expect(chromeStub.alarms.scheduled()).toEqual({});
+    expect(unlockedHook).toBe(0);
+    // And the new password is the one that opens it afterwards.
+    await expect(unlock(TEST_PASSWORD)).rejects.toThrow('Invalid password');
+    expect((await unlock('TestWallet2!')).accounts[0]?.address).toBe(TEST_ADDRESS);
+  });
+});
+
+describe('concurrent account changes', () => {
+  it('does not drop one change when two run at once', async () => {
+    await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
+    await addAccount();
+
+    // Both read the list of two; without a single chain the later write wins and
+    // the other change is gone — a third account, or the new name, never happened.
+    await Promise.all([addAccount(), renameAccount(0, 'Savings')]);
+
+    const state = await getPublicState();
+    expect(state.accounts).toHaveLength(3);
+    expect(state.accounts[0]?.name).toBe('Savings');
+    expect(state.accounts.map((account) => account.index)).toEqual([0, 1, 2]);
   });
 });

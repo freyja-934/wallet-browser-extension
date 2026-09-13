@@ -85,6 +85,15 @@ describe('encryption', () => {
 
   it('refuses a versioned blob whose KDF this build does not understand', () => {
     expect(() => kdfFor({ version: 3, salt: '', nonce: '', ciphertext: '' })).toThrow('Unsupported vault format');
+    // A newer version whose parameters happen to look familiar is still a format
+    // this build cannot read: refuse it rather than derive with them and report
+    // the failure as a wrong password.
+    expect(() => kdfFor({ version: 3, kdf: CURRENT_KDF, salt: '', nonce: '', ciphertext: '' })).toThrow(
+      'Unsupported vault format',
+    );
+    expect(() => kdfFor({ version: 2.5, kdf: CURRENT_KDF, salt: '', nonce: '', ciphertext: '' })).toThrow(
+      'Unsupported vault format',
+    );
     expect(() =>
       kdfFor({ version: 2, kdf: { name: 'PBKDF2', hash: 'SHA-256', iterations: 0 }, salt: '', nonce: '', ciphertext: '' }),
     ).toThrow('Unsupported vault format');

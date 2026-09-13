@@ -2,6 +2,7 @@ import { PublicKey, VersionedTransaction, type AccountInfo, type Connection } fr
 import { MINT_SIZE, MintLayout, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import bs58 from 'bs58';
 import {
+  accountAt,
   CHAIN_FOR_CLUSTER,
   isExtensionMessageType,
   UNSUPPORTED_CHAINS,
@@ -331,7 +332,7 @@ export async function fulfillApproval(request: PendingApproval): Promise<Record<
     return {
       connected: true,
       accounts: addresses(next),
-      publicKey: next.accounts[next.activeAccountIndex]?.address,
+      publicKey: accountAt(next.accounts, next.activeAccountIndex)?.address,
       cluster,
     };
   }
@@ -450,7 +451,7 @@ function mintDecimals(mints: PublicKey[], infos: (AccountInfo<Buffer> | null)[])
  */
 export async function previewTransaction(bytes: Uint8Array): Promise<{ preview: PreviewResult }> {
   const state = await getPublicState();
-  const active = state.accounts[state.activeAccountIndex]?.address;
+  const active = accountAt(state.accounts, state.activeAccountIndex)?.address;
   if (state.isLocked || !active) throw new Error('Wallet is locked');
   let preStateSlot: number | undefined;
   const preview = await buildPreview(bytes, {
