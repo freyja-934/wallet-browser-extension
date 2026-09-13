@@ -31,15 +31,16 @@ lint:
 test *ARGS:
     {{ test_c }} {{ ARGS }}
 
-[doc('Build the loadable Chrome MV3 extension into dist/')]
+[doc('Build the loadable Chrome MV3 extension into dist/ (CINDER_OUT_DIR overrides)')]
 ext:
     #!/usr/bin/env bash
     set -euo pipefail
+    OUT="${CINDER_OUT_DIR:-dist}"
     {{ ext_c }}
     # The provider runs in the page's MAIN world: it must carry no API key, no build-time env, and no chrome.* call.
     for needle in 'api-key' 'VITE_' 'chrome.'; do
-        if grep -qF -- "$needle" dist/src/content/injected.js; then
-            echo "ext: refusing dist/ — dist/src/content/injected.js contains '$needle'; the page-world bundle must not." >&2
+        if grep -qF -- "$needle" "$OUT/src/content/injected.js"; then
+            echo "ext: refusing $OUT/ — $OUT/src/content/injected.js contains '$needle'; the page-world bundle must not." >&2
             exit 1
         fi
     done
@@ -58,31 +59,35 @@ store:
     #!/usr/bin/env bash
     set -euo pipefail
     export VITE_NETWORK=mainnet-beta
+    # Its own output directory: dist/ stays the devnet build that is loaded unpacked.
+    export CINDER_OUT_DIR=dist-store
+    OUT="$CINDER_OUT_DIR"
+    rm -rf "$OUT"
     # Remember any key the shell or .env (dotenv-load) carried, so the bundle can be checked for it below.
     KEY_FROM_ENV="${VITE_HELIUS_API_KEY:-}"
     # Empty override beats Vite loading .env. `unset` lets Vite put the key back.
     export VITE_HELIUS_API_KEY=
-    pnpm build:extension
+    just ext
     # Guardrails. The URL is assembled at runtime, so a baked key appears as a bare UUID constant.
     # The bundle legitimately carries the nil UUID and the two RFC 4122 namespace UUIDs; nothing else.
     # -I skips binary media, whose bytes can match the pattern and print "Binary file ... matches".
-    if grep -rEIoh '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' dist/ \
+    if grep -rEIoh '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' "$OUT/" \
         | grep -vE '^(00000000-0000-0000-0000-000000000000|6ba7b81[01]-9dad-11d1-80b4-00c04fd430c8)$' \
         | grep -q .; then
-        echo "store: refusing to zip — dist/ contains a UUID-shaped literal that is not a known vendor constant (a baked API key?). Unset VITE_HELIUS_API_KEY in this shell and rebuild." >&2
+        echo "store: refusing to zip — $OUT/ contains a UUID-shaped literal that is not a known vendor constant (a baked API key?). Unset VITE_HELIUS_API_KEY in this shell and rebuild." >&2
         exit 1
     fi
     # Whatever key the environment carried, in any shape, must not be in the bundle.
-    if [ -n "$KEY_FROM_ENV" ] && grep -rqF -- "$KEY_FROM_ENV" dist/; then
-        echo "store: refusing to zip — dist/ contains the VITE_HELIUS_API_KEY from this shell or .env; the empty override did not take. Unset it and rebuild." >&2
+    if [ -n "$KEY_FROM_ENV" ] && grep -rqF -- "$KEY_FROM_ENV" "$OUT/"; then
+        echo "store: refusing to zip — $OUT/ contains the VITE_HELIUS_API_KEY from this shell or .env; the empty override did not take. Unset it and rebuild." >&2
         exit 1
     fi
-    if ! grep -q 'solana-rpc.publicnode.com' dist/manifest.json; then
-        echo "store: refusing to zip — dist/manifest.json lacks the publicnode host, so the mainnet build cannot load a balance without a key." >&2
+    if ! grep -q 'solana-rpc.publicnode.com' "$OUT/manifest.json"; then
+        echo "store: refusing to zip — $OUT/manifest.json lacks the publicnode host, so the mainnet build cannot load a balance without a key." >&2
         exit 1
     fi
     rm -f cinder-wallet-store.zip
-    (cd dist && zip -r ../cinder-wallet-store.zip . -x '*.DS_Store')
+    (cd "$OUT" && zip -r ../cinder-wallet-store.zip . -x '*.DS_Store')
     echo "Wrote cinder-wallet-store.zip — upload in the Chrome Web Store dashboard. See docs/store/listing.md"
 
 [doc('New branch from a ticket: just branch KEY-123 short-slug')]

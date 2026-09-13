@@ -6,11 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "build:extension": "pnpm build && pnpm build:content && pnpm build:injected && pnpm copy:manifest && pnpm copy:icons",
+    "build:extension": "pnpm build && pnpm build:content && pnpm build:injected && pnpm copy:manifest",
     "build:content": "vite build --config vite.content.config.ts",
     "build:injected": "vite build --config vite.injected.config.ts",
-    "copy:manifest": "cp manifest.json dist/",
-    "copy:icons": "cp -r public/icons dist/",
+    "copy:manifest": "cp manifest.json \"${CINDER_OUT_DIR:-dist}/\" && node scripts/sync-version.mjs",
     "preview": "vite preview",
     "test": "vitest",
     "test:run": "vitest run",
