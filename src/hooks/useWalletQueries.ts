@@ -1,10 +1,9 @@
 import { infiniteQueryOptions, queryOptions, useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
-import { rpcUrlsFor, type Cluster } from '../config/constants';
+import { getCluster, rpcUrlsFor, type Cluster } from '../config/constants';
 import { displayTokenAmount, shortMintLabel } from '../lib/parse-history';
 import { fromSmallestUnit } from '../lib/units';
 import { heliusService, type Transaction as ChainTransaction, type TokenNameRef } from '../services/helius';
 import { walletService } from '../services/wallet';
-import { useAppSelector } from '../store/store';
 import type { NFT, Token, Transaction } from '../store/slices/walletSlice';
 import { useSettings } from './useSettings';
 
@@ -24,7 +23,9 @@ function tokenLabel(mint?: string): string {
 /**
  * What a chain read depends on: the cluster and the configured primary URL
  * (`rpcUrlsFor(...)[0]`, not whichever host answered). Both live in the
- * worker's settings; Redux's cluster stands in while `useSettings` loads.
+ * worker's settings. While `useSettings` loads, the build's own cluster stands
+ * in — the same value the worker falls back to when nothing is stored, so a
+ * fresh install does not change query key and refetch when settings arrive.
  */
 export interface QueryScope {
   cluster: Cluster;
@@ -32,9 +33,8 @@ export interface QueryScope {
 }
 
 function useQueryScope(): QueryScope {
-  const reduxCluster = useAppSelector((state) => state.ui.cluster);
   const { data: settings } = useSettings();
-  const cluster = settings?.cluster ?? reduxCluster;
+  const cluster = settings?.cluster ?? getCluster();
   const primaryUrl = rpcUrlsFor(cluster, settings ?? {})[0];
   return { cluster, primaryUrl };
 }

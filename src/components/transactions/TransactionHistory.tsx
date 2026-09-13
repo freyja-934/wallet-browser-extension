@@ -1,5 +1,7 @@
 import { useState } from 'react';
+import { getCluster } from '../../config/constants';
 import { accountAt } from '../../lib/messages';
+import { useSettings } from '../../hooks/useSettings';
 import { useTransactions } from '../../hooks/useWalletQueries';
 import { errorMessage } from '../../lib/errors';
 import { isEndpointsUnreachable } from '../../services/helius';
@@ -11,7 +13,8 @@ import { TransactionRow } from './TransactionRow';
 
 export function TransactionHistory() {
   const { accounts, activeAccountIndex } = useAppSelector((state) => state.wallet);
-  const cluster = useAppSelector((state) => state.ui.cluster);
+  const { data: settings } = useSettings();
+  const cluster = settings?.cluster ?? getCluster();
   const activeAccount = accountAt(accounts, activeAccountIndex);
   const {
     data,

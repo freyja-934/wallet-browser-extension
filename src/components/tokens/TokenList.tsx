@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { accountAt } from '../../lib/messages';
+import { accountAt, DEFAULT_SETTINGS } from '../../lib/messages';
+import { useSettings } from '../../hooks/useSettings';
 import { useBalances, usePrices, useTokenNames } from '../../hooks/useWalletQueries';
 import { errorMessage } from '../../lib/errors';
 import { displayTokenAmount } from '../../lib/parse-history';
@@ -43,7 +44,9 @@ async function copyMint(mint: string): Promise<void> {
 export function TokenList() {
   const dispatch = useAppDispatch();
   const { accounts, activeAccountIndex } = useAppSelector((state) => state.wallet);
-  const { hideSmallBalances, isRefreshing } = useAppSelector((state) => state.ui);
+  const { isRefreshing } = useAppSelector((state) => state.ui);
+  const { data: settings } = useSettings();
+  const hideSmallBalances = settings?.hideSmallBalances ?? DEFAULT_SETTINGS.hideSmallBalances;
   const address = accountAt(accounts, activeAccountIndex)?.address;
   const { data, isError, error, refetch } = useBalances(address);
   // On-chain names arrive after balances; until then, and if they never do, a token shows its short mint.
