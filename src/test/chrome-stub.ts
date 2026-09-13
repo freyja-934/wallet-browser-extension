@@ -32,6 +32,9 @@ function makeEvent<Args extends unknown[]>(): StubEvent<Args> {
   };
 }
 
+/** What a test hands `runtime.respond`: the worker's reply to one `sendMessage`. */
+export type RuntimeResponder = (message: unknown) => unknown;
+
 export interface StorageChange {
   oldValue?: unknown;
   newValue?: unknown;
@@ -105,7 +108,14 @@ export interface ChromeStub {
     lastError: undefined;
     onMessage: StubEvent<[unknown, unknown, (response: unknown) => void]>;
     onConnect: StubEvent<[unknown]>;
-    sendMessage(message: unknown): Promise<undefined>;
+    sendMessage(message: unknown): Promise<unknown>;
+    /**
+     * Test helper: answer `sendMessage` the way the service worker would.
+     * Without one the stub resolves `undefined`, which is what the popup sees
+     * when no worker is listening — `extensionClient` turns that into a
+     * rejected request.
+     */
+    respond(responder: RuntimeResponder | undefined): void;
     /** Test helper: every `sendMessage` call so far, in order. */
     sent(): unknown[];
   };
@@ -195,6 +205,7 @@ export function createChromeStub(): ChromeStub {
   let removedWindows: number[] = [];
   let sentTabMessages: SentTabMessage[] = [];
   let sentRuntimeMessages: unknown[] = [];
+  let responder: RuntimeResponder | undefined;
   let nextWindowId = 1;
 
   /** `when` wins; otherwise `delayInMinutes`, then `periodInMinutes`, from now — as Chrome computes it. */
@@ -258,7 +269,10 @@ export function createChromeStub(): ChromeStub {
       onConnect: makeEvent<[unknown]>(),
       async sendMessage(message) {
         sentRuntimeMessages.push(message);
-        return undefined;
+        return responder?.(message);
+      },
+      respond(next) {
+        responder = next;
       },
       sent: () => [...sentRuntimeMessages],
     },
@@ -271,6 +285,7 @@ export function createChromeStub(): ChromeStub {
       removedWindows = [];
       sentTabMessages = [];
       sentRuntimeMessages = [];
+      responder = undefined;
       nextWindowId = 1;
     },
   };

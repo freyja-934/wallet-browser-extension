@@ -115,6 +115,10 @@ just store      # mainnet zip for the Chrome Web Store into dist-store/ (does no
 
 `CINDER_OUT_DIR` overrides the output directory of `just ext` (`just store` sets it to `dist-store`).
 
+`pnpm exec vitest run --coverage` runs the same suite with a 94 percent lines threshold over
+`src/background/`, `src/content/` and `src/lib/`. It is separate from `just check` because the
+threshold is a whole-suite figure and `just test <file>` is a narrow run; see `docs/README.md`.
+
 Privacy and terms: `docs/legal/` (the same text ships as `legal/privacy.html` and `legal/terms.html`). Chrome Web Store paste: `docs/store/listing.md`. Docs map: `docs/README.md`. Release notes: `CHANGELOG.md`.
 
 ## Extension e2e

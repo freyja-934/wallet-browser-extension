@@ -17,9 +17,25 @@ Release notes are in `../CHANGELOG.md`; the conventions an agent works under are
 ## What the gate does and does not cover
 
 `just check` is three things: `tsc --noEmit`, ESLint over `src/`, and the Vitest
-suite — unit tests in the `node` environment only. There are no component or
-DOM-level tests and no coverage threshold, because neither `jsdom`/`happy-dom`
-nor a coverage provider is installed; adding a dependency is an owner decision
-(`../AGENTS.md` → Ask first), so it is an outstanding owner action rather than
-something that was decided against. What covers the UI today is the Playwright
-suite (`just e2e`), which drives the real extension in Chromium.
+suite — 607 tests in 35 files. Most run in the `node` environment. The component
+tests (`BalanceCard`, `SendModal`, and `Modal`'s focus management) each opt into
+a DOM with their own `// @vitest-environment jsdom` docblock, so the worker and
+library tests do not pay for jsdom. They render over the real query layer and the
+real reducers, with only two boundaries stubbed — `chrome.runtime.sendMessage`,
+which is what `extensionClient` talks to, and the web3.js `Connection` calls that
+reach the chain — so no component's own hook is mocked into returning a canned
+value.
+
+`pnpm exec vitest run --coverage` adds a **94 percent lines threshold** over
+`src/background/**`, `src/content/**` and `src/lib/**`: the code with real logic
+behind it, since components are covered by their own tests and by Playwright. The
+suite measures 94.73 percent today, so the threshold is a ratchet — raise it when
+the figure rises, never lower it to go green. It is deliberately **not** part of
+`just check`: the threshold is a whole-suite figure, and the documented narrow run
+(`just test path/to/file`) would fail it. Wiring coverage into `just check` or
+into CI is an owner decision (`../AGENTS.md` → Ask first); `.github/workflows/` is
+off limits to agents.
+
+What only the Playwright suite (`just e2e`) covers is the extension in a real
+Chromium: onboarding, the service worker, the injected provider, and the approval
+windows.

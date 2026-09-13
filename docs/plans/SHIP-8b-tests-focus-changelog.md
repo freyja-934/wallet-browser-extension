@@ -8,6 +8,7 @@ Tests that would fail if the wallet broke: keyring, approvals, router, transfers
 
 - Since SHIP-2/5/7 there are `router.test.ts`, `approvals.test.ts`, `origins.test.ts`, `keyring.test.ts`, `transfers.test.ts`, and the chrome stub. Gaps: `injected.ts` (page-side protocol, batch mapping, events), migration and tamper cases, approval expiry and window-close through the router, per-origin cap, and the popup components.
 - `vite.config.ts` `test.include` is `src/**/*.test.ts` (no `.tsx`); the environment is `node`; per-file `// @vitest-environment jsdom` works only if `jsdom` is installed. SHIP-0 item 6 asks the owner to install `jsdom`, `@testing-library/react`, `@testing-library/jest-dom`, `@vitest/coverage-v8@1`. If they are not installed when this phase runs, the component tests and coverage threshold are deferred and reported, not faked.
+  **Resolved 2026-09-13.** They were not installed when this phase ran, so both were deferred and reported in the PR. The owner then authorised the install, and SHIP-10 (`freyja-934/ship-10-component-tests`) landed the widened `test.include`, the coverage gate at 94 percent lines, `BalanceCard.test.tsx`, `SendModal.test.tsx` and `Modal.test.tsx`. Nothing in this phase is outstanding.
 - `Modal.tsx` handles Escape only; focus is not trapped or restored; only the unlock field uses `autoFocus`.
 - No `CHANGELOG.md`, no tags.
 
