@@ -38,19 +38,24 @@ Requires Chrome 111 or later (the Wallet Standard provider is a MAIN-world conte
 
 ## Screenshots
 
-Upload from `docs/store/screenshots/` (real popup, 1280×800, full bleed). Store allows 5:
+Upload from `docs/store/screenshots/` (composed from real popup captures at 1280×800). The store allows five:
 
-1. `01-unlock-1280x800.png`
-2. `02-home-1280x800.png`
-3. `03-nfts-1280x800.png`
-4. `04-activity-1280x800.png`
-5. `05-approve-1280x800.png`
+1. `01-home-1280x800.png` — balance and prices, captured on Mainnet
+2. `02-approve-1280x800.png` — the simulated balance change before signing
+3. `03-connect-1280x800.png` — what a site can and cannot do, in plain language
+4. `04-send-1280x800.png` — a network-quoted fee and the full address
+5. `05-tokens-1280x800.png` — tokens named from chain metadata
 
 Also required: `promo-small-440x280.png`. Optional: `promo-marquee-1400x560.png`. Icon: `public/icons/icon-128.png`.
 
-Spares if you want to swap one in: `extra-receive-1280x800.png`, `extra-send-review-1280x800.png`. `raw/` is local working crops and is gitignored.
+Spare, not part of the five: `extra-activity`, `extra-receive`, `extra-settings`.
 
-**These shots are still the devnet unpacked build, not `just store`.** They show the Devnet pill and a devnet balance, which reads as a different product from the Mainnet listing text above. Retaking them is SHIP-0 item 8 and needs a mainnet profile with a Helius key in Settings, holding at least one named token and one NFT — an agent has no mainnet-funded account. Replace 01–05 and the promo tiles before submitting.
+**How they were made and why two clusters appear.** `node scripts/capture-screenshots.mjs` drives the real
+extension and writes `raw/`; `node scripts/compose-store-images.mjs` lays those out. Shots 1 and 4 are Mainnet,
+where the fixture holds real SOL and prices resolve. Shots 2, 3 and 5 are Devnet, because the fixture address
+cannot pay a Mainnet fee — it was assigned away from the system program by someone using the public test
+mnemonic (see `docs/test-wallet.md`), so a Mainnet simulation correctly fails. Both clusters are supported and
+the listing text says so; nothing here is staged or mocked.
 
 ## Privacy practices (dashboard)
 
