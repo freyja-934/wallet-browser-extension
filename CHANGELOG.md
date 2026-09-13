@@ -80,6 +80,10 @@ cuts the release.
   phrase from a password manager or a PDF is no longer called invalid; and the
   "I stored this phrase" attestation is a real user action rather than a
   read-only box that ticked itself on reveal.
+- **SHIP-8b** — A single RPC blip no longer dead-ends a send: both fee reads
+  retry twice with backoff, and the Review pane's fee error and the Amount
+  step's balance error each carry a Retry, so "Unavailable" is no longer a
+  state the user can only escape by closing the modal.
 
 ---
 
