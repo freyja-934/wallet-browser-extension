@@ -1,17 +1,27 @@
+import { Keypair } from '@solana/web3.js';
+import bs58 from 'bs58';
+import { Buffer } from 'buffer';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { CURRENT_VAULT_VERSION, V1_KDF, type EncryptedData } from '../lib/encryption-simple';
+import type { WalletAccountInfo } from '../lib/messages';
+import { deriveKeypairFromSeed, mnemonicToSeedBuffer } from '../lib/wallet';
 import { installChromeStub, uninstallChromeStub, type ChromeStub } from '../test/chrome-stub';
-import { TEST_MNEMONIC, TEST_PASSWORD } from '../test/fixtures';
+import { TEST_ADDRESS, TEST_MNEMONIC, TEST_PASSWORD } from '../test/fixtures';
 import { enqueueApproval, getApprovalResult } from './approvals';
 import * as origins from './origins';
 import {
+  changePassword,
   clearWallet,
   createWallet,
+  exportPrivateKey,
+  exportSeed,
   getPublicState,
   getSettings,
   lock,
   resetKeyringForTests,
   setBuildHeliusApiKeyForTests,
   setLockHooks,
+  switchAccount,
   touchActivity,
   unlock,
   updateSettings,
@@ -276,5 +286,201 @@ describe('touchActivity', () => {
     await updateSettings({ autoLockTimeout: 0 });
     await touchActivity();
     expect(chromeStub.alarms.scheduled()).toEqual({});
+  });
+});
+
+const VAULT_KEY = 'cinder_vault';
+const ACCOUNTS_KEY = 'cinder_accounts';
+
+interface StoredVault {
+  encrypted: EncryptedData;
+  createdAt: number;
+}
+
+async function readVault(): Promise<StoredVault> {
+  const stored = (await chromeStub.storage.local.get(VAULT_KEY))[VAULT_KEY] as StoredVault | undefined;
+  if (!stored) throw new Error('no vault stored');
+  return stored;
+}
+
+/**
+ * A vault exactly as builds before this phase wrote it: no `version`, no `kdf`,
+ * PBKDF2-SHA256 at 100k iterations. Written with WebCrypto rather than
+ * `encrypt`, which now only produces the current format.
+ */
+async function writeV1Vault(payload: unknown, password: string): Promise<void> {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const nonce = crypto.getRandomValues(new Uint8Array(12));
+  const material = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(password),
+    'PBKDF2',
+    false,
+    ['deriveKey'],
+  );
+  const key = await crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: V1_KDF.iterations, hash: V1_KDF.hash },
+    material,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt'],
+  );
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: nonce },
+    key,
+    new TextEncoder().encode(JSON.stringify(payload)),
+  );
+  const encrypted: EncryptedData = {
+    salt: Buffer.from(salt).toString('hex'),
+    nonce: Buffer.from(nonce).toString('hex'),
+    ciphertext: Buffer.from(ciphertext).toString('hex'),
+  };
+  await chromeStub.storage.local.set({ [VAULT_KEY]: { encrypted, createdAt: Date.now() } });
+}
+
+/** The fixture account list as the vault payload carries it. */
+async function fixtureAccounts(count = 1): Promise<WalletAccountInfo[]> {
+  const seed = await mnemonicToSeedBuffer(TEST_MNEMONIC);
+  const accounts: WalletAccountInfo[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const { keypair, derivationPath } = await deriveKeypairFromSeed(seed, index);
+    accounts.push({
+      address: keypair.publicKey.toBase58(),
+      name: `Account ${index + 1}`,
+      derivationPath,
+      index,
+    });
+  }
+  return accounts;
+}
+
+describe('the vault', () => {
+  it('creates, locks, and unlocks again with the same password', async () => {
+    const created = await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
+    expect(created.accounts[0]?.address).toBe(TEST_ADDRESS);
+    expect(created.isLocked).toBe(false);
+
+    const locked = await lock();
+    expect(locked.isLocked).toBe(true);
+    expect(locked.accounts).toEqual([]);
+
+    const unlocked = await unlock(TEST_PASSWORD);
+    expect(unlocked.isLocked).toBe(false);
+    expect(unlocked.accounts[0]?.address).toBe(TEST_ADDRESS);
+  });
+
+  it('writes the current format, with fresh salt and nonce on every encrypt', async () => {
+    await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
+    const first = await readVault();
+    expect(first.encrypted.version).toBe(CURRENT_VAULT_VERSION);
+    expect(first.encrypted.kdf).toEqual({ name: 'PBKDF2', hash: 'SHA-256', iterations: 600_000 });
+
+    // The same vault contents, encrypted a second time under the same password.
+    resetKeyringForTests();
+    await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
+    const second = await readVault();
+    expect(second.encrypted.salt).not.toBe(first.encrypted.salt);
+    expect(second.encrypted.nonce).not.toBe(first.encrypted.nonce);
+    expect(second.encrypted.ciphertext).not.toBe(first.encrypted.ciphertext);
+  });
+
+  it('opens a v1 vault, rewrites it as v2, and opens the rewritten one', async () => {
+    await writeV1Vault({ mnemonic: TEST_MNEMONIC, accounts: await fixtureAccounts() }, TEST_PASSWORD);
+    expect((await readVault()).encrypted.version).toBeUndefined();
+
+    const migrated = await unlock(TEST_PASSWORD);
+    expect(migrated.accounts[0]?.address).toBe(TEST_ADDRESS);
+
+    const rewritten = await readVault();
+    expect(rewritten.encrypted.version).toBe(CURRENT_VAULT_VERSION);
+    expect(rewritten.encrypted.kdf?.iterations).toBe(600_000);
+
+    await lock();
+    const again = await unlock(TEST_PASSWORD);
+    expect(again.isLocked).toBe(false);
+    expect(again.accounts[0]?.address).toBe(TEST_ADDRESS);
+    // Nothing derived a second format: the blob is still the one the migration wrote.
+    expect((await readVault()).encrypted.ciphertext).toBe(rewritten.encrypted.ciphertext);
+  });
+
+  it('refuses the wrong password and stays locked', async () => {
+    await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
+    await lock();
+    await expect(unlock('not-the-password')).rejects.toThrow('Invalid password');
+    expect((await getPublicState()).isLocked).toBe(true);
+  });
+
+  it('refuses a tampered ciphertext', async () => {
+    await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
+    await lock();
+    const vault = await readVault();
+    // Flip one byte of the ciphertext; AES-GCM authentication must reject it.
+    const bytes = Buffer.from(vault.encrypted.ciphertext, 'hex');
+    bytes[0] ^= 0xff;
+    await chromeStub.storage.local.set({
+      [VAULT_KEY]: {
+        ...vault,
+        encrypted: { ...vault.encrypted, ciphertext: bytes.toString('hex') },
+      },
+    });
+
+    await expect(unlock(TEST_PASSWORD)).rejects.toThrow('Invalid password');
+    expect((await getPublicState()).isLocked).toBe(true);
+  });
+});
+
+describe('changePassword', () => {
+  it('rejects a weak password and leaves the old one working', async () => {
+    await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
+    const before = await readVault();
+
+    await expect(changePassword(TEST_PASSWORD, 'short')).rejects.toThrow(/at least 8 characters/);
+    expect((await readVault()).encrypted.ciphertext).toBe(before.encrypted.ciphertext);
+
+    await lock();
+    expect((await unlock(TEST_PASSWORD)).isLocked).toBe(false);
+  });
+
+  it('rewrites the vault so only the new password opens it', async () => {
+    await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
+    await changePassword(TEST_PASSWORD, 'TestWallet2!');
+    await lock();
+
+    await expect(unlock(TEST_PASSWORD)).rejects.toThrow('Invalid password');
+    expect((await unlock('TestWallet2!')).accounts[0]?.address).toBe(TEST_ADDRESS);
+  });
+});
+
+describe('the session', () => {
+  it('keeps the active account across an unlock', async () => {
+    await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
+    // Two accounts on record, as a later ADD_ACCOUNT leaves them; the addresses
+    // are re-derived on unlock, so only the names have to be right here.
+    await chromeStub.storage.local.set({ [ACCOUNTS_KEY]: { accounts: await fixtureAccounts(2) } });
+    expect((await switchAccount(1)).activeAccountIndex).toBe(1);
+
+    const unlocked = await unlock(TEST_PASSWORD);
+    expect(unlocked.activeAccountIndex).toBe(1);
+    expect(unlocked.accounts).toHaveLength(2);
+  });
+
+  it('exports the private key of the account that was asked for, not the active one', async () => {
+    await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
+    await chromeStub.storage.local.set({ [ACCOUNTS_KEY]: { accounts: await fixtureAccounts(2) } });
+
+    const key = await exportPrivateKey(TEST_PASSWORD, 1);
+    // A base58 ed25519 secret key: 64 bytes, and the public half is account 1's address.
+    const secret = bs58.decode(key);
+    expect(secret).toHaveLength(64);
+    expect(Keypair.fromSecretKey(secret).publicKey.toBase58()).toBe((await fixtureAccounts(2))[1]?.address);
+    expect(await exportPrivateKey(TEST_PASSWORD, 0)).not.toBe(key);
+    // The export left the wallet unlocked on the account the user had active.
+    expect((await getPublicState()).activeAccountIndex).toBe(0);
+  });
+
+  it('exports the seed phrase only with the right password', async () => {
+    await createWallet(TEST_PASSWORD, TEST_MNEMONIC);
+    expect(await exportSeed(TEST_PASSWORD)).toBe(TEST_MNEMONIC);
+    await expect(exportSeed('not-the-password')).rejects.toThrow('Invalid password');
   });
 });

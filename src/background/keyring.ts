@@ -2,7 +2,13 @@ import { Keypair } from '@solana/web3.js';
 import { Buffer } from 'buffer';
 import bs58 from 'bs58';
 import { BUILD_HELIUS_API_KEY, getCluster } from '../config/constants';
-import { decrypt, encrypt, EncryptedData } from '../lib/encryption-simple';
+import {
+  CURRENT_VAULT_VERSION,
+  decrypt,
+  encrypt,
+  validatePasswordStrength,
+  type EncryptedData,
+} from '../lib/encryption-simple';
 import {
   DEFAULT_SETTINGS,
   WalletAccountInfo,
@@ -292,6 +298,12 @@ async function persistAccounts(accounts: WalletAccountInfo[]): Promise<void> {
   await localSet(ACCOUNTS_KEY, { accounts });
 }
 
+/** One place that writes the vault, so every write carries the current format. */
+async function writeVault(payload: VaultPayload, password: string): Promise<void> {
+  const encrypted = await encrypt(JSON.stringify(payload), password);
+  await localSet(VAULT_KEY, { encrypted, createdAt: Date.now() } satisfies StoredVault);
+}
+
 export async function createWallet(password: string, mnemonic?: string): Promise<WalletPublicState> {
   const seedInfo = mnemonic ? validateSeedPhrase(mnemonic) : generateSeedPhrase(12);
   if (!seedInfo.isValid) {
@@ -299,39 +311,70 @@ export async function createWallet(password: string, mnemonic?: string): Promise
   }
   const seed = await mnemonicToSeedBuffer(seedInfo.mnemonic);
   const accounts = await generateAccountsFromSeed(seed, 1);
-  const payload: VaultPayload = { mnemonic: seedInfo.mnemonic, accounts };
-  const encrypted = await encrypt(JSON.stringify(payload), password);
-  await localSet(VAULT_KEY, { encrypted, createdAt: Date.now() } satisfies StoredVault);
+  await writeVault({ mnemonic: seedInfo.mnemonic, accounts }, password);
   await persistAccounts(accounts);
   await writeSession({ seedB64: seed.toString('base64'), activeAccountIndex: 0 });
   await scheduleAutoLock();
   return getPublicState();
 }
 
-async function decryptVault(password: string): Promise<VaultPayload> {
+interface DecryptedVault {
+  payload: VaultPayload;
+  /** The format the stored blob was written in; below `CURRENT_VAULT_VERSION` it is migrated. */
+  version: number;
+}
+
+async function decryptVault(password: string): Promise<DecryptedVault> {
   const vault = await localGet<StoredVault>(VAULT_KEY);
   if (!vault) throw new Error('No wallet found');
   try {
     const bytes = await decrypt(vault.encrypted, password);
-    return JSON.parse(new TextDecoder().decode(bytes)) as VaultPayload;
+    return {
+      payload: JSON.parse(new TextDecoder().decode(bytes)) as VaultPayload,
+      version: vault.encrypted.version ?? 1,
+    };
   } catch {
     throw new Error('Invalid password');
   }
 }
 
-export async function unlock(password: string): Promise<WalletPublicState> {
-  const payload = await decryptVault(password);
+/**
+ * Decrypt once, and bring an older blob up to the current format straight away:
+ * the new blob is written before anything else happens, so a worker that dies
+ * mid-unlock leaves a vault that opens with the same password either way.
+ */
+async function openVault(password: string): Promise<VaultPayload> {
+  const { payload, version } = await decryptVault(password);
+  if (version < CURRENT_VAULT_VERSION) await writeVault(payload, password);
+  return payload;
+}
+
+/**
+ * Establish the session from an already-decrypted payload, so the callers that
+ * needed the payload anyway (export, change-password) derive the key once.
+ *
+ * The account list comes from `cinder_accounts`, not the vault payload: accounts
+ * added after the vault was written are not in the payload and must not vanish.
+ * A session that is already open keeps its active account.
+ */
+async function unlockWithPayload(payload: VaultPayload): Promise<WalletPublicState> {
   const seed = await mnemonicToSeedBuffer(payload.mnemonic);
-  const derived = await generateAccountsFromSeed(seed, Math.max(payload.accounts.length, 1));
-  const accounts = derived.map((account, i) => ({
-    ...account,
-    name: payload.accounts[i]?.name ?? account.name,
-  }));
+  const stored = (await localGet<{ accounts: WalletAccountInfo[] }>(ACCOUNTS_KEY))?.accounts ?? [];
+  const names = stored.length ? stored : payload.accounts;
+  const derived = await generateAccountsFromSeed(seed, Math.max(names.length, 1));
+  const accounts = derived.map((account, i) => ({ ...account, name: names[i]?.name ?? account.name }));
   await persistAccounts(accounts);
-  await writeSession({ seedB64: seed.toString('base64'), activeAccountIndex: 0 });
+  const previous = await readSession();
+  const activeAccountIndex =
+    previous && previous.activeAccountIndex < accounts.length ? previous.activeAccountIndex : 0;
+  await writeSession({ seedB64: seed.toString('base64'), activeAccountIndex });
   await scheduleAutoLock();
   await runHook(lockHooks.onUnlocked);
   return getPublicState();
+}
+
+export async function unlock(password: string): Promise<WalletPublicState> {
+  return unlockWithPayload(await openVault(password));
 }
 
 export async function lock(): Promise<WalletPublicState> {
@@ -371,23 +414,28 @@ export async function signMessage(message: Uint8Array, accountIndex?: number): P
 }
 
 export async function exportSeed(password: string): Promise<string> {
-  const payload = await decryptVault(password);
-  await unlock(password);
+  const payload = await openVault(password);
+  await unlockWithPayload(payload);
   return payload.mnemonic;
 }
 
 export async function exportPrivateKey(password: string, accountIndex: number): Promise<string> {
-  await unlock(password);
+  await unlockWithPayload(await openVault(password));
   const keypair = await getKeypair(accountIndex);
   return bs58.encode(keypair.secretKey);
 }
 
+/**
+ * The new password must pass the same strength check the create screen applies;
+ * the vault is only rewritten once the current password has actually opened it,
+ * so a rejected change leaves the old vault exactly as it was.
+ */
 export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
-  const payload = await decryptVault(currentPassword);
-  const state = await unlock(currentPassword);
-  const next: VaultPayload = { mnemonic: payload.mnemonic, accounts: state.accounts };
-  const encrypted = await encrypt(JSON.stringify(next), newPassword);
-  await localSet(VAULT_KEY, { encrypted, createdAt: Date.now() } satisfies StoredVault);
+  const strength = validatePasswordStrength(newPassword);
+  if (!strength.isValid) throw new Error(strength.feedback[0] ?? 'Password is too weak');
+  const { payload } = await decryptVault(currentPassword);
+  const state = await unlockWithPayload(payload);
+  await writeVault({ mnemonic: payload.mnemonic, accounts: state.accounts }, newPassword);
 }
 
 export async function clearWallet(): Promise<WalletPublicState> {
