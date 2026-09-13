@@ -13,11 +13,26 @@ export const BUILD_HELIUS_API_KEY = (import.meta.env.VITE_HELIUS_API_KEY as stri
 export type Cluster = 'mainnet-beta' | 'devnet';
 
 /**
- * Keyless mainnet default. There is only one: `api.mainnet-beta.solana.com` answers 403
- * to any request carrying an `Origin` header, and every extension request carries one, so
- * it could never serve a single call from here and is not in the manifest either. When
- * publicnode is down or blocked the wallet has no keyless mainnet endpoint at all and says
- * so — the fix is a custom RPC URL or a Helius key in Settings, not another public host.
+ * Keyless mainnet default. There is deliberately only one.
+ *
+ * `api.mainnet-beta.solana.com` answers 403 to any request carrying an `Origin` header,
+ * and every extension request carries one, so it could never serve a call from here and
+ * is not in the manifest either.
+ *
+ * The rest of the keyless field was swept on 2026-09-13 with
+ * `scripts/probe-mainnet-rpcs.mjs`, which fetches from a real `chrome-extension://` page
+ * because curl does not enforce CORS and so reports endpoints as working that a browser
+ * refuses. Of the candidates, OnFinality 429s without a key, dRPC answers 400 ("not
+ * available on free plan"), Omniatech 521s, and Ankr and BlockEden demand a key. One did
+ * serve the extension origin: `solana.leorpc.com/?api_key=FREE`. It is left out on
+ * purpose. Every host in this list receives the addresses a user looks up and the
+ * transactions they sign, so a shared free-tier credential on a small provider is a trust
+ * decision, not a redundancy win, and it would need saying in the privacy policy.
+ *
+ * The consequence is accepted: when publicnode is blocked or down the wallet has no
+ * keyless mainnet endpoint, and it says exactly that rather than showing a balance it
+ * cannot read. The fix offered to the user is a custom RPC URL or a Helius key in
+ * Settings. Re-run the probe before revisiting this.
  */
 export const PUBLIC_MAINNET_RPCS: readonly string[] = ['https://solana-rpc.publicnode.com'];
 
