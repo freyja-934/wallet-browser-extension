@@ -1,6 +1,6 @@
 import { PublicKey } from '@solana/web3.js';
 import { useQuery } from '@tanstack/react-query';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { getCluster } from '../../config/constants';
 import { accountAt } from '../../lib/messages';
@@ -116,10 +116,16 @@ export function SendModal() {
   const submittedRef = useRef(false);
   const [submitted, setSubmitted] = useState(false);
 
-  // The row the user clicked picks the asset; a plain "Send" starts on SOL.
-  useEffect(() => {
+  // The row the user clicked picks the asset; a plain "Send" starts on SOL. The
+  // selector is the user's own afterwards, so the opening asset is not derived
+  // from the prop — it is adjusted during render each time the modal opens on
+  // something new, which React re-runs before painting rather than after.
+  const openedOn = `${showSendModal}:${assetKey(sendAsset)}`;
+  const [lastOpenedOn, setLastOpenedOn] = useState(openedOn);
+  if (lastOpenedOn !== openedOn) {
+    setLastOpenedOn(openedOn);
     setSelectedKey(assetKey(sendAsset));
-  }, [sendAsset, showSendModal]);
+  }
 
   const selected = useMemo<Selected>(() => {
     if (selectedKey === SOL_KEY) {

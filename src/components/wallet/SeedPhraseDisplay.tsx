@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import toast from 'react-hot-toast';
 import { Banner, StepHeader, StepScreen } from '../ui/EmptyState';
 import { GhostButton, PrimaryButton, SecondaryButton } from '../ui/Button';
@@ -16,14 +16,11 @@ export function SeedPhraseDisplay({
   onBack?: () => void;
 }) {
   const [isBlurred, setIsBlurred] = useState(true);
-  const [hasViewed, setHasViewed] = useState(false);
   const [attested, setAttested] = useState(false);
   const [confirmCopy, setConfirmCopy] = useState(false);
   const words = seedPhrase.split(' ');
-
-  useEffect(() => {
-    if (!isBlurred) setHasViewed(true);
-  }, [isBlurred]);
+  // Revealing is one-way, so "has seen the phrase" is simply the cover being off.
+  const hasViewed = !isBlurred;
 
   return (
     <>
