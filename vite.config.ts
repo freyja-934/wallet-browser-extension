@@ -118,7 +118,34 @@ export default defineConfig({
     ],
   },
   test: {
+    // `node` is the default; a component test opts into a DOM with its own
+    // `// @vitest-environment jsdom` docblock rather than paying for jsdom in
+    // all 600-odd worker and library tests.
     environment: 'node',
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.{ts,tsx}'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'html'],
+      /**
+       * The code with real logic behind it: the service worker, the page-world
+       * provider, and the shared libraries. Components are covered by their own
+       * tests and by the Playwright suite, which drives the real extension —
+       * counting their lines here would measure rendering, not behaviour.
+       */
+      include: ['src/background/**', 'src/content/**', 'src/lib/**'],
+      thresholds: {
+        /**
+         * A ratchet, not an aspiration. The suite measures 94.73 percent of
+         * lines over the directories above today (`background` 95.47,
+         * `content` 72.25, `lib` 97.77); the gate sits just under that, so a
+         * real drop fails and nobody has to argue about a round number that
+         * was never met. Raise it when the figure rises, never lower it to go
+         * green. Collected only by `pnpm exec vitest run --coverage`: a
+         * narrow `just test <file>` must not be failed by the whole suite's
+         * threshold.
+         */
+        lines: 94,
+      },
+    },
   },
 });
