@@ -1,5 +1,5 @@
 import type { ExtensionMessageType, WalletSettings } from '../lib/messages';
-import type { WalletRequestPayload, WalletResponses } from '../lib/protocol';
+import type { FeeEstimate, WalletRequestPayload, WalletResponses } from '../lib/protocol';
 
 type Envelope<T extends ExtensionMessageType> =
   | ({ success: true } & WalletResponses[T])
@@ -36,6 +36,10 @@ export const extensionClient = {
     (await send('EXPORT_PRIVATE_KEY', { password, accountIndex })).privateKey,
   sendTransfer: async (params: { to: string; amountSmallest: string; mint?: string }) =>
     (await send('SEND_TRANSFER', params)).signature,
+  estimateFee: async (params: { to: string; amountSmallest: string; mint?: string }): Promise<FeeEstimate> => {
+    const { feeLamports, rentExemptMin, recipient } = await send('ESTIMATE_FEE', params);
+    return { feeLamports, rentExemptMin, recipient };
+  },
   getPendingRequest: async (id: string) => (await send('GET_PENDING_REQUEST', { id })).request,
   approveRequest: async (id: string) => {
     await send('APPROVE_REQUEST', { id });

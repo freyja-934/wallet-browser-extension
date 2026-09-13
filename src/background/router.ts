@@ -46,7 +46,7 @@ import {
 } from './approvals';
 import { addressesActiveFirst, sendToConnected, sendWalletEvent, snapshot } from './events';
 import * as origins from './origins';
-import { getConnection, sendTransfer } from './transfers';
+import { estimateTransfer, getConnection, sendTransfer } from './transfers';
 
 /**
  * Worker entry for one runtime message. Gate on the sender first, then parse,
@@ -267,8 +267,7 @@ async function dispatch(request: WalletRequest, caller: Caller): Promise<WalletR
         }),
       };
     case 'ESTIMATE_FEE':
-      // Wired to `estimateTransfer` in the next slice; the popup falls back to the fixed fee until then.
-      throw new Error('Fee estimate unavailable');
+      return estimateTransfer({ to: request.to, amountSmallest: request.amountSmallest, mint: request.mint });
     default:
       return assertNever(request);
   }
