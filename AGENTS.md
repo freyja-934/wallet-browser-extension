@@ -20,15 +20,15 @@ Do not send mainnet funds to this address. Do not `console.log` the phrase from 
 - `just typecheck` — `pnpm exec tsc --noEmit`
 - `just lint` — `pnpm lint`
 - `just test` — `pnpm exec vitest run` (never bare `pnpm test`; that is watch mode)
-- `just ext` — `pnpm build:extension`
+- `just ext` — `pnpm build:extension` into `dist/` (`CINDER_OUT_DIR` overrides the directory)
 - `just dapp` — test dApp at http://localhost:5174
-- `just e2e` — build dist/ then Playwright Chromium: import, dashboard, create, send review, settings, dApp connect/sign, locked unlock, signAndSend reject, 0-lamport signAndSend approve
-- `just store` — mainnet zip `cinder-wallet-store.zip` for Chrome Web Store (does not submit)
+- `just e2e` — build dist/ then Playwright Chromium: import, unlock, dashboard tabs, create + seed quiz, a second create refused, send review and a confirmed devnet self-transfer, settings (auto-lock, export seed, change password), accounts (add, switch, rename, survive lock), receive copy, dApp connect/sign/signAndSend (batch, cluster switch, wrong chain, transaction-as-message, bridged-type override), approval lifecycle (close, cancel, revoke, expiry), locked unlock in the approval window, connected sites and revoke
+- `just store` — mainnet build into `dist-store/`, zipped as `cinder-wallet-store.zip` for the Chrome Web Store; leaves `dist/` alone (does not submit)
 - `just branch ID SLUG` / `just pr`
 
 ## Conventions that differ from defaults
 
-- Popup talks to the service worker; the popup never holds a `Keypair` or mnemonic.
+- The popup talks to the service worker. The popup shows the mnemonic only during create, import, and password-gated export, and holds it in component state for that screen alone; it never holds a `Keypair` or the seed, and no secret goes through Redux.
 - Never set `isPhantom` or write `window.phantom`. Brand is **Cinder Wallet**.
 - dApp surface is Wallet Standard, not a custom `window.solana` impersonator.
 - Vault is PBKDF2 + AES-GCM via WebCrypto. Do not add Argon2 WASM.

@@ -19,4 +19,4 @@ Paste evidence below.
 
 - [ ] `just check` is green
 - [ ] No secrets committed
-- [ ] AI-assisted with Cursor — I have read and understand every line
+- [ ] AI-assisted — I have read and understand every line

@@ -47,7 +47,80 @@ Ship a zip under 2 MB that paints fast, a manifest with nothing unused, a listin
    AGENTS.md: the popup/mnemonic rule per the SHIP-7b wording, commands unchanged; PR template checklist line reworded to "AI-assisted — I have read and understand every line"; plans moved to `docs/history/` or kept per the SHIP-0 decision (default: keep, add a one-line index in `docs/README.md`).
    Verify: `just check`.
 
-Owner follow-ups written into this plan for `.github/workflows/check.yml`: a `store` job running `just store` and uploading `cinder-wallet-store.zip` as an artifact; a `e2e` job with `pnpm exec playwright install --with-deps chromium` and `just e2e` (needs a funded devnet fixture or a skip flag for the send test). Tag `v0.3.0` after merge.
+## Owner follow-ups
+
+`.github/workflows/` is off limits to agents, so the exact YAML is here. Append
+these two jobs to `.github/workflows/check.yml` (the existing `check` job is
+unchanged; both new jobs re-install rather than depending on it, so they can run
+in parallel):
+
+```yaml
+  store:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - uses: extractions/setup-just@v2
+      - run: just setup
+      # No VITE_HELIUS_API_KEY and no .env in CI: the recipe's own guards fail
+      # the job if a key-shaped literal ever reaches the bundle.
+      - run: just store
+      - run: ls -l cinder-wallet-store.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cinder-wallet-store
+          path: cinder-wallet-store.zip
+          if-no-files-found: error
+
+  e2e:
+    runs-on: ubuntu-latest
+    env:
+      # `just ext` reads this; CI has no .env, so set the cluster the suite expects.
+      VITE_NETWORK: devnet
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - uses: extractions/setup-just@v2
+      - run: just setup
+      - run: pnpm exec playwright install --with-deps chromium
+      # Headed Chromium is required to load an extension; xvfb supplies the display.
+      - run: xvfb-run -a just e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+```
+
+Two prerequisites before the `e2e` job is green, both outside the repo:
+
+- **Billing.** Actions are locked (SHIP-0 item 2); nothing runs until that is fixed.
+- **A funded devnet fixture.** `e2e/send.spec.ts` and the `signAndSend` approve
+  case broadcast fee-only self-transfers and fail with `AccountNotFound` when
+  `HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk` is empty (SHIP-0 item 10). A
+  scheduled job cannot airdrop reliably — the RPC faucet is rate-limited. Either
+  keep the address topped up from https://faucet.solana.com, or gate the two
+  broadcasting cases behind an env flag (`E2E_BROADCAST=1`) and leave CI on the
+  non-broadcasting ones. Do not weaken the specs to make CI green.
+
+After merge: tag `v0.3.0` on the merge commit and cut the GitHub release from
+the `0.3.0` section of `CHANGELOG.md`, attaching the `cinder-wallet-store.zip`
+the `store` job produced (or a local `just store` build).
 
 ## Out of scope
 
