@@ -490,3 +490,23 @@ describe('withLock', () => {
     await blocked;
   });
 });
+
+describe('the sweep and the per-origin cap', () => {
+  it('frees the origin it expired, so the site may prompt again straight away', async () => {
+    const id = await enqueueApproval('connect', A);
+    const { createdAt } = (await getPending(id))!;
+    // The cap is what makes this worth asserting: a swept request that still
+    // counted would lock the site out of the wallet until the worker restarted.
+    await expect(enqueueApproval('connect', A)).rejects.toThrow('A request is already pending for this site');
+
+    expect(await expirePending(createdAt + APPROVAL_TTL_MS)).toEqual([id]);
+    const again = await enqueueApproval('connect', A);
+    expect(again).not.toBe(id);
+    expect(pendingMap()[again]).toMatchObject({ origin: A });
+
+    // The fresh request is not old enough for the next sweep to take with it.
+    expect(await expirePending()).toEqual([]);
+    await expect(getApprovalResult(id)).resolves.toEqual({ status: 'rejected', error: 'Approval expired' });
+    await expect(getApprovalResult(again)).resolves.toEqual({ status: 'pending' });
+  });
+});
