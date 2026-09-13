@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import type { PendingApproval } from '../../lib/messages';
+import { accountAt, type PendingApproval, type WalletPublicState, type WalletSettings } from '../../lib/messages';
 import type { PreviewResult } from '../../lib/preview';
 import { extensionClient } from '../../messaging/client';
 import { PopupFrame } from '../ui/Atmosphere';
-import { Banner } from '../ui/EmptyState';
+import { AddressText, Banner } from '../ui/EmptyState';
 import { PrimaryButton, SecondaryButton } from '../ui/Button';
 import { Card, CardContent } from '../ui/Card';
 import { GlowMark } from '../ui/GlowMark';
@@ -16,6 +16,23 @@ const KIND_LABEL: Record<string, string> = {
   signTransaction: 'Sign transaction',
   signAndSendTransaction: 'Send transaction',
 };
+
+const CLUSTER_LABEL: Record<WalletSettings['cluster'], string> = {
+  'mainnet-beta': 'Solana Mainnet',
+  devnet: 'Solana Devnet',
+};
+
+/**
+ * What a connect grant is and is not, in the order a reader needs it. This is a
+ * description of the grant the worker already makes — sharing the addresses and
+ * letting the site ask — not a new one: every signature still opens its own
+ * approval window.
+ */
+const CONNECT_CAN = ['See your wallet address and its on-chain activity', 'Ask you to sign transactions and messages'];
+const CONNECT_CANNOT = [
+  'Move any SOL or token without a separate approval, every time',
+  'See your recovery phrase, your private keys or your password',
+];
 
 /** A preview that could not be fetched at all (the worker threw): shown in place, never approvable. */
 interface PreviewFailure {
@@ -35,6 +52,10 @@ export function ApprovalScreen() {
   const [request, setRequest] = useState<PendingApproval | null>(null);
   // null until GET_STATE answers; the request summary renders either way.
   const [locked, setLocked] = useState<boolean | null>(null);
+  // Who would be shared, and on which cluster. Both are read-only context for the
+  // reader: neither changes what Approve grants.
+  const [accounts, setAccounts] = useState<WalletPublicState | null>(null);
+  const [cluster, setCluster] = useState<WalletSettings['cluster'] | null>(null);
   // The worker settled the request while this window was open (a lock rejected it, the page gave up).
   const [expired, setExpired] = useState(false);
   // One entry per transaction of the request, in order, once all of them have settled.
@@ -51,9 +72,16 @@ export function ApprovalScreen() {
     let cancelled = false;
     (async () => {
       try {
-        const [state, pending] = await Promise.all([extensionClient.getState(), extensionClient.getPendingRequest(id)]);
+        const [state, pending, settings] = await Promise.all([
+          extensionClient.getState(),
+          extensionClient.getPendingRequest(id),
+          // Context only: a settings read that fails must not stop the request rendering.
+          extensionClient.getSettings().catch(() => null),
+        ]);
         if (cancelled) return;
         setLocked(state.isLocked);
+        setAccounts(state);
+        if (settings) setCluster(settings.cluster);
         setRequest(pending);
         if (!pending) setError('This request has expired. Retry it from the site.');
       } catch (err) {
@@ -81,6 +109,13 @@ export function ApprovalScreen() {
   // enabling Approve. A request that is gone renders as expired with Approve disabled.
   const onUnlocked = async () => {
     setLocked(false);
+    // A locked wallet reports no accounts, so the account this connect would share
+    // is only knowable now.
+    try {
+      setAccounts(await extensionClient.getState());
+    } catch {
+      /* the account row stays unknown */
+    }
     try {
       const pending = await extensionClient.getPendingRequest(id);
       if (pending) {
@@ -144,6 +179,13 @@ export function ApprovalScreen() {
 
   const originHost = request?.origin ? safeHost(request.origin) : '';
   const isSend = request?.kind === 'signAndSendTransaction';
+  const isConnect = request?.kind === 'connect';
+  // The account the site is told is active. A locked wallet reports none, so this is
+  // undefined until the inline unlock; the row says so rather than guessing.
+  const sharedAccount = accounts ? accountAt(accounts.accounts, accounts.activeAccountIndex) : undefined;
+  // Connecting shares every account in the wallet, not only the active one (see
+  // `fulfillApproval`): when there is more than one, the screen has to say so.
+  const sharedCount = accounts?.accounts.length ?? 0;
   const transactionCount = request?.transactions?.length ?? 0;
   // Never let a transaction be approved before every preview has settled.
   const awaitingPreview = transactionCount > 0 && previews === null;
@@ -194,6 +236,52 @@ export function ApprovalScreen() {
                     Expired — the site is no longer waiting for this request.
                   </p>
                 )}
+              </CardContent>
+            </Card>
+          )}
+
+          {isConnect && (
+            <Card className="mb-4">
+              <CardContent>
+                {/* Card does not forward attributes; the marker lives on this wrapper. */}
+                <div className="space-y-3 text-sm" data-testid="approval-connect">
+                  <div className="flex justify-between gap-3">
+                    <span className="text-fg-2">Account</span>
+                    {sharedAccount ? (
+                      <span className="text-right" data-testid="approval-connect-account">
+                        <span className="text-fg-0">{sharedAccount.name}</span>{' '}
+                        <AddressText address={sharedAccount.address} />
+                      </span>
+                    ) : (
+                      <span className="text-right text-fg-2">Unlock to see which account</span>
+                    )}
+                  </div>
+                  <Row
+                    label="Network"
+                    value={cluster ? CLUSTER_LABEL[cluster] : 'Unknown'}
+                  />
+                  {sharedCount > 1 && (
+                    <p className="text-xs text-fg-2">
+                      All {sharedCount} accounts in this wallet are shared, with this one named as active.
+                    </p>
+                  )}
+                  <div className="space-y-1">
+                    <p className="text-[11px] uppercase tracking-[0.18em] text-fg-2">This site will be able to</p>
+                    <ul className="list-disc space-y-0.5 pl-4 text-xs text-fg-1">
+                      {CONNECT_CAN.map((line) => (
+                        <li key={line}>{line}</li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-[11px] uppercase tracking-[0.18em] text-fg-2">It will not be able to</p>
+                    <ul className="list-disc space-y-0.5 pl-4 text-xs text-fg-1">
+                      {CONNECT_CANNOT.map((line) => (
+                        <li key={line}>{line}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
               </CardContent>
             </Card>
           )}
