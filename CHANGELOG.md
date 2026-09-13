@@ -7,10 +7,10 @@ Notable changes to Cinder Wallet, newest first. The format follows
 One line per remediation phase (`docs/plans/SHIP-*`); each phase merged as its
 own pull request, and the plan it shipped against is the detailed record.
 
-## [0.3.0] — unreleased
+## [0.3.0] — 2026-09-12
 
-`package.json` still reads 0.2.0: SHIP-9 bumps the version, tags `v0.3.0`, and
-cuts the release.
+Nine remediation phases over 0.2.0, the first Chrome Web Store build. The tag
+`v0.3.0` and the GitHub release are cut from this commit.
 
 ### Security
 
@@ -64,6 +64,20 @@ cuts the release.
 - **SHIP-8a** — Each worker arm is checked against its own response type,
   derived state is computed rather than mirrored through effects, and
   `no-explicit-any` is on.
+- **SHIP-9** — The zip is 1.1 MB instead of 19.5 MB: the background loop is
+  re-encoded to the size the popup actually plays it at, and the three mint
+  fixtures that were never in the product moved to `scripts/assets/`. The popup
+  no longer loads the BIP39 wordlist to show a dashboard — onboarding and
+  Settings are lazy — and the vendor chunks are named rather than accidental.
+- **SHIP-9** — `just store` builds into `dist-store/`, so the mainnet zip no
+  longer overwrites the devnet `dist/` that is loaded unpacked, and the built
+  manifest's version comes from `package.json`.
+- **SHIP-9** — The manifest asks for less: no `clipboardWrite`, no
+  `web_accessible_resources`, and a CSP that pins `img-src` and `media-src`.
+  Icons are generated from the brand mark with store padding.
+- **SHIP-9** — README, the store listing and the privacy policy say what the
+  keyless store build can and cannot do, and name the explorer hand-off and the
+  third-party image hosts.
 
 ### Fixed
 
@@ -84,6 +98,12 @@ cuts the release.
   retry twice with backoff, and the Review pane's fee error and the Amount
   step's balance error each carry a Retry, so "Unavailable" is no longer a
   state the user can only escape by closing the modal.
+
+### Removed
+
+- **SHIP-9** — `nft-img.png`, `nft-video.mp4` and `token-img.png` no longer
+  ship in the extension; `scripts/mint-cinder.mjs`, the only thing that reads
+  them, now takes them from `scripts/assets/`.
 
 ---
 
