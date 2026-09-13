@@ -7,7 +7,8 @@ import { derivePath } from 'ed25519-hd-key';
 import { Keypair } from '@solana/web3.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const media = path.join(repo, 'public', 'media');
+// Mint fixtures live beside this script; they are not shipped in the extension bundle.
+const assets = path.join(repo, 'scripts', 'assets');
 const localDir = path.join(repo, '.local');
 const keypairPath = path.join(localDir, 'cinder-devnet.json');
 const mnemonic =
@@ -77,9 +78,9 @@ function mplx(args) {
   }
 }
 
-const nftImage = await pinFile(path.join(media, 'nft-img.png'), 'cinder-crew-001.png');
-const nftVideo = await pinFile(path.join(media, 'nft-video.mp4'), 'cinder-crew-001.mp4');
-const tokenImage = await pinFile(path.join(media, 'token-img.png'), 'cinder-token.png');
+const nftImage = await pinFile(path.join(assets, 'nft-img.png'), 'cinder-crew-001.png');
+const nftVideo = await pinFile(path.join(assets, 'nft-video.mp4'), 'cinder-crew-001.mp4');
+const tokenImage = await pinFile(path.join(assets, 'token-img.png'), 'cinder-token.png');
 
 const collectionUri = await pinJson({
   name: 'Cinder Crew',
@@ -133,7 +134,7 @@ const token = spawnSync('mplx', [
   '--name', 'Cinder',
   '--symbol', 'CNDR',
   '--description', 'Cinder ($CNDR) — the demo token of Cinder Wallet.',
-  '--image', path.join(media, 'token-img.png'),
+  '--image', path.join(assets, 'token-img.png'),
   '--decimals', '6',
   '--mint-amount', '1000000',
   '-k', keypairPath,
