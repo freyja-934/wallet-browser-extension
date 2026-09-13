@@ -24,9 +24,30 @@ import { PAGE_TIMEOUT_MS, WALLET_CHANNEL } from '../lib/messages';
 import { CINDER_ICON_DATA_URI } from '../config/brand';
 import { WALLET_NAME } from '../config/constants';
 
+/**
+ * What a reply from the extension can carry: the worker's envelope for an
+ * answer it had straight away, or the value an approval settled with (which
+ * `awaitApproval` stamps `success: true` onto). None of it is trusted — this
+ * code runs in the page's own world — so the payload fields stay `unknown` and
+ * every one is checked where it is read.
+ */
+interface WalletReply {
+  success?: boolean;
+  error?: string;
+  accounts?: unknown;
+  cluster?: unknown;
+  signatures?: unknown;
+  signedTransactions?: unknown;
+}
+
+/** A reply is an object or nothing at all; anything else is not an answer. */
+function asReply(value: unknown): WalletReply | undefined {
+  return value !== null && typeof value === 'object' ? (value as WalletReply) : undefined;
+}
+
 (() => {
   let messageId = 0;
-  const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+  const pending = new Map<number, { resolve: (value: WalletReply | undefined) => void; reject: (error: Error) => void }>();
   const listeners: { [K in keyof StandardEventsListeners]?: Set<StandardEventsListeners[K]> } = {};
 
   window.addEventListener('message', (event) => {
@@ -44,11 +65,11 @@ import { WALLET_NAME } from '../config/constants';
     const entry = pending.get(event.data.id)!;
     pending.delete(event.data.id);
     if (event.data.error) entry.reject(new Error(event.data.error));
-    else entry.resolve(event.data.response);
+    else entry.resolve(asReply(event.data.response));
   });
 
-  function send(type: string, payload: Record<string, unknown> = {}): Promise<any> {
-    return new Promise((resolve, reject) => {
+  function send(type: string, payload: Record<string, unknown> = {}): Promise<WalletReply | undefined> {
+    return new Promise<WalletReply | undefined>((resolve, reject) => {
       const id = messageId++;
       pending.set(id, { resolve, reject });
       window.postMessage({ channel: WALLET_CHANNEL, id, type, payload }, window.location.origin);

@@ -46,7 +46,8 @@ type Rpc = Pick<
 type Status = { err: unknown; confirmationStatus?: 'processed' | 'confirmed' | 'finalized' } | null;
 
 /** A Connection that answers from memory: a healthy chain where everything confirms at once. */
-function fakeRpc(overrides: Partial<Record<keyof Rpc, (...args: any[]) => Promise<unknown>>> = {}) {
+/** `never[]` parameters accept any override signature without `any`: nothing here calls an override through this type. */
+function fakeRpc(overrides: Partial<Record<keyof Rpc, (...args: never[]) => Promise<unknown>>> = {}) {
   const base = {
     getLatestBlockhash: vi.fn(async () => ({ blockhash: BLOCKHASH, lastValidBlockHeight: LAST_VALID })),
     getFeeForMessage: vi.fn(async (_message: Message) => ({ context: { slot: 1 }, value: 5000 as number | null })),
