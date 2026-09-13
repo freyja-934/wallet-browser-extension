@@ -48,6 +48,8 @@ test('Connect, sign message, and sign v0 transfer', async ({ context, extensionI
 
   await approveNext(context, () => dapp.locator('#connect').click(), dapp);
   await expect(dapp.locator('#log')).toContainText(/"accounts":\s*\[\s*"/, { timeout: 15_000 });
+  // The devnet build's account advertises the devnet chain, so wallet-adapter will let it send.
+  await expect(dapp.locator('#log')).toContainText('solana:devnet');
 
   await approveNext(context, () => dapp.locator('#signMessage').click(), dapp);
   await expect(dapp.locator('#log')).toContainText('signature', { timeout: 15_000 });
@@ -103,7 +105,16 @@ test('signAndSend approve broadcasts a 0-lamport self-transfer', async ({ contex
   await approveNext(context, () => dapp.locator('#connect').click(), dapp);
   await expect(dapp.locator('#log')).toContainText(/"accounts":\s*\[\s*"/, { timeout: 15_000 });
 
-  await approveNext(context, () => dapp.locator('#signAndSend').click(), dapp);
+  // The simulated balance change of a 0-lamport self-transfer is exactly the fee, named as such.
+  const sendApproval = await openApproval(context, () => dapp.locator('#signAndSend').click(), dapp);
+  await expect(sendApproval.getByTestId('approval-preview')).toHaveText('Simulation succeeded');
+  const solRow = sendApproval.getByTestId('balance-diff-sol');
+  await expect(solRow).toBeVisible();
+  await expect(solRow).toHaveAttribute('data-sign', 'negative');
+  await expect(sendApproval.getByTestId('balance-diff-sol-delta')).toHaveText('-0.000005 SOL');
+  await expect(solRow).toContainText('network fee');
+  await expect(sendApproval.getByTestId('approval-approve')).toHaveText('Approve');
+  await sendApproval.getByTestId('approval-approve').click();
   await expect(dapp.locator('#log')).toContainText('"signature"', { timeout: 45_000 });
   await expect(dapp.locator('#log')).not.toContainText(/reject|denied|User rejected/i);
   // 64 raw bytes (not the digits of a base58 string) and a signature the cluster confirms.
@@ -364,5 +375,61 @@ test('a page cannot override the bridged message type', async ({ context, extens
     payload: { messages: [new Array(64 * 1024 + 1).fill(0)] },
   });
   expect(oversize.error).toBe('Invalid messages');
+  expect(context.pages().some((page) => page.url().includes('approve.html'))).toBe(false);
+});
+
+test('two transactions in one signTransaction call open one approval and come back signed in order', async ({
+  context,
+  extensionId,
+}) => {
+  test.setTimeout(120_000);
+  await importAndUnlock(context, extensionId);
+
+  const dapp = await context.newPage();
+  await dapp.goto('http://localhost:5174/');
+  await expect(dapp.locator('#log')).toContainText('registered Cinder Wallet', { timeout: 15_000 });
+  await approveNext(context, () => dapp.locator('#connect').click(), dapp);
+  await expect(dapp.locator('#log')).toContainText(/"accounts":\s*\[\s*"/, { timeout: 15_000 });
+
+  const approval = await openApproval(context, () => dapp.locator('#signAll').click(), dapp);
+  expect(context.pages().filter((page) => page.url().includes('approve.html'))).toHaveLength(1);
+  await expect(approval.getByTestId('approval-item')).toHaveCount(2);
+  await expect(approval.getByText('Transaction 2 of 2')).toBeVisible();
+  await approval.getByTestId('approval-approve').click();
+
+  await expect(dapp.locator('#log')).toContainText('"signedCount": 2', { timeout: 30_000 });
+  // No second window ever opened for the second transaction.
+  await expect
+    .poll(() => context.pages().filter((page) => page.url().includes('approve.html')).length, { timeout: 5_000 })
+    .toBe(0);
+});
+
+test('a chain the wallet is not on is refused with the Settings hint, without a window', async ({ context, extensionId }) => {
+  test.setTimeout(120_000);
+  await importAndUnlock(context, extensionId);
+
+  const dapp = await context.newPage();
+  await dapp.goto('http://localhost:5174/');
+  await expect(dapp.locator('#log')).toContainText('registered Cinder Wallet', { timeout: 15_000 });
+  await approveNext(context, () => dapp.locator('#connect').click(), dapp);
+  await expect(dapp.locator('#log')).toContainText(/"accounts":\s*\[\s*"/, { timeout: 15_000 });
+
+  await dapp.locator('#signWrongChain').click();
+  await expect(dapp.locator('#log')).toContainText('Cinder is on Devnet; switch networks in Settings', { timeout: 15_000 });
+  expect(context.pages().some((page) => page.url().includes('approve.html'))).toBe(false);
+});
+
+test('signMessage over serialized transaction bytes is refused before a window opens', async ({ context, extensionId }) => {
+  test.setTimeout(120_000);
+  await importAndUnlock(context, extensionId);
+
+  const dapp = await context.newPage();
+  await dapp.goto('http://localhost:5174/');
+  await expect(dapp.locator('#log')).toContainText('registered Cinder Wallet', { timeout: 15_000 });
+  await approveNext(context, () => dapp.locator('#connect').click(), dapp);
+  await expect(dapp.locator('#log')).toContainText(/"accounts":\s*\[\s*"/, { timeout: 15_000 });
+
+  await dapp.locator('#signTxAsMessage').click();
+  await expect(dapp.locator('#log')).toContainText('Refusing to sign a transaction as a message', { timeout: 15_000 });
   expect(context.pages().some((page) => page.url().includes('approve.html'))).toBe(false);
 });

@@ -15,6 +15,8 @@ const rpcUrl = onDevnet
   ? 'https://api.devnet.solana.com'
   : 'https://api.mainnet-beta.solana.com';
 const clusterChain = onDevnet ? 'solana:devnet' : 'solana:mainnet';
+/** The chain this build is not on: the wallet must refuse it with a Settings hint. */
+const otherChain = onDevnet ? 'solana:mainnet' : 'solana:devnet';
 
 const logEl = document.getElementById('log');
 const log = (value) => {
@@ -42,7 +44,8 @@ document.getElementById('connect').onclick = async () => {
   if (!wallet) return log('No Cinder Wallet yet — load the extension, then refresh this page.');
   try {
     const { accounts } = await wallet.features['standard:connect'].connect();
-    log({ accounts: accounts.map((account) => account.address) });
+    // `chains` follows the wallet's active cluster; wallet-adapter refuses to send otherwise.
+    log({ accounts: accounts.map((account) => account.address), chains: accounts[0]?.chains ?? [] });
   } catch (error) {
     log(error instanceof Error ? error.message : String(error));
   }
@@ -140,6 +143,51 @@ document.getElementById('signAndSend').onclick = async () => {
     const connection = new Connection(rpcUrl, 'confirmed');
     const confirmed = await waitForConfirmation(connection, signature);
     log({ signatureLength: out.signature.length, signature, confirmed });
+  } catch (error) {
+    log(error instanceof Error ? error.message : String(error));
+  }
+};
+
+document.getElementById('signAll').onclick = async () => {
+  if (!wallet?.accounts[0]) return log('Connect first');
+  try {
+    // Two transactions, one call: the wallet opens one approval window and answers both in order.
+    const [first, second] = await Promise.all([buildSelfTransfer(wallet.accounts[0]), buildSelfTransfer(wallet.accounts[0])]);
+    const outs = await wallet.features['solana:signTransaction'].signTransaction(
+      { account: wallet.accounts[0], transaction: first.serialize(), chain: clusterChain },
+      { account: wallet.accounts[0], transaction: second.serialize(), chain: clusterChain },
+    );
+    log({ signedCount: outs.length, signedBytes: outs.map((out) => out.signedTransaction.length) });
+  } catch (error) {
+    log(error instanceof Error ? error.message : String(error));
+  }
+};
+
+document.getElementById('signWrongChain').onclick = async () => {
+  if (!wallet?.accounts[0]) return log('Connect first');
+  try {
+    const tx = await buildSelfTransfer(wallet.accounts[0]);
+    await wallet.features['solana:signTransaction'].signTransaction({
+      account: wallet.accounts[0],
+      transaction: tx.serialize(),
+      chain: otherChain,
+    });
+    log({ error: `wallet signed for ${otherChain}; it should have refused` });
+  } catch (error) {
+    log(error instanceof Error ? error.message : String(error));
+  }
+};
+
+document.getElementById('signTxAsMessage').onclick = async () => {
+  if (!wallet?.accounts[0]) return log('Connect first');
+  try {
+    // The serialized message of a transaction: a signature over it would be a valid transaction signature.
+    const tx = await buildSelfTransfer(wallet.accounts[0]);
+    await wallet.features['solana:signMessage'].signMessage({
+      account: wallet.accounts[0],
+      message: tx.message.serialize(),
+    });
+    log({ error: 'wallet signed a transaction message as a message; it should have refused' });
   } catch (error) {
     log(error instanceof Error ? error.message : String(error));
   }

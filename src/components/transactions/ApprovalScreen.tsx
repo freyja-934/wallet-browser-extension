@@ -205,8 +205,10 @@ export function ApprovalScreen() {
           )}
 
           {previews?.map((preview, i) => (
-            <Card className="mb-4" key={i} data-testid="approval-item">
+            <Card className="mb-4" key={i}>
               <CardContent className="space-y-3">
+                {/* Card does not forward attributes; the item marker lives on this wrapper. */}
+                <div data-testid="approval-item" data-index={i} className="space-y-3">
                 {transactionCount > 1 && (
                   <p className="text-[11px] uppercase tracking-[0.18em] text-fg-2">
                     Transaction {i + 1} of {transactionCount}
@@ -252,6 +254,7 @@ export function ApprovalScreen() {
                     )}
                   </>
                 )}
+                </div>
               </CardContent>
             </Card>
           ))}
