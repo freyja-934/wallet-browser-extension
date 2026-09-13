@@ -5,15 +5,11 @@ import { WALLET_NAME, WALLET_VERSION, type Cluster } from '../../config/constant
 import { SETTINGS_QUERY_KEY, syncSettings, useSettings, useUpdateSettings } from '../../hooks/useSettings';
 import { useInvalidateWalletData } from '../../hooks/useWalletQueries';
 import { errorMessage } from '../../lib/errors';
+import { validatePasswordStrength } from '../../lib/encryption-simple';
 import { DEFAULT_SETTINGS } from '../../lib/messages';
 import { originPatternFor, parseHttpsUrl, saveRpcSettings, type RpcProbeResult, type SaveRpcOutcome } from '../../lib/rpc-save';
-import {
-  changePassword,
-  clearWalletData,
-  exportPrivateKey,
-  exportSeedPhrase,
-  initializeWallet,
-} from '../../store/slices/walletSlice';
+import { extensionClient } from '../../messaging/client';
+import { clearWalletData, initializeWallet } from '../../store/slices/walletSlice';
 import { useAppDispatch, useAppSelector } from '../../store/store';
 import { Banner } from '../ui/EmptyState';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
@@ -166,10 +162,11 @@ export function Settings() {
     }
   };
 
+  // Straight to the worker: a thunk would leave the password, and then the
+  // phrase, sitting in a Redux action.
   const handleExportSeedPhrase = async () => {
     try {
-      const result = await dispatch(exportSeedPhrase(password)).unwrap();
-      setSeedPhrase(result.seedPhrase);
+      setSeedPhrase(await extensionClient.exportSeed(password));
       setPassword('');
     } catch {
       toast.error('Invalid password');
@@ -182,26 +179,28 @@ export function Settings() {
       toast.error('Passwords do not match');
       return;
     }
-    if (newPassword.length < 8) {
-      toast.error('Password must be at least 8 characters');
+    // The same strength rule the worker enforces, checked here so the user is
+    // told before the round trip; the worker is still the one that decides.
+    const strength = validatePasswordStrength(newPassword);
+    if (!strength.isValid) {
+      toast.error(strength.feedback[0] ?? 'Choose a stronger password');
       return;
     }
     try {
-      await dispatch(changePassword({ currentPassword, newPassword })).unwrap();
+      await extensionClient.changePassword(currentPassword, newPassword);
       setShowChangePassword(false);
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
       toast.success('Password changed');
-    } catch {
-      toast.error('Current password is incorrect');
+    } catch (error) {
+      toast.error(errorMessage(error, 'Current password is incorrect'));
     }
   };
 
   const handleExportPrivateKey = async () => {
     try {
-      const result = await dispatch(exportPrivateKey({ password, accountIndex: activeAccountIndex })).unwrap();
-      setPrivateKey(result.privateKey);
+      setPrivateKey(await extensionClient.exportPrivateKey(password, activeAccountIndex));
       setPassword('');
     } catch {
       toast.error('Invalid password');
