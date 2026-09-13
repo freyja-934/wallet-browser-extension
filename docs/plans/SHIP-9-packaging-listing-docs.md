@@ -50,18 +50,32 @@ Ship a zip under 2 MB that paints fast, a manifest with nothing unused, a listin
 ## Owner follow-ups
 
 `.github/workflows/` is off limits to agents, so the exact YAML is here. Append
-these two jobs to `.github/workflows/check.yml` (the existing `check` job is
-unchanged; both new jobs re-install rather than depending on it, so they can run
-in parallel):
+these two jobs to `.github/workflows/check.yml`; both re-install rather than
+depending on `check`, so all three run in parallel.
+
+**Fix the existing `check` job in the same edit.** It has the bug these two used
+to have: `pnpm/action-setup@v4` fails outright when a `version:` is given *and*
+`package.json` carries a `packageManager` field (this repo pins
+`pnpm@10.7.1+sha512…`), with `ERR_PNPM_BAD_PM_VERSION` / "Multiple versions of
+pnpm specified". The action reads `packageManager` on its own, so the fix is to
+delete these two lines from `check` as well:
+
+```yaml
+        with:
+          version: 10
+```
+
+leaving `- uses: pnpm/action-setup@v4` on its own. The jobs below are already
+written that way.
 
 ```yaml
   store:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # No `version:` — the pnpm version comes from package.json's `packageManager`,
+      # and passing both makes this action fail.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -85,9 +99,9 @@ in parallel):
       VITE_NETWORK: devnet
     steps:
       - uses: actions/checkout@v4
+      # No `version:` — the pnpm version comes from package.json's `packageManager`,
+      # and passing both makes this action fail.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -95,7 +109,10 @@ in parallel):
       - uses: extractions/setup-just@v2
       - run: just setup
       - run: pnpm exec playwright install --with-deps chromium
-      # Headed Chromium is required to load an extension; xvfb supplies the display.
+      # `e2e/fixtures.ts` launches Chromium with `headless: true` — new headless
+      # loads an unpacked extension, so no display is needed. `xvfb-run` stays only
+      # as a cheap safety net for a Chromium component that still wants an X server;
+      # drop it if the job is green without it.
       - run: xvfb-run -a just e2e
       - uses: actions/upload-artifact@v4
         if: failure()

@@ -1,8 +1,8 @@
 import { resolve } from 'path';
 import { defineConfig } from 'vite';
 
-/** Same output directory as the popup build; `just store` sets it to `dist-store`. */
-const outDir = process.env.CINDER_OUT_DIR ?? 'dist';
+/** Same output directory as the popup build; `just store` sets it to `dist-store`. Empty falls back to `dist`, never the repo root. */
+const outDir = process.env.CINDER_OUT_DIR || 'dist';
 
 export default defineConfig({
   build: {

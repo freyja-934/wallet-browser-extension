@@ -95,8 +95,10 @@ export const API_ENDPOINTS = {
 
 export const WALLET_NAME = 'Cinder Wallet';
 /**
- * The app version the popup shows, read from `package.json`. Nothing at build
- * time copies it into `manifest.json`, which carries its own literal;
- * `version.test.ts` is what keeps the two from drifting apart.
+ * The app version the popup shows, read from `package.json`, which is the single
+ * source of truth: `scripts/sync-version.mjs` writes it into the *built* manifest
+ * on every `just ext`. The `manifest.json` in the repo keeps its own literal so a
+ * reader of the tree sees the real number, and `version.test.ts` is what stops
+ * that literal drifting from `package.json`.
  */
 export const WALLET_VERSION: string = pkg.version;

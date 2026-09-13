@@ -28,7 +28,7 @@ Do not send mainnet funds to this address. Do not `console.log` the phrase from 
 
 ## Conventions that differ from defaults
 
-- The popup talks to the service worker. The popup shows the mnemonic only during create, import, and password-gated export, and holds it in component state for that screen alone; it never holds a `Keypair` or the seed, and no secret goes through Redux.
+- The popup talks to the service worker. The popup shows a secret — the mnemonic during create and import, and either the mnemonic or an account's private key during a password-gated export — only on that screen, holding it in component state for that screen alone and never persisting it; it never holds a `Keypair` or the seed, and no secret goes through Redux. Deriving or exporting a private key happens in the worker, behind the password.
 - Never set `isPhantom` or write `window.phantom`. Brand is **Cinder Wallet**.
 - dApp surface is Wallet Standard, not a custom `window.solana` impersonator.
 - Vault is PBKDF2 + AES-GCM via WebCrypto. Do not add Argon2 WASM.
@@ -42,7 +42,7 @@ Do not send mainnet funds to this address. Do not `console.log` the phrase from 
 ## File ownership
 
 - Human-owned: `src/`, `docs/plans/`, `docs/adr/`, this file, `manifest.json`
-- Regenerated: `dist/` (gitignored)
+- Regenerated: `dist/`, `dist-store/` and `cinder-wallet-store.zip` (all gitignored; `just ext` and `just store` write them, never edit one by hand), and `docs/legal/*.html` (from `public/legal/`, via `node scripts/sync-legal.mjs`)
 - Off limits: `.env*`, `pnpm-lock.yaml`, `.github/workflows/`, `*.pem`
 
 ## Always

@@ -72,12 +72,26 @@ Nine remediation phases over 0.2.0, the first Chrome Web Store build. The tag
 - **SHIP-9** — `just store` builds into `dist-store/`, so the mainnet zip no
   longer overwrites the devnet `dist/` that is loaded unpacked, and the built
   manifest's version comes from `package.json`.
-- **SHIP-9** — The manifest asks for less: no `clipboardWrite`, no
-  `web_accessible_resources`, and a CSP that pins `img-src` and `media-src`.
+- **SHIP-9** — The manifest asks for less: no `web_accessible_resources`, no
+  `api.mainnet-beta.solana.com` host permission — it answers 403 to any request
+  carrying an `Origin` header, so an extension could never spend it, and it is
+  out of the endpoint rotation too — and a CSP that pins `img-src` and
+  `media-src` (remote NFT audio and video stay out of scope). `clipboardWrite`
+  is kept: it raises no install warning, and the e2e drives the popup as a tab
+  with a stubbed clipboard, so the toolbar popup's real write is unverified.
   Icons are generated from the brand mark with store padding.
 - **SHIP-9** — README, the store listing and the privacy policy say what the
-  keyless store build can and cannot do, and name the explorer hand-off and the
-  third-party image hosts.
+  keyless store build can and cannot do, name the explorer hand-off and the
+  third-party image hosts, and separate what was measured about the public
+  mainnet endpoint from what is expected of it. The privacy policy is published
+  as `docs/legal/privacy.html` so the URL in the listing resolves once GitHub
+  Pages is on, copied from the page the extension ships and held to it by a test.
+- **SHIP-9** — README's Load unpacked steps copy `.env.example` to `.env`:
+  without it the unpacked build is Mainnet, not the Devnet the steps assume.
+- **SHIP-9** — `just check` is typecheck, lint and 595 unit tests in the `node`
+  environment. There are still no component tests and no coverage gate: that
+  tooling is not installed and adding it is an outstanding owner decision, not a
+  decision against it (`docs/README.md`).
 
 ### Fixed
 

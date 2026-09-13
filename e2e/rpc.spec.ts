@@ -1,10 +1,11 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { expect, test } from './fixtures';
+import { expect, outDir, test } from './fixtures';
 import { importAndUnlock, openPopup } from './popup';
 
-const distManifest = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'manifest.json');
+// The same build the fixture loads into Chromium, wherever `CINDER_OUT_DIR` put it.
+const distManifest = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', outDir, 'manifest.json');
 
 interface Manifest {
   host_permissions?: string[];

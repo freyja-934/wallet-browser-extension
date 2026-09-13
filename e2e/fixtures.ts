@@ -2,7 +2,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test as base, chromium, type BrowserContext } from '@playwright/test';
 
-const extensionPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist');
+/**
+ * The build under test. `just e2e` builds with the same variable, so
+ * `CINDER_OUT_DIR=dist-store just e2e` drives the store build instead of the
+ * devnet one. `||`, not `??`: an empty value must not point at the repo root.
+ */
+export const outDir = process.env.CINDER_OUT_DIR || 'dist';
+
+const extensionPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', outDir);
 
 export const test = base.extend<{
   context: BrowserContext;

@@ -7,8 +7,10 @@ import { defineConfig } from 'vite';
 /**
  * Where the build lands. `just store` points this at `dist-store/` so the
  * mainnet zip does not overwrite the devnet `dist/` that is loaded unpacked.
+ * `||`, not `??`: `CINDER_OUT_DIR=` set but empty would otherwise resolve to the
+ * repo root, and this build empties its output directory.
  */
-const outDir = process.env.CINDER_OUT_DIR ?? 'dist';
+const outDir = process.env.CINDER_OUT_DIR || 'dist';
 
 export default defineConfig({
   base: './',
