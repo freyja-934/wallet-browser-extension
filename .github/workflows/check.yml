@@ -4,6 +4,8 @@ on:
   pull_request:
   push:
     branches: [main]
+  # The e2e job is opt-in; see the comment on it.
+  workflow_dispatch:
 
 jobs:
   check:
@@ -12,12 +14,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # No `version:` here — package.json's `packageManager` field pins pnpm, and
+      # giving both makes action-setup fail with ERR_PNPM_BAD_PM_VERSION.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # 24, not 20: jsdom 30 pulls undici 8, which calls
+          # `webidl.util.markAsUncloneable` and so needs a newer Node than 20.
+          # On 20 the three component-test files fail to load their environment
+          # and vitest exits 1 with "Unhandled Error" while reporting all green.
+          node-version: 24
           cache: pnpm
       - uses: extractions/setup-just@v2
       - run: just setup
@@ -25,3 +31,68 @@ jobs:
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  store:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          # 24, not 20: jsdom 30 pulls undici 8, which calls
+          # `webidl.util.markAsUncloneable` and so needs a newer Node than 20.
+          # On 20 the three component-test files fail to load their environment
+          # and vitest exits 1 with "Unhandled Error" while reporting all green.
+          node-version: 24
+          cache: pnpm
+      - uses: extractions/setup-just@v2
+      - run: just setup
+      # CI has no .env, so the recipe's own guards fail the job if a key-shaped
+      # literal ever reaches the bundle.
+      - run: just store
+      - run: ls -l cinder-wallet-store.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cinder-wallet-store
+          path: cinder-wallet-store.zip
+          if-no-files-found: error
+
+  # Opt-in, not part of the PR gate. The suite drives a real extension against
+  # public devnet, and `api.devnet.solana.com` rate-limits GitHub-hosted runners
+  # hard enough that a run there is decided by the faucet's mood rather than by
+  # the code: a scheduled run answered HTTP 429 and took seven specs down with
+  # it. A gate that cannot distinguish "we are throttled" from "the wallet
+  # broke" is worse than no gate, so this runs on demand (Actions → check → Run
+  # workflow) and, strictly, locally via `just e2e` against a funded fixture.
+  e2e:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      # `just ext` reads this; CI has no .env, so name the cluster the suite expects.
+      VITE_NETWORK: devnet
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          # 24, not 20: jsdom 30 pulls undici 8, which calls
+          # `webidl.util.markAsUncloneable` and so needs a newer Node than 20.
+          # On 20 the three component-test files fail to load their environment
+          # and vitest exits 1 with "Unhandled Error" while reporting all green.
+          node-version: 24
+          cache: pnpm
+      - uses: extractions/setup-just@v2
+      - run: just setup
+      - run: pnpm exec playwright install --with-deps chromium
+      # The suite runs headless; xvfb is belt-and-braces for Chromium under CI.
+      # Tests needing a funded fee payer skip with the shortfall when the public
+      # devnet fixture has been swept, rather than failing.
+      - run: xvfb-run -a just e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore

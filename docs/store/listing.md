@@ -44,7 +44,7 @@ Upload from `docs/store/screenshots/` (composed from real popup captures at 1280
 2. `02-approve-1280x800.png` — the simulated balance change before signing
 3. `03-connect-1280x800.png` — what a site can and cannot do, in plain language
 4. `04-send-1280x800.png` — a network-quoted fee and the full address
-5. `05-tokens-1280x800.png` — tokens named from chain metadata
+5. `05-tokens-1280x800.png` — named from chain metadata, or shown as the bare mint when a token publishes none
 
 Also required: `promo-small-440x280.png`. Optional: `promo-marquee-1400x560.png`. Icon: `public/icons/icon-128.png`.
 
@@ -56,6 +56,11 @@ where the fixture holds real SOL and prices resolve. Shots 2, 3 and 5 are Devnet
 cannot pay a Mainnet fee — it was assigned away from the system program by someone using the public test
 mnemonic (see `docs/test-wallet.md`), so a Mainnet simulation correctly fails. Both clusters are supported and
 the listing text says so; nothing here is staged or mocked.
+
+Captures come from a build with `VITE_HELIUS_API_KEY=` empty, matching what `just store` ships, so
+`extra-settings` shows the empty fields a store install actually starts with. The per-image provenance table
+and the rule that every composed image is read against its own caption before committing are in
+`docs/store/screenshots/README.md`.
 
 ## Privacy practices (dashboard)
 

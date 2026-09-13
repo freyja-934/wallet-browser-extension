@@ -23,13 +23,13 @@ const SLIDES = [
     body: 'Real holdings from the chain, with prices. A read that fails says so — it never shows a zero it does not know.' },
   { file: 'approve-sign', out: '02-approve',
     title: 'See the balance change before you sign',
-    body: 'Every request is simulated first. The wallet shows what the transaction would do to your balances, and refuses to sign what it cannot read.' },
+    body: 'Every request is simulated against the network first, and the result is shown as an exact before-and-after, network fee included. What cannot be simulated is not quietly signed.' },
   { file: 'approve-connect', out: '03-connect', title: 'Consent in plain language',
     body: 'A site sees only the address you share, and every signature is approved separately. Connected sites are listed in Settings, and revocable.' },
   { file: 'send-review', out: '04-send', title: 'A real fee, and the whole address',
     body: 'The fee is quoted by the network, not guessed. Amounts are integer units end to end, so what you type is what is sent.' },
-  { file: 'tokens', out: '05-tokens', title: 'Tokens, named',
-    body: 'Names and symbols resolved from chain metadata, including Token-2022. Without them, the wallet shows the mint rather than inventing a label.' },
+  { file: 'tokens', out: '05-tokens', title: 'Named, or honestly unnamed',
+    body: 'Symbols and icons come from on-chain metadata. When a mint publishes none, the wallet shows the mint address and a copy button rather than inventing a label.' },
 ];
 
 const EXTRAS = [
