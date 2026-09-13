@@ -1,3 +1,4 @@
+import { CHAIN_TIMEOUT_MS } from './devnet';
 import { expect, test } from './fixtures';
 import { importAndUnlock, importWallet, TEST_MNEMONIC, TEST_PASSWORD } from './popup';
 
@@ -62,7 +63,8 @@ test('custom RPC: an http URL is refused, an https one is probed, saved, shown o
   await popup.getByTestId('settings-rpc-url').fill(RPC_URL);
   await popup.getByTestId('settings-helius-key').fill(HELIUS_KEY);
   await popup.getByTestId('settings-rpc-save').click();
-  await expect(popup.getByText('RPC settings saved')).toBeVisible({ timeout: 20_000 });
+  // Saving probes the endpoint live before storing it.
+  await expect(popup.getByText('RPC settings saved')).toBeVisible({ timeout: CHAIN_TIMEOUT_MS });
 
   // Persisted in the worker: a fresh popup reads it back and the pill reports the custom host.
   await popup.reload();

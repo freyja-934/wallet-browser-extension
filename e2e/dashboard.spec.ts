@@ -1,3 +1,4 @@
+import { CHAIN_TIMEOUT_MS, devnetRpc } from './devnet';
 import { expect, test } from './fixtures';
 import { TEST_ADDRESS, importAndUnlock } from './popup';
 
@@ -9,27 +10,17 @@ const HISTORY_PAGE_SIZE = 20;
 
 /**
  * Ask devnet, from the test process, whether the fixture has more than one page
- * of history. Throws when devnet did not answer: a rate limit must fail the test,
- * not pass it as "one page".
+ * of history. Fails as `devnet unreachable` when devnet did not answer: a rate
+ * limit must fail the test, not pass it as "one page".
  */
 async function devnetSignatureCount(limit: number): Promise<number> {
-  const response = await fetch('https://api.devnet.solana.com', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'getSignaturesForAddress',
-      params: [TEST_ADDRESS, { limit }],
-    }),
-  });
-  if (!response.ok) throw new Error(`devnet getSignaturesForAddress answered ${response.status}`);
-  const json = (await response.json()) as { result?: unknown[]; error?: { code?: number; message?: string } };
-  if (json.error) throw new Error(`devnet getSignaturesForAddress failed: ${json.error.message ?? json.error.code}`);
-  return json.result?.length ?? 0;
+  const signatures = await devnetRpc<unknown[]>('getSignaturesForAddress', [TEST_ADDRESS, { limit }]);
+  return signatures.length;
 }
 
 test('dashboard tabs settle after import', async ({ context, extensionId }) => {
+  // Three tabs, each waiting on its own devnet round trip.
+  test.setTimeout(180_000);
   const popup = await importAndUnlock(context, extensionId);
 
   await expect(popup.getByTestId('sol-balance')).toBeVisible();
@@ -38,12 +29,12 @@ test('dashboard tabs settle after import', async ({ context, extensionId }) => {
   await popup.getByTestId('nav-nfts').click();
   await expect(
     popup.getByPlaceholder('Search collectibles').or(popup.getByText('No collectibles')),
-  ).toBeVisible({ timeout: 20_000 });
+  ).toBeVisible({ timeout: CHAIN_TIMEOUT_MS });
 
   await popup.getByTestId('nav-activity').click();
   await expect(
     popup.getByText('No activity yet').or(popup.getByText('All')),
-  ).toBeVisible({ timeout: 30_000 });
+  ).toBeVisible({ timeout: CHAIN_TIMEOUT_MS });
 });
 
 test('shows error cards, not zeros, when no RPC endpoint answers', async ({ context, extensionId }) => {
@@ -73,6 +64,8 @@ test('shows error cards, not zeros, when no RPC endpoint answers', async ({ cont
 });
 
 test('activity pages with Load more when the fixture has more than one page', async ({ context, extensionId }) => {
+  // Two pages of history, each fetched and parsed against devnet.
+  test.setTimeout(180_000);
   const signatures = await devnetSignatureCount(HISTORY_PAGE_SIZE + 1);
   test.skip(signatures <= HISTORY_PAGE_SIZE, 'fixture has one page of history');
 
@@ -85,9 +78,9 @@ test('activity pages with Load more when the fixture has more than one page', as
   const rows = popup.getByTestId('activity-row');
   const loadMore = popup.getByTestId('history-load-more');
 
-  await expect(loadMore).toBeVisible({ timeout: 30_000 });
-  await expect(rows).toHaveCount(HISTORY_PAGE_SIZE);
+  await expect(loadMore).toBeVisible({ timeout: CHAIN_TIMEOUT_MS });
+  await expect(rows).toHaveCount(HISTORY_PAGE_SIZE, { timeout: CHAIN_TIMEOUT_MS });
 
   await loadMore.click();
-  await expect.poll(() => rows.count(), { timeout: 30_000 }).toBeGreaterThan(HISTORY_PAGE_SIZE);
+  await expect.poll(() => rows.count(), { timeout: CHAIN_TIMEOUT_MS }).toBeGreaterThan(HISTORY_PAGE_SIZE);
 });
