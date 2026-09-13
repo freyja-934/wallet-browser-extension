@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { accountAt, DEFAULT_SETTINGS } from '../../lib/messages';
 import { useSettings } from '../../hooks/useSettings';
 import { useBalances, usePrices, useTokenNames } from '../../hooks/useWalletQueries';
+import { accountAt, DEFAULT_SETTINGS } from '../../lib/messages';
 import { errorMessage } from '../../lib/errors';
 import { displayTokenAmount } from '../../lib/parse-history';
 import { formatLamports } from '../../lib/units';

@@ -119,10 +119,9 @@ export type RecipientInfo = {
 };
 
 /**
- * The `ESTIMATE_FEE` response: lamports as decimal strings. Type aliases, so the
- * router's `Record<string, unknown>` accepts them. `rentExemptMin` is what the
- * account this send may have to create costs: a bare system account for SOL, a
- * token account of the mint's own program for a token send.
+ * The `ESTIMATE_FEE` response: lamports as decimal strings. `rentExemptMin` is
+ * what the account this send may have to create costs: a bare system account
+ * for SOL, a token account of the mint's own program for a token send.
  */
 export type FeeEstimate = {
   feeLamports: string;

@@ -293,10 +293,10 @@ export interface NativeTransfer {
 
 /**
  * One row of Helius's enhanced-transactions response, as this file reads it.
- * Only the fields the mapper touches are named, each as the widest type the
- * API could actually send; the transfer arrays are handed to
- * `normalizeHeliusTransfers`, which does its own per-field checking. Anything
- * else the endpoint returns is ignored rather than typed.
+ * Only the fields the mapper touches are named, every one `unknown`: the body
+ * is untrusted HTTP, so nothing here is a promise about what arrived. The
+ * transfer lists go to `normalizeHeliusTransfers`, which does its own
+ * per-field checking. Anything else the endpoint returns is ignored.
  */
 interface HeliusEnhancedTransaction {
   signature?: unknown;
@@ -305,8 +305,24 @@ interface HeliusEnhancedTransaction {
   err?: unknown;
   fee?: unknown;
   feePayer?: unknown;
-  nativeTransfers?: Array<Record<string, unknown>>;
-  tokenTransfers?: Array<Record<string, unknown>>;
+  nativeTransfers?: unknown;
+  tokenTransfers?: unknown;
+}
+
+/** One untrusted row of that response as a history row; a row that is not an object reads as an empty one. */
+function heliusRowToTransaction(row: unknown): Transaction {
+  const tx: HeliusEnhancedTransaction = row !== null && typeof row === 'object' ? row : {};
+  const transfers = normalizeHeliusTransfers(tx);
+  return {
+    signature: String(tx.signature ?? ''),
+    timestamp: Number(tx.timestamp ?? 0) * 1000,
+    type: String(tx.type ?? 'UNKNOWN'),
+    status: tx.err ? ('failed' as const) : ('success' as const),
+    fee: Number(tx.fee ?? 0),
+    feePayer: String(tx.feePayer ?? ''),
+    tokenTransfers: transfers.tokenTransfers,
+    nativeTransfers: transfers.nativeTransfers,
+  };
 }
 
 interface DasAssetsPage<Item> {
@@ -513,20 +529,11 @@ class HeliusService {
       if (type) url += `&type=${type}`;
       const response = await fetch(url);
       if (response.ok) {
-        const data = (await response.json()) as HeliusEnhancedTransaction[];
-        return data.map((tx) => {
-          const transfers = normalizeHeliusTransfers(tx);
-          return {
-            signature: String(tx.signature ?? ''),
-            timestamp: Number(tx.timestamp ?? 0) * 1000,
-            type: String(tx.type ?? 'UNKNOWN'),
-            status: tx.err ? ('failed' as const) : ('success' as const),
-            fee: Number(tx.fee ?? 0),
-            feePayer: String(tx.feePayer ?? ''),
-            tokenTransfers: transfers.tokenTransfers,
-            nativeTransfers: transfers.nativeTransfers,
-          };
-        });
+        // A 200 is not a promise of a list of rows: a body that is not an array
+        // (an error object, HTML from a proxy, unparsable bytes) is no history at
+        // all, so the RPC path below answers instead of this throwing or inventing rows.
+        const data: unknown = await response.json().catch(() => undefined);
+        if (Array.isArray(data)) return data.map(heliusRowToTransaction);
       }
     }
 
@@ -562,8 +569,6 @@ class HeliusService {
           status: sig.err ? 'failed' : 'success',
           fee: 0,
           feePayer: address,
-          instructions: [],
-          events: [],
           nativeTransfers: [],
           tokenTransfers: [],
           detailsUnavailable: true,
@@ -577,8 +582,6 @@ class HeliusService {
         status: tx.meta?.err || sig.err ? 'failed' : 'success',
         fee: tx.meta?.fee ?? 0,
         feePayer: address,
-        instructions: [],
-        events: [],
         nativeTransfers: activity.nativeTransfers,
         tokenTransfers: activity.tokenTransfers,
       };

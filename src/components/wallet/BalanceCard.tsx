@@ -1,7 +1,7 @@
 import { getCluster } from '../../config/constants';
-import { accountAt } from '../../lib/messages';
 import { useSettings } from '../../hooks/useSettings';
 import { useBalances, usePrices } from '../../hooks/useWalletQueries';
+import { accountAt } from '../../lib/messages';
 import { errorMessage } from '../../lib/errors';
 import { formatLamports } from '../../lib/units';
 import { isEndpointsUnreachable } from '../../services/helius';

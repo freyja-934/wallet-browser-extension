@@ -7,12 +7,13 @@ import {
   isExtensionMessageType,
   UNSUPPORTED_CHAINS,
   type Commitment,
+  type ExtensionMessageType,
   type PendingApproval,
   type SendOptions,
   type WalletPublicState,
   type WalletSettings,
 } from '../lib/messages';
-import { parseRequest, type WalletRequest, type WalletResponse } from '../lib/protocol';
+import { parseRequest, type WalletRequest, type WalletResponse, type WalletResponses } from '../lib/protocol';
 import { isExtensionSender, isRequestAllowed, pageOrigin, type SenderLike } from '../lib/sender-gate';
 import { buildPreview, type PreviewResult } from '../lib/preview';
 import { isTransactionMessage } from '../lib/tx-preview';
@@ -105,10 +106,6 @@ function addresses(state: Pick<WalletPublicState, 'accounts' | 'activeAccountInd
   return addressesActiveFirst(state);
 }
 
-function assertNever(_request: never): never {
-  throw new Error('Unknown message type');
-}
-
 const CLUSTER_LABEL: Record<WalletSettings['cluster'], string> = { 'mainnet-beta': 'Mainnet', devnet: 'Devnet' };
 
 /**
@@ -128,170 +125,189 @@ async function assertChain(chain: string | undefined): Promise<WalletSettings['c
   return cluster;
 }
 
-async function dispatch(request: WalletRequest, caller: Caller): Promise<WalletResponse> {
-  const { origin, frame } = caller;
-  // A page may poll or cancel only its own request; extension pages are unrestricted.
-  const own = caller.page ? origin : undefined;
-  switch (request.type) {
-    case 'GET_STATE':
-      return { state: await getPublicState() };
-    case 'GET_SETTINGS':
-      return { settings: await getSettings() };
-    case 'UPDATE_SETTINGS': {
-      const before = (await getSettings()).cluster;
-      const settings = await updateSettings(request.settings);
-      if (settings.cluster !== before) {
-        // A transaction waiting for Approve was built for the old cluster; it cannot be signed now.
-        await rejectForClusterChange(settings.cluster);
-        const { accounts } = await snapshot();
-        await sendToConnected('clusterChanged', { accounts, cluster: settings.cluster });
-      }
-      return { settings };
+/** One arm of the worker's surface: the request that type carries, answered with the response it maps to. */
+type Handler<T extends ExtensionMessageType> = (
+  request: Extract<WalletRequest, { type: T }>,
+  caller: Caller,
+) => Promise<WalletResponses[T]>;
+
+/** A page may poll or cancel only its own request; extension pages are unrestricted. */
+function ownRequestOrigin(caller: Caller): string | undefined {
+  return caller.page ? caller.origin : undefined;
+}
+
+/** Both sign requests queue the same way; only the approval kind differs. */
+async function enqueueSignApproval(
+  request: Extract<WalletRequest, { type: 'SIGN_TRANSACTION' | 'SIGN_AND_SEND_TRANSACTION' }>,
+  { origin, frame }: Caller,
+): Promise<{ pendingId: string }> {
+  await requireConnected(origin);
+  const clusterAtEnqueue = await assertChain(request.chain);
+  const kind = request.type === 'SIGN_AND_SEND_TRANSACTION' ? 'signAndSendTransaction' : 'signTransaction';
+  const extra: Partial<PendingApproval> = {
+    ...frame,
+    transactions: request.transactions.map((transaction) => [...transaction]),
+    clusterAtEnqueue,
+  };
+  if (request.chain !== undefined) extra.chain = request.chain;
+  if (request.options !== undefined) extra.options = { ...request.options };
+  return { pendingId: await enqueueApproval(kind, origin, extra) };
+}
+
+/**
+ * The worker's whole surface, one arm per message type. A table rather than a
+ * switch so each arm is checked against its own mapped response type: an arm
+ * that answers with another message's shape does not compile. The mapped key
+ * type is the exhaustiveness proof the switch's `never` default used to give —
+ * a message type with no arm is a missing property, an arm for something that
+ * is not a message type an excess one.
+ */
+const handlers: { [T in ExtensionMessageType]: Handler<T> } = {
+  GET_STATE: async () => ({ state: await getPublicState() }),
+  GET_SETTINGS: async () => ({ settings: await getSettings() }),
+  UPDATE_SETTINGS: async (request) => {
+    const before = (await getSettings()).cluster;
+    const settings = await updateSettings(request.settings);
+    if (settings.cluster !== before) {
+      // A transaction waiting for Approve was built for the old cluster; it cannot be signed now.
+      await rejectForClusterChange(settings.cluster);
+      const { accounts } = await snapshot();
+      await sendToConnected('clusterChanged', { accounts, cluster: settings.cluster });
     }
-    case 'CREATE_WALLET':
-      return { state: await createWallet(request.password, request.seedPhrase) };
-    case 'UNLOCK':
-      return { state: await unlock(request.password) };
-    case 'LOCK':
-      return { state: await lock() };
-    case 'CLEAR_WALLET':
-      return { state: await clearWallet() };
-    case 'SWITCH_ACCOUNT': {
-      const state = await switchAccount(request.index);
-      await sendToConnected('accountsChanged', await snapshot());
-      return { state };
+    return { settings };
+  },
+  CREATE_WALLET: async (request) => ({ state: await createWallet(request.password, request.seedPhrase) }),
+  UNLOCK: async (request) => ({ state: await unlock(request.password) }),
+  LOCK: async () => ({ state: await lock() }),
+  CLEAR_WALLET: async () => ({ state: await clearWallet() }),
+  SWITCH_ACCOUNT: async (request) => {
+    const state = await switchAccount(request.index);
+    await sendToConnected('accountsChanged', await snapshot());
+    return { state };
+  },
+  // A new or renamed account changes the list a connected page holds, so both
+  // emit the same event as a switch: the active account can move to the front.
+  ADD_ACCOUNT: async () => {
+    const state = await addAccount();
+    await sendToConnected('accountsChanged', await snapshot());
+    return { state };
+  },
+  RENAME_ACCOUNT: async (request) => {
+    const state = await renameAccount(request.index, request.name);
+    await sendToConnected('accountsChanged', await snapshot());
+    return { state };
+  },
+  CHANGE_PASSWORD: async (request) => {
+    await changePassword(request.currentPassword, request.newPassword);
+    return {};
+  },
+  EXPORT_SEED: async (request) => ({ seedPhrase: await exportSeed(request.password) }),
+  EXPORT_PRIVATE_KEY: async (request) => ({
+    privateKey: await exportPrivateKey(request.password, request.accountIndex ?? 0),
+  }),
+  GET_ACCOUNTS: async (_request, { origin }) => {
+    await requireConnected(origin);
+    const state = await getPublicState();
+    if (state.isLocked) return { accounts: [] };
+    return { accounts: addresses(state) };
+  },
+  WALLET_CONNECT: async (request, { origin, frame }) => {
+    const state = await getPublicState();
+    const { cluster } = await getSettings();
+    // A site that already connected gets its accounts back without a prompt.
+    if (!state.isLocked && (await origins.isConnected(origin))) return { accounts: addresses(state), cluster };
+    // Silent connects never open a window: nothing to show is an empty account list.
+    if (request.silent) return { accounts: [], cluster };
+    // Locked: the approval window renders the unlock form first, then the request.
+    return { pendingId: await enqueueApproval('connect', origin, { ...frame }) };
+  },
+  WALLET_DISCONNECT: async (_request, { origin, frame }) => {
+    // Whatever the site still had waiting can no longer be approved.
+    await rejectForOrigin(origin, 'Disconnected');
+    await origins.disconnect(origin);
+    const { cluster } = await snapshot();
+    // The frame that asked emits its own `change`; its other frames and tabs hear it from here.
+    await sendWalletEvent('disconnected', { origin, accounts: [], cluster, exclude: frame });
+    return { disconnected: true };
+  },
+  SIGN_MESSAGE: async (request, { origin, frame }) => {
+    await requireConnected(origin);
+    // A signature over serialized message bytes is a valid transaction signature; never make one here.
+    if (request.messages.some((message) => isTransactionMessage(Uint8Array.from(message)))) {
+      throw new Error('Refusing to sign a transaction as a message');
     }
-    // A new or renamed account changes the list a connected page holds, so both
-    // emit the same event as a switch: the active account can move to the front.
-    case 'ADD_ACCOUNT': {
-      const state = await addAccount();
-      await sendToConnected('accountsChanged', await snapshot());
-      return { state };
+    const messages = request.messages.map((message) => [...message]);
+    // One approval for the whole batch: the window shows every item, the page gets every signature.
+    return { pendingId: await enqueueApproval('signMessage', origin, { ...frame, messages }) };
+  },
+  SIGN_TRANSACTION: enqueueSignApproval,
+  SIGN_AND_SEND_TRANSACTION: enqueueSignApproval,
+  PREVIEW_TRANSACTION: async (request) => previewTransaction(Uint8Array.from(request.transaction)),
+  GET_PENDING_REQUEST: async (request) => ({ request: await getPending(request.id) }),
+  POLL_APPROVAL: async (request, caller) => getApprovalResult(request.id, ownRequestOrigin(caller)),
+  APPROVE_REQUEST: async (request) => {
+    // The approval window unlocks inline first; nothing is approved on a locked wallet.
+    if ((await getPublicState()).isLocked) throw new Error('Wallet is locked');
+    // Claim before doing anything irreversible: from here on, nothing else can settle it,
+    // so the page is told what actually happened (a broadcast in particular).
+    const pending = await claimApproval(request.id, { requireConnected: true });
+    let value: Record<string, unknown>;
+    try {
+      // The cluster may have changed since the request was enqueued (and since the
+      // window rendered its preview): a transaction built for the other one is refused here.
+      if (!onCluster(pending, (await getSettings()).cluster)) throw new Error(NETWORK_CHANGED_MESSAGE);
+      value = await fulfillApproval(pending);
+    } catch (error) {
+      // Whatever failed, the request is finished: it must never be approvable again.
+      await settleClaimed(pending.id, { status: 'rejected', error: errorText(error, 'Approval failed') });
+      throw error;
     }
-    case 'RENAME_ACCOUNT': {
-      const state = await renameAccount(request.index, request.name);
-      await sendToConnected('accountsChanged', await snapshot());
-      return { state };
-    }
-    case 'CHANGE_PASSWORD':
-      await changePassword(request.currentPassword, request.newPassword);
-      return {};
-    case 'EXPORT_SEED':
-      return { seedPhrase: await exportSeed(request.password) };
-    case 'EXPORT_PRIVATE_KEY':
-      return { privateKey: await exportPrivateKey(request.password, request.accountIndex ?? 0) };
-    case 'GET_ACCOUNTS': {
-      await requireConnected(origin);
-      const state = await getPublicState();
-      if (state.isLocked) return { accounts: [] };
-      return { accounts: addresses(state) };
-    }
-    case 'WALLET_CONNECT': {
-      const state = await getPublicState();
-      const { cluster } = await getSettings();
-      // A site that already connected gets its accounts back without a prompt.
-      if (!state.isLocked && (await origins.isConnected(origin))) return { accounts: addresses(state), cluster };
-      // Silent connects never open a window: nothing to show is an empty account list.
-      if (request.silent) return { accounts: [], cluster };
-      // Locked: the approval window renders the unlock form first, then the request.
-      return { pendingId: await enqueueApproval('connect', origin, { ...frame }) };
-    }
-    case 'WALLET_DISCONNECT': {
-      // Whatever the site still had waiting can no longer be approved.
-      await rejectForOrigin(origin, 'Disconnected');
-      await origins.disconnect(origin);
-      const { cluster } = await snapshot();
-      // The frame that asked emits its own `change`; its other frames and tabs hear it from here.
-      await sendWalletEvent('disconnected', { origin, accounts: [], cluster, exclude: frame });
-      return { disconnected: true };
-    }
-    case 'SIGN_MESSAGE': {
-      await requireConnected(origin);
-      // A signature over serialized message bytes is a valid transaction signature; never make one here.
-      if (request.messages.some((message) => isTransactionMessage(Uint8Array.from(message)))) {
-        throw new Error('Refusing to sign a transaction as a message');
-      }
-      const messages = request.messages.map((message) => [...message]);
-      // One approval for the whole batch: the window shows every item, the page gets every signature.
-      return { pendingId: await enqueueApproval('signMessage', origin, { ...frame, messages }) };
-    }
-    case 'SIGN_TRANSACTION':
-    case 'SIGN_AND_SEND_TRANSACTION': {
-      await requireConnected(origin);
-      const clusterAtEnqueue = await assertChain(request.chain);
-      const kind = request.type === 'SIGN_AND_SEND_TRANSACTION' ? 'signAndSendTransaction' : 'signTransaction';
-      const extra: Partial<PendingApproval> = {
-        ...frame,
-        transactions: request.transactions.map((transaction) => [...transaction]),
-        clusterAtEnqueue,
-      };
-      if (request.chain !== undefined) extra.chain = request.chain;
-      if (request.options !== undefined) extra.options = { ...request.options };
-      return { pendingId: await enqueueApproval(kind, origin, extra) };
-    }
-    case 'PREVIEW_TRANSACTION':
-      return previewTransaction(Uint8Array.from(request.transaction));
-    case 'GET_PENDING_REQUEST':
-      return { request: await getPending(request.id) };
-    case 'POLL_APPROVAL':
-      return getApprovalResult(request.id, own);
-    case 'APPROVE_REQUEST': {
-      // The approval window unlocks inline first; nothing is approved on a locked wallet.
-      if ((await getPublicState()).isLocked) throw new Error('Wallet is locked');
-      // Claim before doing anything irreversible: from here on, nothing else can settle it,
-      // so the page is told what actually happened (a broadcast in particular).
-      const pending = await claimApproval(request.id, { requireConnected: true });
-      let value: Record<string, unknown>;
-      try {
-        // The cluster may have changed since the request was enqueued (and since the
-        // window rendered its preview): a transaction built for the other one is refused here.
-        if (!onCluster(pending, (await getSettings()).cluster)) throw new Error(NETWORK_CHANGED_MESSAGE);
-        value = await fulfillApproval(pending);
-      } catch (error) {
-        // Whatever failed, the request is finished: it must never be approvable again.
-        await settleClaimed(pending.id, { status: 'rejected', error: errorText(error, 'Approval failed') });
-        throw error;
-      }
-      await settleClaimed(pending.id, { status: 'approved', value });
-      return {};
-    }
-    case 'REJECT_REQUEST':
-      await rejectApproval(request.id, request.reason || 'User rejected');
-      return {};
-    case 'CANCEL_APPROVAL':
-      // The page gave up waiting (its timeout, or it went away); a later Approve must not sign.
-      // Only the page's own request, and never one already being fulfilled.
-      if (own === undefined) await rejectApproval(request.id, 'Request timeout');
-      else await cancelApproval(request.id, own);
-      return {};
-    case 'GET_CONNECTED_SITES':
-      return { sites: await origins.list() };
-    case 'REVOKE_SITE': {
-      await rejectForOrigin(request.origin, 'Site revoked');
-      await origins.disconnect(request.origin);
-      const { cluster } = await snapshot();
-      await sendWalletEvent('revoked', { origin: request.origin, accounts: [], cluster });
-      return {};
-    }
-    case 'SEND_TRANSFER':
-      return {
-        signature: await exclusiveSend({
-          to: request.to,
-          amountSmallest: request.amountSmallest,
-          mint: request.mint,
-          source: request.source,
-        }),
-      };
-    case 'ESTIMATE_FEE':
-      return estimateTransfer({
-        to: request.to,
-        amountSmallest: request.amountSmallest,
-        mint: request.mint,
-        source: request.source,
-      });
-    default:
-      return assertNever(request);
-  }
+    await settleClaimed(pending.id, { status: 'approved', value });
+    return {};
+  },
+  REJECT_REQUEST: async (request) => {
+    await rejectApproval(request.id, request.reason || 'User rejected');
+    return {};
+  },
+  CANCEL_APPROVAL: async (request, caller) => {
+    // The page gave up waiting (its timeout, or it went away); a later Approve must not sign.
+    // Only the page's own request, and never one already being fulfilled.
+    const own = ownRequestOrigin(caller);
+    if (own === undefined) await rejectApproval(request.id, 'Request timeout');
+    else await cancelApproval(request.id, own);
+    return {};
+  },
+  GET_CONNECTED_SITES: async () => ({ sites: await origins.list() }),
+  REVOKE_SITE: async (request) => {
+    await rejectForOrigin(request.origin, 'Site revoked');
+    await origins.disconnect(request.origin);
+    const { cluster } = await snapshot();
+    await sendWalletEvent('revoked', { origin: request.origin, accounts: [], cluster });
+    return {};
+  },
+  SEND_TRANSFER: async (request) => ({
+    signature: await exclusiveSend({
+      to: request.to,
+      amountSmallest: request.amountSmallest,
+      mint: request.mint,
+      source: request.source,
+    }),
+  }),
+  ESTIMATE_FEE: async (request) =>
+    estimateTransfer({
+      to: request.to,
+      amountSmallest: request.amountSmallest,
+      mint: request.mint,
+      source: request.source,
+    }),
+};
+
+function dispatch<T extends ExtensionMessageType>(
+  request: Extract<WalletRequest, { type: T }>,
+  caller: Caller,
+): Promise<WalletResponses[T]> {
+  const handler: Handler<T> = handlers[request.type];
+  return handler(request, caller);
 }
 
 export const SEND_IN_PROGRESS_MESSAGE = 'A send is already in progress';

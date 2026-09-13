@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { getCluster } from '../../config/constants';
-import { accountAt } from '../../lib/messages';
 import { useSettings } from '../../hooks/useSettings';
 import { useTransactions } from '../../hooks/useWalletQueries';
+import { accountAt } from '../../lib/messages';
 import { errorMessage } from '../../lib/errors';
 import { isEndpointsUnreachable } from '../../services/helius';
 import { useAppSelector } from '../../store/store';

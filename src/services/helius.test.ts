@@ -549,6 +549,23 @@ describe('heliusService.getTransactionHistory', () => {
     expect(isEndpointsUnreachable(failure)).toBe(true);
   });
 
+  it('falls back to the RPC path, without throwing, when the enhanced API answers 200 with an object body', async () => {
+    // A 200 whose body is an error object, or anything else that is not a list of
+    // rows: the history is not "broken", it simply did not come from there.
+    runtime.settings.heliusApiKey = FAKE_KEY;
+    const signatureCalls: string[] = [];
+    vi.spyOn(Connection.prototype, 'getSignaturesForAddress').mockImplementation(async function (this: Connection) {
+      signatureCalls.push(this.rpcEndpoint);
+      return [];
+    });
+    const requested = stubFetch(() => Response.json({ error: 'Too many requests' }));
+
+    await expect(heliusService.getTransactionHistory(TEST_ADDRESS, { limit: 5 })).resolves.toEqual([]);
+
+    expect(requested.some((url) => url.includes('api.helius.xyz'))).toBe(true);
+    expect(signatureCalls.length).toBeGreaterThan(0);
+  });
+
   it('uses the enhanced API on mainnet when a key is stored', async () => {
     runtime.settings.heliusApiKey = FAKE_KEY;
     const spy = vi.spyOn(Connection.prototype, 'getSignaturesForAddress').mockResolvedValue([]);

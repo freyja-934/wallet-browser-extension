@@ -19,8 +19,6 @@ export function SeedPhraseDisplay({
   const [attested, setAttested] = useState(false);
   const [confirmCopy, setConfirmCopy] = useState(false);
   const words = seedPhrase.split(' ');
-  // Revealing is one-way, so "has seen the phrase" is simply the cover being off.
-  const hasViewed = !isBlurred;
 
   return (
     <>
@@ -35,7 +33,8 @@ export function SeedPhraseDisplay({
           {onContinue && (
             <PrimaryButton
               onClick={onContinue}
-              disabled={isNewWallet && (!hasViewed || isBlurred || !attested)}
+              // Revealing is one-way, so the cover being off is "has seen the phrase".
+              disabled={isNewWallet && (isBlurred || !attested)}
               className="ml-auto min-w-[140px]"
               data-testid="seed-continue"
             >

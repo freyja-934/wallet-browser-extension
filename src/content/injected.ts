@@ -28,16 +28,22 @@ import { WALLET_NAME } from '../config/constants';
  * What a reply from the extension can carry: the worker's envelope for an
  * answer it had straight away, or the value an approval settled with (which
  * `awaitApproval` stamps `success: true` onto). None of it is trusted — this
- * code runs in the page's own world — so the payload fields stay `unknown` and
- * every one is checked where it is read.
+ * code runs in the page's own world, where anything can post a message — so
+ * every field stays `unknown`, `success` and `error` included, and each one is
+ * checked where it is read.
  */
 interface WalletReply {
-  success?: boolean;
-  error?: string;
+  success?: unknown;
+  error?: unknown;
   accounts?: unknown;
   cluster?: unknown;
   signatures?: unknown;
   signedTransactions?: unknown;
+}
+
+/** The reply's `error`, but only when it really is a line of text. */
+function replyError(reply: WalletReply | undefined, fallback: string): string {
+  return typeof reply?.error === 'string' && reply.error !== '' ? reply.error : fallback;
 }
 
 /** A reply is an object or nothing at all; anything else is not an answer. */
@@ -251,7 +257,7 @@ function asReply(value: unknown): WalletReply | undefined {
         version: '1.0.0',
         connect: async (input) => {
           const response = await send('WALLET_CONNECT', { silent: !!input?.silent });
-          if (!response?.success) throw new Error(response?.error || 'Connect failed');
+          if (response?.success !== true) throw new Error(replyError(response, 'Connect failed'));
           setAccounts(response.accounts ?? [], response.cluster);
           return { accounts };
         },
@@ -282,7 +288,7 @@ function asReply(value: unknown): WalletReply | undefined {
           const response = await send('SIGN_TRANSACTION', withChainAndOptions({ transactions }, chain, options));
           const signed: unknown = response?.signedTransactions;
           if (!Array.isArray(signed) || signed.length !== inputs.length) {
-            throw new Error(response?.error || 'Sign failed');
+            throw new Error(replyError(response, 'Sign failed'));
           }
           return signed.map((bytes) => ({ signedTransaction: Uint8Array.from(bytes as number[]) }));
         },
@@ -302,7 +308,7 @@ function asReply(value: unknown): WalletReply | undefined {
           );
           const signatures: unknown = response?.signatures;
           if (!Array.isArray(signatures) || signatures.length !== inputs.length) {
-            throw new Error(response?.error || 'Send failed');
+            throw new Error(replyError(response, 'Send failed'));
           }
           return signatures.map((bytes) => ({ signature: Uint8Array.from(bytes as number[]) }));
         },
@@ -316,7 +322,7 @@ function asReply(value: unknown): WalletReply | undefined {
           const response = await send('SIGN_MESSAGE', { messages: messages.map((message) => [...message]) });
           const signatures: unknown = response?.signatures;
           if (!Array.isArray(signatures) || signatures.length !== inputs.length) {
-            throw new Error(response?.error || 'Sign failed');
+            throw new Error(replyError(response, 'Sign failed'));
           }
           return signatures.map((bytes, i) => ({
             signedMessage: messages[i],

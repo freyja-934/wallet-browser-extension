@@ -32,10 +32,6 @@ export function labelFor(cluster: Cluster): string {
   return cluster === 'devnet' ? 'Devnet' : 'Mainnet';
 }
 
-export function getNetworkLabel(): string {
-  return labelFor(getCluster());
-}
-
 export function publicRpcUrlsFor(cluster: Cluster): readonly string[] {
   return cluster === 'devnet' ? PUBLIC_DEVNET_RPCS : PUBLIC_MAINNET_RPCS;
 }
@@ -98,8 +94,10 @@ export const API_ENDPOINTS = {
   COINGECKO_TOKEN_PRICE: 'https://api.coingecko.com/api/v3/simple/token_price/solana',
 };
 
-export const WRAPPED_SOL_MINT = 'So11111111111111111111111111111111111111112';
-
 export const WALLET_NAME = 'Cinder Wallet';
-/** The version the manifest ships, read from `package.json` so the two cannot drift. */
+/**
+ * The app version the popup shows, read from `package.json`. Nothing at build
+ * time copies it into `manifest.json`, which carries its own literal;
+ * `version.test.ts` is what keeps the two from drifting apart.
+ */
 export const WALLET_VERSION: string = pkg.version;

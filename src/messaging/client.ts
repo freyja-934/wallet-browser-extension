@@ -19,8 +19,10 @@ async function send<T extends ExtensionMessageType>(
   if (typeof chrome === 'undefined' || !chrome.runtime?.sendMessage) {
     throw new Error('Not running as an extension');
   }
-  // The annotation is the response type: `sendMessage` is generic in its reply,
-  // so the envelope is typed on the way in rather than cast on the way out.
+  // `sendMessage` is generic in its reply, so this annotation is what the call
+  // is instantiated with rather than a cast on the way out. It is an assumption
+  // about the worker, not a check: nothing validates the envelope at runtime
+  // beyond the `success` test below.
   const response: Envelope<T> | undefined = await chrome.runtime.sendMessage({ type, ...payload });
   if (!response?.success) {
     throw new Error(response?.error || 'Request failed');
