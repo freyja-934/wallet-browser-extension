@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { WALLET_NAME, WALLET_VERSION, type Cluster } from '../../config/constants';
+import { getCluster, WALLET_NAME, WALLET_VERSION, type Cluster } from '../../config/constants';
 import { SETTINGS_QUERY_KEY, syncSettings, useSettings, useUpdateSettings } from '../../hooks/useSettings';
 import { useInvalidateWalletData } from '../../hooks/useWalletQueries';
 import { errorMessage } from '../../lib/errors';
@@ -75,13 +75,11 @@ export function Settings() {
   const dispatch = useAppDispatch();
   const queryClient = useQueryClient();
   const { accounts, activeAccountIndex } = useAppSelector((state) => state.wallet);
-  const reduxHideSmallBalances = useAppSelector((state) => state.ui.hideSmallBalances);
-  const reduxCluster = useAppSelector((state) => state.ui.cluster);
   const { data: settings } = useSettings();
   const updateSettings = useUpdateSettings();
-  // Redux is hydrated on popup init, so it is the fallback while the query settles.
-  const hideSmallBalances = settings?.hideSmallBalances ?? reduxHideSmallBalances;
-  const cluster = settings?.cluster ?? reduxCluster;
+  // The worker's settings are the only source; the defaults stand in while the query settles.
+  const hideSmallBalances = settings?.hideSmallBalances ?? DEFAULT_SETTINGS.hideSmallBalances;
+  const cluster = settings?.cluster ?? getCluster();
   const autoLockMinutes = settings?.autoLockTimeout ?? DEFAULT_SETTINGS.autoLockTimeout;
   const address = accountAt(accounts, activeAccountIndex)?.address;
   const invalidate = useInvalidateWalletData();
@@ -214,7 +212,7 @@ export function Settings() {
       await dispatch(clearWalletData()).unwrap();
       // The worker reverted to defaults; drop the staleTime: Infinity cache and re-sync.
       queryClient.removeQueries({ queryKey: SETTINGS_QUERY_KEY });
-      await syncSettings(queryClient, dispatch);
+      await syncSettings(queryClient);
       dispatch(initializeWallet());
       toast.success('Wallet data cleared');
     } catch {

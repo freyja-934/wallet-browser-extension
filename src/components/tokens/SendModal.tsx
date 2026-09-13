@@ -2,7 +2,9 @@ import { PublicKey } from '@solana/web3.js';
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
+import { getCluster } from '../../config/constants';
 import { accountAt } from '../../lib/messages';
+import { useSettings } from '../../hooks/useSettings';
 import { useBalances, useInvalidateWalletData } from '../../hooks/useWalletQueries';
 import { errorMessage } from '../../lib/errors';
 import { parseSendError } from '../../lib/protocol';
@@ -92,7 +94,9 @@ interface SendFailureView {
 
 export function SendModal() {
   const dispatch = useAppDispatch();
-  const { showSendModal, sendAsset, cluster } = useAppSelector((state) => state.ui);
+  const { showSendModal, sendAsset } = useAppSelector((state) => state.ui);
+  const { data: settings } = useSettings();
+  const cluster = settings?.cluster ?? getCluster();
   const { accounts, activeAccountIndex } = useAppSelector((state) => state.wallet);
   const address = accountAt(accounts, activeAccountIndex)?.address;
   const { data, isPending: balancesPending, isError: balancesError } = useBalances(address);
