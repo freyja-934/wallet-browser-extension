@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react';
+import { errorMessage } from '../../lib/errors';
 import type { WalletPublicState } from '../../lib/messages';
 import { extensionClient } from '../../messaging/client';
 import { Banner } from '../ui/EmptyState';
@@ -23,8 +24,10 @@ export function UnlockForm({ onUnlocked }: { onUnlocked: (state: WalletPublicSta
       const state = await extensionClient.unlock(password);
       setPassword('');
       onUnlocked(state);
-    } catch {
-      setError('Invalid password');
+    } catch (error) {
+      // Whatever the worker said: 'Unsupported vault format' must not be shown
+      // as a wrong password, or the user retypes a password that was right.
+      setError(errorMessage(error, 'Invalid password'));
     } finally {
       setBusy(false);
     }

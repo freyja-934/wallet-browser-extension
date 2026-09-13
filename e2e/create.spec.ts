@@ -9,6 +9,10 @@ test('create new wallet through reveal, quiz, and password', async ({ context, e
   await page.getByTestId('reveal-seed').click();
   const words = await page.getByTestId('seed-word').allTextContents();
   expect(words).toHaveLength(12);
+  // The attestation is a real claim: Continue stays disabled until the box is ticked.
+  await expect(page.getByTestId('seed-attest')).not.toBeChecked();
+  await expect(page.getByTestId('seed-continue')).toBeDisabled();
+  await page.getByTestId('seed-attest').check();
   await expect(page.getByTestId('seed-continue')).toBeEnabled();
   await page.getByTestId('seed-continue').click();
   await expect(page.getByTestId('seed-verify-input')).toBeVisible();

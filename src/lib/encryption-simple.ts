@@ -1,27 +1,76 @@
 import { Buffer } from 'buffer';
 
+/**
+ * The KDF parameters a vault blob was written with. Stored inside the blob so
+ * every ciphertext is self-describing and `decrypt` never guesses from a global
+ * default: the only way to read a blob is with the parameters it carries.
+ */
+export interface KdfParams {
+  name: 'PBKDF2';
+  hash: 'SHA-256';
+  iterations: number;
+}
+
 export interface EncryptedData {
+  /** Absent on blobs written before versioning; those are v1 (see `V1_KDF`). */
+  version?: number;
+  /** Present from v2 on; absent means `V1_KDF`. */
+  kdf?: KdfParams;
   salt: string;
   nonce: string;
   ciphertext: string;
 }
 
-export interface EncryptionConfig {
-  iterations: number;
-}
-
-const DEFAULT_CONFIG: EncryptionConfig = {
-  iterations: 100000, // PBKDF2 iterations
-};
+/** What `encrypt` writes today. */
+export const CURRENT_VAULT_VERSION = 2;
 
 /**
- * Derives a key from password using PBKDF2
+ * OWASP's PBKDF2-SHA256 figure. About 0.13 s per derivation on an Apple M1 Max;
+ * see docs/adr/0002-vault-v2.md for the measurement and the migration.
  */
-async function deriveKey(
-  password: string,
-  salt: Uint8Array,
-  config: EncryptionConfig = DEFAULT_CONFIG
-): Promise<CryptoKey> {
+export const PBKDF2_ITERATIONS = 600_000;
+
+/** v2 and everything after it: the parameters travel with the ciphertext. */
+export const CURRENT_KDF: KdfParams = {
+  name: 'PBKDF2',
+  hash: 'SHA-256',
+  iterations: PBKDF2_ITERATIONS,
+};
+
+/** Unversioned blobs, written before the format carried its parameters. */
+export const V1_KDF: KdfParams = { name: 'PBKDF2', hash: 'SHA-256', iterations: 100_000 };
+
+/**
+ * The parameters `data` was encrypted with. No `version` means v1; a versioned
+ * blob must carry a version this build knows and parameters it understands, or
+ * it is not readable here.
+ *
+ * The version is checked before the parameters: a blob from a newer build may
+ * well carry a `kdf` that looks fine to this one, and reading it with those
+ * parameters would say "wrong password" about a format this build cannot read.
+ */
+export function kdfFor(data: EncryptedData): KdfParams {
+  if (data.version === undefined) return V1_KDF;
+  if (!Number.isInteger(data.version) || data.version > CURRENT_VAULT_VERSION) {
+    throw new Error('Unsupported vault format');
+  }
+  const kdf = data.kdf;
+  if (
+    !kdf ||
+    kdf.name !== 'PBKDF2' ||
+    kdf.hash !== 'SHA-256' ||
+    !Number.isInteger(kdf.iterations) ||
+    kdf.iterations <= 0
+  ) {
+    throw new Error('Unsupported vault format');
+  }
+  return kdf;
+}
+
+/**
+ * Derives a key from password using PBKDF2 with the given parameters.
+ */
+async function deriveKey(password: string, salt: Uint8Array, kdf: KdfParams): Promise<CryptoKey> {
   const enc = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey(
     'raw',
@@ -30,13 +79,13 @@ async function deriveKey(
     false,
     ['deriveKey']
   );
-  
+
   return crypto.subtle.deriveKey(
     {
       name: 'PBKDF2',
       salt: new Uint8Array(salt),
-      iterations: config.iterations,
-      hash: 'SHA-256'
+      iterations: kdf.iterations,
+      hash: kdf.hash,
     },
     keyMaterial,
     { name: 'AES-GCM', length: 256 },
@@ -46,25 +95,23 @@ async function deriveKey(
 }
 
 /**
- * Encrypts data using PBKDF2 + AES-256-GCM
+ * Encrypts data using PBKDF2 + AES-256-GCM, always in the current format.
  */
 export async function encrypt(
   data: Uint8Array | string,
   password: string
 ): Promise<EncryptedData> {
   // Convert string data to Uint8Array if needed
-  const dataBytes = typeof data === 'string' 
+  const dataBytes = typeof data === 'string'
     ? new TextEncoder().encode(data)
     : new Uint8Array(data);
-  
-  // Generate random salt and nonce
+
+  // Fresh salt and nonce per encryption: AES-GCM never reuses a nonce with a key.
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const nonce = crypto.getRandomValues(new Uint8Array(12));
-  
-  // Derive key using PBKDF2
-  const key = await deriveKey(password, salt);
-  
-  // Encrypt with AES-GCM
+
+  const key = await deriveKey(password, salt, CURRENT_KDF);
+
   const ciphertext = await crypto.subtle.encrypt(
     {
       name: 'AES-GCM',
@@ -73,8 +120,10 @@ export async function encrypt(
     key,
     dataBytes
   );
-  
+
   return {
+    version: CURRENT_VAULT_VERSION,
+    kdf: { ...CURRENT_KDF },
     salt: Buffer.from(salt).toString('hex'),
     nonce: Buffer.from(nonce).toString('hex'),
     ciphertext: Buffer.from(ciphertext).toString('hex')
@@ -82,7 +131,8 @@ export async function encrypt(
 }
 
 /**
- * Decrypts data encrypted with encrypt()
+ * Decrypts data encrypted with encrypt(), reading the KDF parameters from the
+ * blob itself so a vault written by an older build still opens.
  */
 export async function decrypt(
   encryptedData: EncryptedData,
@@ -92,10 +142,9 @@ export async function decrypt(
   const salt = Buffer.from(encryptedData.salt, 'hex');
   const nonce = Buffer.from(encryptedData.nonce, 'hex');
   const ciphertext = Buffer.from(encryptedData.ciphertext, 'hex');
-  
-  // Derive key using same parameters
-  const key = await deriveKey(password, salt);
-  
+
+  const key = await deriveKey(password, salt, kdfFor(encryptedData));
+
   // Decrypt
   const plaintext = await crypto.subtle.decrypt(
     {
@@ -105,7 +154,7 @@ export async function decrypt(
     key,
     ciphertext
   );
-  
+
   return new Uint8Array(plaintext);
 }
 

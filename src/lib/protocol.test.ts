@@ -36,6 +36,12 @@ const cases: Record<ExtensionMessageType, Case> = {
   },
   UNLOCK: { valid: { password: 'pw' }, malformed: { password: 1 }, error: 'Invalid password' },
   SWITCH_ACCOUNT: { valid: { index: 1 }, malformed: { index: '1' }, error: 'Invalid index' },
+  ADD_ACCOUNT: { valid: {}, malformed: {}, error: '' },
+  RENAME_ACCOUNT: {
+    valid: { index: 1, name: 'Savings' },
+    malformed: { index: 1, name: '   ' },
+    error: 'Invalid name',
+  },
   CHANGE_PASSWORD: {
     valid: { currentPassword: 'a', newPassword: 'b' },
     malformed: { currentPassword: 'a' },

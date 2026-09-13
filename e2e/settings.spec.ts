@@ -139,3 +139,77 @@ test('clear wallet data resets the settings cache to the worker defaults', async
   await importWallet(popup, 'settings-cluster');
   await expect(popup.getByTestId('settings-cluster')).toHaveValue('devnet');
 });
+
+test('add a second account, switch to it, rename it, and switch back', async ({ context, extensionId }) => {
+  test.setTimeout(90_000);
+  const popup = await importAndUnlock(context, extensionId);
+
+  const switcher = popup.getByTestId('account-switcher');
+  await expect(switcher).toContainText('Account 1');
+  const firstAddress = await popup.getByTestId('header-address').innerText();
+
+  await switcher.click();
+  await expect(popup.getByTestId('account-option')).toHaveCount(1);
+  await popup.getByTestId('account-add').click();
+  await expect(popup.getByTestId('account-option')).toHaveCount(2);
+
+  // The second account is a different address, and the header follows the switch.
+  await popup.getByTestId('account-option').nth(1).click();
+  await expect(switcher).toContainText('Account 2');
+  const secondAddress = await popup.getByTestId('header-address').innerText();
+  expect(secondAddress).not.toBe(firstAddress);
+
+  // Export private key names the account the header has selected.
+  await popup.getByTestId('open-settings').click();
+  await popup.getByTestId('settings-show-key').click();
+  await expect(popup.getByTestId('settings-key-account')).toHaveText('Export key for Account 2');
+  await popup.getByRole('button', { name: 'Cancel' }).click();
+  await popup.getByTestId('open-settings').click();
+
+  await switcher.click();
+  await popup.getByTestId('account-rename').nth(1).click();
+  await popup.getByTestId('account-rename-input').fill('Savings');
+  await popup.getByTestId('account-rename-input').press('Enter');
+  await expect(switcher).toContainText('Savings');
+
+  // Only Enter commits a rename: clicking away abandons the draft, and an empty
+  // one leaves edit mode rather than sticking there with nothing to submit.
+  await popup.getByTestId('account-rename').nth(1).click();
+  await popup.getByTestId('account-rename-input').fill('Scratch');
+  await popup.getByTestId('account-rename-input').blur();
+  await expect(popup.getByTestId('account-rename-input')).toHaveCount(0);
+  await expect(popup.getByTestId('account-option').nth(1)).toContainText('Savings');
+  await popup.getByTestId('account-rename').nth(1).click();
+  await popup.getByTestId('account-rename-input').fill('');
+  await popup.getByTestId('account-rename-input').press('Enter');
+  await expect(popup.getByTestId('account-rename-input')).toHaveCount(0);
+  await expect(popup.getByTestId('account-option').nth(1)).toContainText('Savings');
+
+  // The list is still open behind the rename, so the switch back is one click.
+  await popup.getByTestId('account-option').nth(0).click();
+  await expect(switcher).toContainText('Account 1');
+  await expect(popup.getByTestId('header-address')).toHaveText(firstAddress);
+
+  // Both accounts, and the new name, survive a lock and unlock — on the account
+  // the user was actually on when the wallet locked.
+  await popup.getByLabel('Lock wallet').click();
+  await popup.getByTestId('unlock-password').fill(TEST_PASSWORD);
+  await popup.getByTestId('unlock-submit').click();
+  await expect(popup.getByTestId('open-receive')).toBeVisible();
+  await expect(switcher).toContainText('Account 1');
+  await expect(popup.getByTestId('header-address')).toHaveText(firstAddress);
+  await switcher.click();
+  await expect(popup.getByTestId('account-option')).toHaveCount(2);
+  await expect(popup.getByTestId('account-option').nth(1)).toContainText('Savings');
+
+  // And the same the other way round: locked while on the second account, the
+  // unlock comes back there rather than quietly moving to the first address.
+  await popup.getByTestId('account-option').nth(1).click();
+  await expect(switcher).toContainText('Savings');
+  await popup.getByLabel('Lock wallet').click();
+  await popup.getByTestId('unlock-password').fill(TEST_PASSWORD);
+  await popup.getByTestId('unlock-submit').click();
+  await expect(popup.getByTestId('open-receive')).toBeVisible();
+  await expect(switcher).toContainText('Savings');
+  await expect(popup.getByTestId('header-address')).toHaveText(secondAddress);
+});

@@ -38,6 +38,8 @@ export const EXTENSION_MESSAGE_TYPES = [
   'GET_SETTINGS',
   'CLEAR_WALLET',
   'SWITCH_ACCOUNT',
+  'ADD_ACCOUNT',
+  'RENAME_ACCOUNT',
   'CANCEL_APPROVAL',
   'GET_CONNECTED_SITES',
   'REVOKE_SITE',
@@ -54,6 +56,9 @@ export function isExtensionMessageType(type: string): type is ExtensionMessageTy
   return (EXTENSION_MESSAGE_TYPES as readonly string[]).includes(type);
 }
 
+/** Longest account label the popup stores. Long enough to be useful, short enough for the header. */
+export const MAX_ACCOUNT_NAME_LENGTH = 32;
+
 export interface WalletAccountInfo {
   address: string;
   name: string;
@@ -66,6 +71,19 @@ export interface WalletPublicState {
   isLocked: boolean;
   accounts: WalletAccountInfo[];
   activeAccountIndex: number;
+}
+
+/**
+ * The account `activeAccountIndex` names. An account's `index` is its BIP44
+ * derivation index, not its place in the list, so look it up by that: a list
+ * that ever skips an index (or arrives in another order) would otherwise point
+ * at a different account — and show, copy, or sign for the wrong address.
+ */
+export function accountAt(
+  accounts: WalletAccountInfo[],
+  index: number
+): WalletAccountInfo | undefined {
+  return accounts.find((account) => account.index === index);
 }
 
 export interface WalletSettings {

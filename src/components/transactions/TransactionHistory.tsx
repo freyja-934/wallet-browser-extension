@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { accountAt } from '../../lib/messages';
 import { useTransactions } from '../../hooks/useWalletQueries';
 import { errorMessage } from '../../lib/errors';
 import { isEndpointsUnreachable } from '../../services/helius';
@@ -11,7 +12,7 @@ import { TransactionRow } from './TransactionRow';
 export function TransactionHistory() {
   const { accounts, activeAccountIndex } = useAppSelector((state) => state.wallet);
   const cluster = useAppSelector((state) => state.ui.cluster);
-  const activeAccount = accounts[activeAccountIndex];
+  const activeAccount = accountAt(accounts, activeAccountIndex);
   const {
     data,
     isLoading,
@@ -77,7 +78,8 @@ export function TransactionHistory() {
             <TransactionRow
               key={tx.signature}
               transaction={tx}
-              address={activeAccount.address}
+              // Unreachable without an account: the filter above keeps the list empty until there is one.
+              address={activeAccount?.address ?? ''}
               onClick={() => {
                 const clusterQuery = cluster === 'devnet' ? '?cluster=devnet-solana' : '';
                 window.open(`https://solana.fm/tx/${tx.signature}${clusterQuery}`, '_blank');

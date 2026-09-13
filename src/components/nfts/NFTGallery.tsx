@@ -1,4 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react';
+import { accountAt } from '../../lib/messages';
 import { useNFTs } from '../../hooks/useWalletQueries';
 import { errorMessage } from '../../lib/errors';
 import { isEndpointsUnreachable } from '../../services/helius';
@@ -15,7 +16,7 @@ import { NFTCard } from './NFTCard';
 export function NFTGallery() {
   const dispatch = useAppDispatch();
   const { accounts, activeAccountIndex } = useAppSelector((state) => state.wallet);
-  const address = accounts[activeAccountIndex]?.address;
+  const address = accountAt(accounts, activeAccountIndex)?.address;
   const { data, isLoading, isError, error, refetch } = useNFTs(address);
   const nfts = useMemo(() => data?.nfts ?? [], [data]);
   const nftCollections = useMemo(() => data?.nftCollections ?? {}, [data]);

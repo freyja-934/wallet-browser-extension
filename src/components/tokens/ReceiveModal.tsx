@@ -1,3 +1,4 @@
+import { accountAt } from '../../lib/messages';
 import { hideReceive } from '../../store/slices/uiSlice';
 import { useAppDispatch, useAppSelector } from '../../store/store';
 import { Modal, ModalContent, ModalHeader } from '../ui/Modal';
@@ -7,7 +8,7 @@ export function ReceiveModal() {
   const dispatch = useAppDispatch();
   const { showReceiveModal } = useAppSelector((state) => state.ui);
   const { accounts, activeAccountIndex } = useAppSelector((state) => state.wallet);
-  const activeAccount = accounts[activeAccountIndex];
+  const activeAccount = accountAt(accounts, activeAccountIndex);
 
   if (!activeAccount) return null;
 

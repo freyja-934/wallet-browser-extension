@@ -10,14 +10,9 @@ export const store = configureStore({
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({
-      serializableCheck: {
-        // Ignore these action types
-        ignoredActions: ['wallet/unlock/fulfilled', 'wallet/createWallet/fulfilled'],
-        // Ignore these field paths in all actions
-        ignoredActionPaths: ['payload.publicKey', 'payload.keypair'],
-        // Ignore these paths in the state
-        ignoredPaths: ['wallet.accounts'],
-      },
+      // Every action and every slice of state here is plain JSON: the popup
+      // holds no Keypair, and no action carries a password or a mnemonic.
+      serializableCheck: true,
     }),
 });
 

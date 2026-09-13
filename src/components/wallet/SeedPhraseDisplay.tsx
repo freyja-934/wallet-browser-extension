@@ -17,6 +17,7 @@ export function SeedPhraseDisplay({
 }) {
   const [isBlurred, setIsBlurred] = useState(true);
   const [hasViewed, setHasViewed] = useState(false);
+  const [attested, setAttested] = useState(false);
   const [confirmCopy, setConfirmCopy] = useState(false);
   const words = seedPhrase.split(' ');
 
@@ -37,7 +38,7 @@ export function SeedPhraseDisplay({
           {onContinue && (
             <PrimaryButton
               onClick={onContinue}
-              disabled={isNewWallet && (!hasViewed || isBlurred)}
+              disabled={isNewWallet && (!hasViewed || isBlurred || !attested)}
               className="ml-auto min-w-[140px]"
               data-testid="seed-continue"
             >
@@ -85,11 +86,14 @@ export function SeedPhraseDisplay({
 
       {isNewWallet && (
         <label className="mt-4 flex items-start gap-2 text-xs leading-relaxed text-fg-2">
+          {/* A real claim by the user, not a checkbox that ticks itself when the phrase is revealed. */}
           <input
             type="checkbox"
-            checked={hasViewed && !isBlurred}
-            readOnly
-            className="mt-0.5 h-3.5 w-3.5 rounded border-white/20 bg-transparent"
+            checked={attested}
+            onChange={(e) => setAttested(e.target.checked)}
+            disabled={isBlurred}
+            data-testid="seed-attest"
+            className="mt-0.5 h-3.5 w-3.5 rounded border-white/20 bg-transparent disabled:opacity-40"
           />
           I stored this phrase somewhere safe and understand I need it to recover this wallet.
         </label>

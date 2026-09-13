@@ -25,6 +25,22 @@ export function SeedPhraseImport({
     if (wordCount !== words.length) setWords(Array(wordCount).fill(''));
   }, [wordCount, words.length]);
 
+  /**
+   * What a real paste looks like: wrapped in quotes by a password manager, split
+   * over lines by a PDF, double-spaced, or Title Cased by a phone keyboard. BIP39
+   * words are lowercase and single-spaced, so normalise before validating rather
+   * than telling the user their correct phrase is invalid.
+   */
+  const normalizePhrase = (input: string): string =>
+    input
+      .trim()
+      .replace(/^["'\u201c\u201d\u2018\u2019]/, '')
+      .replace(/["'\u201c\u201d\u2018\u2019]$/, '')
+      .trim()
+      .toLowerCase()
+      .split(/\s+/)
+      .join(' ');
+
   const validatePhrase = (phrase: string): boolean => {
     const validation = validateSeedPhrase(phrase);
     if (!validation.isValid) {
@@ -36,12 +52,12 @@ export function SeedPhraseImport({
   };
 
   const handlePasteSubmit = () => {
-    const trimmed = pastedPhrase.trim();
-    if (!trimmed) {
+    const phrase = normalizePhrase(pastedPhrase);
+    if (!phrase) {
       setErrors(['Paste your seed phrase']);
       return;
     }
-    if (validatePhrase(trimmed)) onImport(trimmed);
+    if (validatePhrase(phrase)) onImport(phrase);
   };
 
   const handleManualSubmit = () => {

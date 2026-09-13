@@ -30,6 +30,9 @@ export const extensionClient = {
     (await send('CREATE_WALLET', { password, seedPhrase })).state,
   unlock: async (password: string) => (await send('UNLOCK', { password })).state,
   lock: async () => (await send('LOCK', {})).state,
+  switchAccount: async (index: number) => (await send('SWITCH_ACCOUNT', { index })).state,
+  addAccount: async () => (await send('ADD_ACCOUNT', {})).state,
+  renameAccount: async (index: number, name: string) => (await send('RENAME_ACCOUNT', { index, name })).state,
   clearWallet: async () => (await send('CLEAR_WALLET', {})).state,
   changePassword: async (currentPassword: string, newPassword: string) => {
     await send('CHANGE_PASSWORD', { currentPassword, newPassword });

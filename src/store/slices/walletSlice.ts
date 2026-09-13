@@ -1,3 +1,11 @@
+/**
+ * Public wallet state only. Creating, unlocking, changing the password and
+ * exporting a secret all call `extensionClient` from the component that asks:
+ * a thunk would put the password or the mnemonic in an action, where the store
+ * (and anything watching it) keeps a copy. No thunk here carries a secret, and
+ * `walletSlice.test.ts` fails if one starts to.
+ */
+
 import { createAsyncThunk, createSlice, PayloadAction } from '@reduxjs/toolkit';
 import type { WalletAccountInfo } from '../../lib/messages';
 import { extensionClient, type TransferRequest } from '../../messaging/client';
@@ -38,41 +46,9 @@ export const initializeWallet = createAsyncThunk('wallet/initialize', async () =
   return extensionClient.getState();
 });
 
-export const createWallet = createAsyncThunk(
-  'wallet/createWallet',
-  async ({ password, seedPhrase }: { password: string; seedPhrase?: string; imported?: boolean }) => {
-    return extensionClient.createWallet(password, seedPhrase);
-  }
-);
-
-export const unlockWallet = createAsyncThunk('wallet/unlock', async (password: string) => {
-  return extensionClient.unlock(password);
-});
-
 export const lockWallet = createAsyncThunk('wallet/lock', async () => {
   return extensionClient.lock();
 });
-
-export const changePassword = createAsyncThunk(
-  'wallet/changePassword',
-  async ({ currentPassword, newPassword }: { currentPassword: string; newPassword: string }) => {
-    await extensionClient.changePassword(currentPassword, newPassword);
-    return { success: true };
-  }
-);
-
-export const exportSeedPhrase = createAsyncThunk('wallet/exportSeedPhrase', async (password: string) => {
-  const seedPhrase = await extensionClient.exportSeed(password);
-  return { seedPhrase };
-});
-
-export const exportPrivateKey = createAsyncThunk(
-  'wallet/exportPrivateKey',
-  async ({ password, accountIndex }: { password: string; accountIndex: number }) => {
-    const privateKey = await extensionClient.exportPrivateKey(password, accountIndex);
-    return { privateKey };
-  }
-);
 
 export const clearWalletData = createAsyncThunk('wallet/clearData', async () => {
   return extensionClient.clearWallet();
@@ -111,30 +87,6 @@ const walletSlice = createSlice({
         state.isInitialized = true;
         state.hasVault = false;
         state.isLocked = true;
-      })
-      .addCase(createWallet.pending, (state) => {
-        state.isLoading = true;
-        state.error = null;
-      })
-      .addCase(createWallet.fulfilled, (state, action) => {
-        state.isLoading = false;
-        applyState(state, action.payload);
-      })
-      .addCase(createWallet.rejected, (state, action) => {
-        state.isLoading = false;
-        state.error = action.error.message || 'Failed to create wallet';
-      })
-      .addCase(unlockWallet.pending, (state) => {
-        state.isLoading = true;
-        state.error = null;
-      })
-      .addCase(unlockWallet.fulfilled, (state, action) => {
-        state.isLoading = false;
-        applyState(state, action.payload);
-      })
-      .addCase(unlockWallet.rejected, (state, action) => {
-        state.isLoading = false;
-        state.error = action.error.message || 'Invalid password';
       })
       .addCase(lockWallet.fulfilled, (state, action) => {
         applyState(state, action.payload);

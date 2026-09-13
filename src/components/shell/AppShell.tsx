@@ -5,6 +5,8 @@ import { useSettings } from '../../hooks/useSettings';
 import { hideSettings, setActiveView, showSettings } from '../../store/slices/uiSlice';
 import { lockWallet } from '../../store/slices/walletSlice';
 import { useAppDispatch, useAppSelector } from '../../store/store';
+import { accountAt } from '../../lib/messages';
+import { AccountSwitcher } from '../wallet/AccountSwitcher';
 import { PopupFrame } from '../ui/Atmosphere';
 import { IconButton } from '../ui/Button';
 import { GlowMark } from '../ui/GlowMark';
@@ -18,7 +20,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const cluster = settings?.cluster ?? reduxCluster;
   // The endpoint that gets the first try; shown on hover so a custom URL is visible at a glance.
   const primaryRpcHost = new URL(rpcUrlsFor(cluster, settings ?? {})[0]).host;
-  const activeAccount = accounts[activeAccountIndex];
+  // The active account by its own index; the list's order is not its identity.
+  const activeAccount = accountAt(accounts, activeAccountIndex);
   const atmosphere = !showSettingsModal && activeView === 'tokens' ? 'video' : 'still';
 
   const handleCopy = async () => {
@@ -31,12 +34,18 @@ export function AppShell({ children }: { children: ReactNode }) {
     <PopupFrame atmosphere={atmosphere} heavy={showSettingsModal}>
       <header className="z-20 shrink-0 border-b border-white/8 bg-black/30 px-4 py-3 backdrop-blur-md">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
+          <div className="flex min-w-0 items-center gap-2.5">
             <GlowMark size={28} />
-            <div>
-              <p className="text-sm font-semibold tracking-tight">Cinder</p>
+            <div className="min-w-0">
+              {/* The account, not the brand: the mark carries that, and the name is what changes. */}
+              <AccountSwitcher />
               {activeAccount && (
-                <button type="button" onClick={handleCopy} className="font-mono text-[11px] text-fg-2 hover:text-fg-0">
+                <button
+                  type="button"
+                  onClick={handleCopy}
+                  data-testid="header-address"
+                  className="font-mono text-[11px] text-fg-2 hover:text-fg-0"
+                >
                   {activeAccount.address.slice(0, 4)}…{activeAccount.address.slice(-4)}
                 </button>
               )}

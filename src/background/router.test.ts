@@ -5,9 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MAX_TRANSACTION_BYTES, SINGLE_SEND_MESSAGE } from '../lib/bridge';
 import type { PendingApproval, WalletAccountInfo, WalletPublicState } from '../lib/messages';
 import type { PreviewResult } from '../lib/preview';
+import { deriveKeypairFromSeed, mnemonicToSeedBuffer } from '../lib/wallet';
 import { installChromeStub, STUB_EXTENSION_ID, uninstallChromeStub, type ChromeStub } from '../test/chrome-stub';
 import { TEST_ADDRESS, TEST_MNEMONIC, TEST_PASSWORD } from '../test/fixtures';
 import { installApprovalLifecycle, onWindowRemoved } from './approvals';
+import { addressesActiveFirst } from './events';
 import { resetKeyringForTests } from './keyring';
 import { CONFIRMATION_MARGIN_MS, CONFIRMATION_POLL_MS, CONFIRMATION_TIMEOUT_MS, handleMessage, SEND_IN_PROGRESS_MESSAGE } from './router';
 
@@ -179,6 +181,32 @@ describe('handleMessage', () => {
     expect(state.accounts[0]?.address).toBe(TEST_ADDRESS);
     expect(chromeStub.storage.session.snapshot()).toHaveProperty('cinder_session');
     expect(chromeStub.alarms.scheduled()).toHaveProperty('cinder-autolock');
+  });
+
+  it('refuses a second CREATE_WALLET rather than replacing the vault', async () => {
+    const created = await createFixtureWallet();
+    const vaultBefore = chromeStub.storage.local.snapshot().cinder_vault;
+
+    // The onboarding retry path: no phrase, so the keyring would mint a fresh one
+    // and the wallet the user just wrote down would be gone.
+    await expect(handleMessage({ type: 'CREATE_WALLET', password: TEST_PASSWORD }, popup, BASE)).rejects.toThrow(
+      'Wallet already exists',
+    );
+    await expect(
+      handleMessage({ type: 'CREATE_WALLET', password: TEST_PASSWORD, seedPhrase: TEST_MNEMONIC }, popup, BASE),
+    ).rejects.toThrow('Wallet already exists');
+
+    expect(chromeStub.storage.local.snapshot().cinder_vault).toEqual(vaultBefore);
+    const { state } = (await handleMessage({ type: 'GET_STATE' }, popup, BASE)) as { state: WalletPublicState };
+    expect(state.accounts[0]?.address).toBe(created.accounts[0]?.address);
+    expect(state.accounts[0]?.address).toBe(TEST_ADDRESS);
+  });
+
+  it('refuses a CREATE_WALLET password that fails the strength rule', async () => {
+    await expect(
+      handleMessage({ type: 'CREATE_WALLET', password: 'short', seedPhrase: TEST_MNEMONIC }, popup, BASE),
+    ).rejects.toThrow(/at least 8 characters/);
+    expect(chromeStub.storage.local.snapshot()).not.toHaveProperty('cinder_vault');
   });
 
   it('locks, then answers GET_ACCOUNTS with nothing for a connected page', async () => {
@@ -1219,5 +1247,88 @@ describe('SEND_TRANSFER', () => {
       mint,
       source: TEST_ADDRESS,
     });
+  });
+});
+
+describe('multiple accounts', () => {
+  /** BIP44 account 1 of the fixture seed, computed here rather than pasted in. */
+  async function secondAddress(): Promise<string> {
+    const seed = await mnemonicToSeedBuffer(TEST_MNEMONIC);
+    return (await deriveKeypairFromSeed(seed, 1)).keypair.publicKey.toBase58();
+  }
+
+  it('adds the next derived account, switches to it, renames it, and keeps all three across a lock', async () => {
+    await createFixtureWallet();
+    await connectPage(page);
+    const second = await secondAddress();
+
+    const added = (await handleMessage({ type: 'ADD_ACCOUNT' }, popup, BASE)).state as WalletPublicState;
+    expect(added.accounts).toHaveLength(2);
+    expect(added.accounts[1]).toMatchObject({
+      address: second,
+      derivationPath: "m/44'/501'/1'/0'",
+      index: 1,
+      name: 'Account 2',
+    });
+    // Adding does not move the user off the account they were on.
+    expect(added.activeAccountIndex).toBe(0);
+    expect(chromeStub.tabs.sent().at(-1)?.message).toMatchObject({
+      event: 'accountsChanged',
+      accounts: [TEST_ADDRESS, second],
+    });
+
+    const switched = (await handleMessage({ type: 'SWITCH_ACCOUNT', index: 1 }, popup, BASE)).state as WalletPublicState;
+    expect(switched.activeAccountIndex).toBe(1);
+
+    const renamed = (await handleMessage({ type: 'RENAME_ACCOUNT', index: 1, name: '  Savings  ' }, popup, BASE))
+      .state as WalletPublicState;
+    expect(renamed.accounts[1]?.name).toBe('Savings');
+    expect(renamed.accounts[1]?.address).toBe(second);
+    expect(chromeStub.tabs.sent().at(-1)?.message).toMatchObject({
+      event: 'accountsChanged',
+      accounts: [second, TEST_ADDRESS],
+    });
+
+    // The vault was written when there was one account; the stored list is what survives.
+    await handleMessage({ type: 'LOCK' }, popup, BASE);
+    const reopened = (await handleMessage({ type: 'UNLOCK', password: TEST_PASSWORD }, popup, BASE))
+      .state as WalletPublicState;
+    expect(reopened.accounts.map((account) => account.address)).toEqual([TEST_ADDRESS, second]);
+    expect(reopened.accounts[1]?.name).toBe('Savings');
+    // Which account the user is on is public state, stored beside the list: the
+    // unlock comes back on the account they were using, not on the first one.
+    expect(reopened.activeAccountIndex).toBe(1);
+    expect(addressesActiveFirst(reopened)).toEqual([second, TEST_ADDRESS]);
+  });
+
+  it('refuses an account that does not exist, a blank name, and anything while locked', async () => {
+    await createFixtureWallet();
+    await expect(handleMessage({ type: 'SWITCH_ACCOUNT', index: 3 }, popup, BASE)).rejects.toThrow('No such account');
+    await expect(handleMessage({ type: 'RENAME_ACCOUNT', index: 3, name: 'Savings' }, popup, BASE)).rejects.toThrow(
+      'No such account',
+    );
+    await expect(handleMessage({ type: 'RENAME_ACCOUNT', index: 0, name: '   ' }, popup, BASE)).rejects.toThrow(
+      'Invalid name',
+    );
+    await expect(
+      handleMessage({ type: 'RENAME_ACCOUNT', index: 0, name: 'x'.repeat(33) }, popup, BASE),
+    ).rejects.toThrow('Invalid name');
+
+    await handleMessage({ type: 'LOCK' }, popup, BASE);
+    await expect(handleMessage({ type: 'ADD_ACCOUNT' }, popup, BASE)).rejects.toThrow('Wallet is locked');
+    await expect(handleMessage({ type: 'RENAME_ACCOUNT', index: 0, name: 'Savings' }, popup, BASE)).rejects.toThrow(
+      'Wallet is locked',
+    );
+  });
+
+  it('is not reachable from a page', async () => {
+    await createFixtureWallet();
+    await connectPage(page);
+    for (const message of [{ type: 'ADD_ACCOUNT' }, { type: 'RENAME_ACCOUNT', index: 0, name: 'Theirs' }]) {
+      await expect(handleMessage(message, page, BASE)).rejects.toThrow('Not allowed from a page');
+    }
+    const { state } = (await handleMessage({ type: 'GET_STATE' }, popup, BASE)) as { state: WalletPublicState };
+    expect(state.accounts).toHaveLength(1);
+    expect(state.accounts[0]?.name).toBe('Account 1');
   });
 });

@@ -8,11 +8,14 @@ import { FieldLabel, PasswordField } from '../ui/Input';
 export function PasswordCreate({
   onSubmit,
   onBack,
+  busy = false,
   title = 'Create a password',
   subtitle = 'This password encrypts your wallet on this device. There is no recovery if you forget it.',
 }: {
   onSubmit: (password: string) => void;
   onBack?: () => void;
+  /** A create is already in flight: the caller owns the vault now, so no second submit. */
+  busy?: boolean;
   title?: string;
   subtitle?: string;
 }) {
@@ -35,6 +38,7 @@ export function PasswordCreate({
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
+    if (busy) return;
     setErrors([]);
     if (!passwordStrength.isValid) {
       setErrors(['Please create a stronger password']);
@@ -114,11 +118,11 @@ export function PasswordCreate({
         )}
         <PrimaryButton
           type="submit"
-          disabled={!passwordStrength.isValid || password !== confirmPassword}
+          disabled={busy || !passwordStrength.isValid || password !== confirmPassword}
           className="ml-auto min-w-[140px]"
           data-testid="password-submit"
         >
-          Create wallet
+          {busy ? 'Creating…' : 'Create wallet'}
         </PrimaryButton>
       </div>
     </form>
