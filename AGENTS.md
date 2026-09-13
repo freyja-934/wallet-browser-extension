@@ -11,6 +11,15 @@ Public BIP39 fixture — see `docs/test-wallet.md` and `e2e/popup.ts`.
 - Address (account 0): `HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk`
 - Cluster: `VITE_NETWORK=devnet` in `.env`, then `just ext` and Reload on `chrome://extensions`
 
+State of the fixture, checked 2026-09-13 (details in `docs/test-wallet.md`):
+
+- **Mainnet is read-only.** The account was `assign`ed away from the system program to
+  `9G4pPipvCwQkf2X3CtFFJgK88vdN43EoKn7Kf8wxjKa`, so the runtime refuses it as fee payer
+  (`InvalidAccountForFee`). It can never pay a mainnet fee again.
+- **Devnet is swept to zero by bots.** Top it up by hand at https://faucet.solana.com before a
+  full `just e2e`; the faucet is rate-limited by address and by IP, so no script can do it.
+- Any demo that needs a mainnet signature must use a freshly generated throwaway key.
+
 Do not send mainnet funds to this address. Do not `console.log` the phrase from the extension.
 
 ## Commands
@@ -22,7 +31,7 @@ Do not send mainnet funds to this address. Do not `console.log` the phrase from 
 - `just test` — `pnpm exec vitest run` (never bare `pnpm test`; that is watch mode)
 - `just ext` — `pnpm build:extension` into `dist/` (`CINDER_OUT_DIR` overrides the directory)
 - `just dapp` — test dApp at http://localhost:5174
-- `just e2e` — build dist/ then Playwright Chromium: import, unlock, dashboard tabs, create + seed quiz, a second create refused, send review and a confirmed devnet self-transfer, settings (auto-lock, export seed, change password), accounts (add, switch, rename, survive lock), receive copy, dApp connect/sign/signAndSend (batch, cluster switch, wrong chain, transaction-as-message, bridged-type override), approval lifecycle (close, cancel, revoke, expiry), locked unlock in the approval window, connected sites and revoke
+- `just e2e` — build dist/ then Playwright Chromium: import, unlock, dashboard tabs, create + seed quiz, a second create refused, send review and a confirmed devnet self-transfer, settings (auto-lock, export seed, change password), accounts (add, switch, rename, survive lock), receive copy, dApp connect/sign/signAndSend (batch, cluster switch, wrong chain, transaction-as-message, bridged-type override), approval lifecycle (close, cancel, revoke, expiry), locked unlock in the approval window, connected sites and revoke. A funded fixture runs everything; an empty one skips the six funded cases (the four in `e2e/send.spec.ts` and the two `signAndSend` cases in `e2e/dapp.spec.ts`) with the address, the balance, the shortfall and https://faucet.solana.com in the skip message
 - `just store` — mainnet build into `dist-store/`, zipped as `cinder-wallet-store.zip` for the Chrome Web Store; leaves `dist/` alone (does not submit)
 - `just branch ID SLUG` / `just pr`
 

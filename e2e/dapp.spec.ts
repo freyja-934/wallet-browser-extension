@@ -1,7 +1,22 @@
 import type { BrowserContext, Page } from '@playwright/test';
-import { CHAIN_TIMEOUT_MS } from './devnet';
+import { CHAIN_TIMEOUT_MS, rentExemptMinimum, skipUnlessFixtureHolds } from './devnet';
 import { expect, test } from './fixtures';
-import { importAndUnlock, TEST_PASSWORD } from './popup';
+import { importAndUnlock, TEST_ADDRESS, TEST_PASSWORD } from './popup';
+
+/** What one signature costs on devnet; a `signAndSend` through the dApp pays exactly this. */
+const FEE_LAMPORTS = 5_000n;
+
+/**
+ * A `signAndSend` of a 0-lamport self-transfer moves nothing, but the fixture
+ * still pays the fee and still has to stay rent-exempt afterwards — which is
+ * also what makes the simulation succeed rather than report a missing account.
+ */
+async function skipUnlessCanPayAFee(): Promise<void> {
+  await skipUnlessFixtureHolds(
+    FEE_LAMPORTS + (await rentExemptMinimum()),
+    'a 0-lamport self-transfer through the dApp',
+  );
+}
 
 async function openApproval(
   context: BrowserContext,
@@ -49,7 +64,16 @@ test('Connect, sign message, and sign v0 transfer', async ({ context, extensionI
   await dapp.goto('http://localhost:5174/');
   await expect(dapp.locator('#log')).toContainText('registered Cinder Wallet', { timeout: 15_000 });
 
-  await approveNext(context, () => dapp.locator('#connect').click(), dapp);
+  // The most-seen screen in a wallet: it has to say which account is being shared,
+  // on which cluster, and what connecting does and does not permit.
+  const connectApproval = await openApproval(context, () => dapp.locator('#connect').click(), dapp);
+  const connectDetail = connectApproval.getByTestId('approval-connect');
+  await expect(connectDetail).toContainText('Account 1');
+  await expect(connectDetail).toContainText(`${TEST_ADDRESS.slice(0, 4)}…${TEST_ADDRESS.slice(-4)}`);
+  await expect(connectDetail).toContainText('Solana Devnet');
+  await expect(connectDetail).toContainText('separate approval');
+  await connectApproval.getByTestId('approval-approve').click();
+
   await expect(dapp.locator('#log')).toContainText(/"accounts":\s*\[\s*"/, { timeout: 15_000 });
   // The devnet build's account advertises the devnet chain, so wallet-adapter will let it send.
   await expect(dapp.locator('#log')).toContainText('solana:devnet');
@@ -71,6 +95,9 @@ test('locked Connect unlocks inside the approval window, then signAndSend can be
   extensionId,
 }) => {
   test.setTimeout(180_000);
+  // The second half of this test opens a `signAndSend` approval: the fixture has to
+  // be able to pay for one, or its simulation is about an account that does not exist.
+  await skipUnlessCanPayAFee();
   const popup = await importAndUnlock(context, extensionId);
 
   const dapp = await context.newPage();
@@ -100,6 +127,7 @@ test('locked Connect unlocks inside the approval window, then signAndSend can be
 test('signAndSend approve broadcasts a 0-lamport self-transfer', async ({ context, extensionId }) => {
   // Simulation, broadcast and confirmation, each against devnet.
   test.setTimeout(240_000);
+  await skipUnlessCanPayAFee();
   await importAndUnlock(context, extensionId);
 
   const dapp = await context.newPage();

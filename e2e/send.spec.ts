@@ -1,6 +1,6 @@
 import { Connection, PublicKey, clusterApiUrl } from '@solana/web3.js';
 import type { Page } from '@playwright/test';
-import { CHAIN_TIMEOUT_MS, devnetPrecondition } from './devnet';
+import { CHAIN_TIMEOUT_MS, devnetPrecondition, rentExemptMinimum, skipUnlessFixtureHolds } from './devnet';
 import { expect, test } from './fixtures';
 import { importAndUnlock, TEST_ADDRESS } from './popup';
 
@@ -30,6 +30,8 @@ async function openSend(popup: Page): Promise<void> {
 test('Send rejects junk address then reaches Review with a fee', async ({ context, extensionId }) => {
   // The balance and the fee estimate are both devnet round trips.
   test.setTimeout(120_000);
+  // Continue only enables for an amount the wallet actually has.
+  await skipUnlessFixtureHolds(1_000_000n + FEE_LAMPORTS, 'reviewing a 0.001 SOL send');
   const popup = await importAndUnlock(context, extensionId);
 
   await openSend(popup);
@@ -52,6 +54,8 @@ test('Send rejects junk address then reaches Review with a fee', async ({ contex
 test('Max sends the balance minus the fee', async ({ context, extensionId }) => {
   // The balance and the fee estimate are both devnet round trips.
   test.setTimeout(120_000);
+  // Max is the balance minus the fee: there has to be something left over to send.
+  await skipUnlessFixtureHolds(FEE_LAMPORTS + 1n, 'a Max send');
   const popup = await importAndUnlock(context, extensionId);
 
   await openSend(popup);
@@ -78,6 +82,8 @@ test('Max sends the balance minus the fee', async ({ context, extensionId }) => 
 test('Amount with more decimals than SOL has is refused', async ({ context, extensionId }) => {
   // The balance and the fee estimate are both devnet round trips.
   test.setTimeout(120_000);
+  // The one-lamport case has to leave Continue enabled, which needs a balance to cover it.
+  await skipUnlessFixtureHolds(FEE_LAMPORTS + 1n, 'a one-lamport amount');
   const popup = await importAndUnlock(context, extensionId);
 
   await openSend(popup);
@@ -96,6 +102,12 @@ test('Amount with more decimals than SOL has is refused', async ({ context, exte
 test('Sending to the wallet itself costs exactly the fee', async ({ context, extensionId }) => {
   // Balance, estimate, broadcast, confirmation, then the balance again: five devnet round trips.
   test.setTimeout(240_000);
+  // The same floor the assertion below holds the fixture to: the 0.001 SOL it sends
+  // itself, the fee, and enough left to stay rent-exempt.
+  await skipUnlessFixtureHolds(
+    1_000_000n + FEE_LAMPORTS + (await rentExemptMinimum()) + 1n,
+    'a 0.001 SOL self-transfer that leaves the account rent-exempt',
+  );
   const connection = new Connection(clusterApiUrl('devnet'), 'confirmed');
   const owner = new PublicKey(TEST_ADDRESS);
   const popup = await importAndUnlock(context, extensionId);

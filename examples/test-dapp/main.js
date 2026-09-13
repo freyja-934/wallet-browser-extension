@@ -12,9 +12,14 @@ import {
 window.Buffer = Buffer;
 
 const onDevnet = import.meta.env.VITE_NETWORK === 'devnet';
+// Not `api.mainnet-beta.solana.com`: it answers 403 to any request carrying an
+// Origin header, so no browser page can read it. publicnode is the wallet's own
+// mainnet default and accepts browser origins — though some networks (ISP
+// filters, corporate DNS) block it too, in which case the blockhash read below
+// falls back to a placeholder and says so in the log.
 const rpcUrl = onDevnet
   ? 'https://api.devnet.solana.com'
-  : 'https://api.mainnet-beta.solana.com';
+  : 'https://solana-rpc.publicnode.com';
 const clusterChain = onDevnet ? 'solana:devnet' : 'solana:mainnet';
 /** The chain this build is not on: the wallet must refuse it with a Settings hint. */
 const otherChain = onDevnet ? 'solana:mainnet' : 'solana:devnet';
@@ -95,13 +100,42 @@ async function waitForConfirmation(connection, signature) {
   return false;
 }
 
+/**
+ * Set when the last blockhash read failed and an all-zero placeholder was used
+ * instead. The wallet simulates with `replaceRecentBlockhash: true`, so the
+ * preview and the signature are still real — but the bytes are not a
+ * transaction the cluster would accept, and the log has to say so rather than
+ * leave something that looks live. Cleared by the next read that succeeds.
+ */
+let blockhashNote = null;
+
+/** The cluster's latest blockhash, or a placeholder plus a note saying why. */
+async function recentBlockhash(connection) {
+  try {
+    const { blockhash } = await connection.getLatestBlockhash();
+    blockhashNote = null;
+    return blockhash;
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+    blockhashNote =
+      `could not read a blockhash from ${rpcUrl} (${why}) — using an all-zero placeholder. ` +
+      'The wallet replaces it when it simulates, so this transaction is previewed and signed ' +
+      'for real but could never land on the cluster.';
+    log(blockhashNote);
+    return PublicKey.default.toBase58();
+  }
+}
+
+/** A logged result, carrying the placeholder note when the last build had to use one. */
+function withBlockhashNote(value) {
+  return blockhashNote ? { ...value, blockhash: blockhashNote } : value;
+}
+
 async function buildSelfTransfer(account, lamports = 0) {
   const address = account.address;
   const pubkey = new PublicKey(address);
   const connection = new Connection(rpcUrl, 'confirmed');
-  const { blockhash } = await connection.getLatestBlockhash().catch(() => ({
-    blockhash: PublicKey.default.toBase58(),
-  }));
+  const blockhash = await recentBlockhash(connection);
   const ix = SystemProgram.transfer({
     fromPubkey: pubkey,
     toPubkey: pubkey,
@@ -124,10 +158,12 @@ document.getElementById('signTx').onclick = async () => {
       transaction: tx.serialize(),
       chain: clusterChain,
     });
-    log({
-      signedBytes: out.signedTransaction.length,
-      note: 'v0 self-transfer of 0 lamports — previewed and signed, not sent',
-    });
+    log(
+      withBlockhashNote({
+        signedBytes: out.signedTransaction.length,
+        note: 'v0 self-transfer of 0 lamports — previewed and signed, not sent',
+      }),
+    );
   } catch (error) {
     log(error instanceof Error ? error.message : String(error));
   }
@@ -143,10 +179,10 @@ document.getElementById('signAndSend').onclick = async () => {
       chain: clusterChain,
     });
     const signature = bs58.encode(out.signature);
-    log({ signatureLength: out.signature.length, signature, confirmed: 'pending…' });
+    log(withBlockhashNote({ signatureLength: out.signature.length, signature, confirmed: 'pending…' }));
     const connection = new Connection(rpcUrl, 'confirmed');
     const confirmed = await waitForConfirmation(connection, signature);
-    log({ signatureLength: out.signature.length, signature, confirmed });
+    log(withBlockhashNote({ signatureLength: out.signature.length, signature, confirmed }));
   } catch (error) {
     log(error instanceof Error ? error.message : String(error));
   }
@@ -172,11 +208,13 @@ document.getElementById('signAll').onclick = async () => {
       { account: wallet.accounts[0], transaction: first.serialize(), chain: clusterChain },
       { account: wallet.accounts[0], transaction: second.serialize(), chain: clusterChain },
     );
-    log({
-      signedCount: outs.length,
-      signedBytes: outs.map((out) => out.signedTransaction.length),
-      lamports: outs.map((out) => transferLamports(out.signedTransaction)),
-    });
+    log(
+      withBlockhashNote({
+        signedCount: outs.length,
+        signedBytes: outs.map((out) => out.signedTransaction.length),
+        lamports: outs.map((out) => transferLamports(out.signedTransaction)),
+      }),
+    );
   } catch (error) {
     log(error instanceof Error ? error.message : String(error));
   }
