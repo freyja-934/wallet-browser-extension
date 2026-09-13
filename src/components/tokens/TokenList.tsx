@@ -145,7 +145,7 @@ export function TokenList() {
           subtitle={`${solDisplay} SOL`}
           value={prices ? formatUsd(data.solBalance * prices.sol.price) : '—'}
           delta={formatDelta(prices?.sol.priceChange24h)}
-          onClick={() => dispatch(showSend({ symbol: 'SOL', balance: data.solBalance, decimals: 9 }))}
+          onClick={() => dispatch(showSend({ symbol: 'SOL', balanceSmallest: data.lamports, decimals: 9 }))}
         />
         {rows.map(({ token, balance, usdValue, delta }) => {
           const label = tokenLabel(token);
@@ -187,8 +187,9 @@ export function TokenList() {
                   showSend({
                     mint: token.mint,
                     symbol: label,
-                    balance: Number(balance),
+                    balanceSmallest: token.amount,
                     decimals: token.decimals,
+                    programId: token.programId,
                   }),
                 )
               }

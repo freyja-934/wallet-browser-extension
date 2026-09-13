@@ -266,6 +266,9 @@ async function dispatch(request: WalletRequest, caller: Caller): Promise<WalletR
           mint: request.mint,
         }),
       };
+    case 'ESTIMATE_FEE':
+      // Wired to `estimateTransfer` in the next slice; the popup falls back to the fixed fee until then.
+      throw new Error('Fee estimate unavailable');
     default:
       return assertNever(request);
   }

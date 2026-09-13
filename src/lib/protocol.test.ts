@@ -72,6 +72,11 @@ const cases: Record<ExtensionMessageType, Case> = {
     malformed: { to: 'HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk', amountSmallest: '0.5' },
     error: 'Invalid amountSmallest',
   },
+  ESTIMATE_FEE: {
+    valid: { to: 'HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk', amountSmallest: '5000', mint: 'So111' },
+    malformed: { to: 'HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk', amountSmallest: '-1' },
+    error: 'Invalid amountSmallest',
+  },
 };
 
 describe('parseRequest', () => {
@@ -263,9 +268,22 @@ describe('parseRequest', () => {
     });
   });
 
-  it('requires a non-empty string recipient on SEND_TRANSFER', () => {
-    for (const to of ['', 5]) {
-      expect(() => parseRequest({ type: 'SEND_TRANSFER', to, amountSmallest: '1' })).toThrow('Invalid to');
+  it('requires a non-empty string recipient on SEND_TRANSFER and ESTIMATE_FEE', () => {
+    for (const type of ['SEND_TRANSFER', 'ESTIMATE_FEE'] as const) {
+      for (const to of ['', 5]) {
+        expect(() => parseRequest({ type, to, amountSmallest: '1' })).toThrow('Invalid to');
+      }
+    }
+  });
+
+  it('validates ESTIMATE_FEE exactly like SEND_TRANSFER', () => {
+    expect(parseRequest({ type: 'ESTIMATE_FEE', to: 'x', amountSmallest: '1', mint: '' })).toStrictEqual({
+      type: 'ESTIMATE_FEE',
+      to: 'x',
+      amountSmallest: '1',
+    });
+    for (const amountSmallest of ['1e9', '0.5', '', 5]) {
+      expect(() => parseRequest({ type: 'ESTIMATE_FEE', to: 'x', amountSmallest })).toThrow('Invalid amountSmallest');
     }
   });
 

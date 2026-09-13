@@ -3,8 +3,8 @@ import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { useBalances, useInvalidateWalletData } from '../../hooks/useWalletQueries';
 import { errorMessage } from '../../lib/errors';
-import { formatLamports, toSmallestUnit } from '../../lib/units';
-import { hideSend } from '../../store/slices/uiSlice';
+import { formatLamports, fromSmallestUnit, toSmallestUnit } from '../../lib/units';
+import { hideSend, type SendAsset } from '../../store/slices/uiSlice';
 import { sendTransaction } from '../../store/slices/walletSlice';
 import { useAppDispatch, useAppSelector } from '../../store/store';
 import { AddressText, Banner } from '../ui/EmptyState';
@@ -13,6 +13,18 @@ import { Card, CardContent } from '../ui/Card';
 import { FieldLabel, Select, TextField } from '../ui/Input';
 import { Modal, ModalContent, ModalFooter, ModalHeader } from '../ui/Modal';
 import { AmountInput } from './AmountInput';
+
+type SelectedToken = { mint?: string; symbol: string; balance: number; decimals: number };
+
+/** Interim float view of a `SendAsset`; the next slice moves the modal onto smallest units. */
+function asSelected(asset: SendAsset): SelectedToken {
+  return {
+    mint: asset.mint,
+    symbol: asset.symbol,
+    balance: Number(fromSmallestUnit(BigInt(asset.balanceSmallest), asset.decimals)),
+    decimals: asset.decimals,
+  };
+}
 
 export function SendModal() {
   const dispatch = useAppDispatch();
@@ -28,8 +40,8 @@ export function SendModal() {
   const [step, setStep] = useState<'amount' | 'review'>('amount');
   const [recipient, setRecipient] = useState('');
   const [amount, setAmount] = useState('');
-  const [selectedToken, setSelectedToken] = useState(
-    sendAsset || { symbol: 'SOL', balance: solBalance, decimals: 9 },
+  const [selectedToken, setSelectedToken] = useState<SelectedToken>(
+    sendAsset ? asSelected(sendAsset) : { symbol: 'SOL', balance: solBalance, decimals: 9 },
   );
   const [isValidAddress, setIsValidAddress] = useState(false);
   const [addressError, setAddressError] = useState('');
@@ -38,7 +50,7 @@ export function SendModal() {
 
   useEffect(() => {
     if (sendAsset) {
-      setSelectedToken(sendAsset);
+      setSelectedToken(asSelected(sendAsset));
     } else {
       setSelectedToken({ symbol: 'SOL', balance: solBalance, decimals: 9 });
     }

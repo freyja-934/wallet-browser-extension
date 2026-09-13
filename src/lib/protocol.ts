@@ -51,7 +51,8 @@ export type WalletRequest =
   | { type: 'CANCEL_APPROVAL'; id: string }
   | { type: 'GET_CONNECTED_SITES' }
   | { type: 'REVOKE_SITE'; origin: string }
-  | { type: 'SEND_TRANSFER'; to: string; amountSmallest: string; mint?: string };
+  | { type: 'SEND_TRANSFER'; to: string; amountSmallest: string; mint?: string }
+  | { type: 'ESTIMATE_FEE'; to: string; amountSmallest: string; mint?: string };
 
 /** Fields of the request for one message type, without `type`. */
 export type WalletRequestPayload<T extends ExtensionMessageType> = Omit<Extract<WalletRequest, { type: T }>, 'type'>;
@@ -93,7 +94,25 @@ export interface WalletResponses {
   GET_CONNECTED_SITES: { sites: ConnectedSite[] };
   REVOKE_SITE: EmptyResponse;
   SEND_TRANSFER: { signature: string };
+  ESTIMATE_FEE: FeeEstimate;
 }
+
+/** What the worker learned about the recipient while estimating a send. */
+export type RecipientInfo = {
+  /** The account has lamports on-chain. A SOL send to a missing account must fund its rent. */
+  exists: boolean;
+  /** Owned by SPL Token or Token-2022: a token account, not a wallet. */
+  isTokenAccount: boolean;
+  /** Not on the ed25519 curve: a PDA, so no key can sign for it. */
+  offCurve: boolean;
+};
+
+/** The `ESTIMATE_FEE` response: lamports as decimal strings. Type aliases, so the router's `Record<string, unknown>` accepts them. */
+export type FeeEstimate = {
+  feeLamports: string;
+  rentExemptMin: string;
+  recipient: RecipientInfo;
+};
 
 export type WalletResponse = WalletResponses[ExtensionMessageType];
 
@@ -310,7 +329,8 @@ export function parseRequest(input: unknown): WalletRequest {
       const reason = optionalString(raw.reason, 'reason');
       return reason === undefined ? { type, id } : { type, id, reason };
     }
-    case 'SEND_TRANSFER': {
+    case 'SEND_TRANSFER':
+    case 'ESTIMATE_FEE': {
       const to = requireNonEmptyString(raw.to, 'to');
       const amountSmallest = requireIntegerString(raw.amountSmallest, 'amountSmallest');
       const mint = optionalString(raw.mint, 'mint');
