@@ -32,7 +32,8 @@
       <li>Your public wallet address sent to <code>https://lite-api.jup.ag</code> on Mainnet, and only when you have configured neither a custom RPC URL nor a Helius API key. The public Mainnet endpoint refuses to list token accounts, so without this the wallet can show SOL only. Jupiter is asked which mints the address holds and what those mints are called; the balances, decimals and token programs shown are read from the Solana endpoint, never from Jupiter. Entering any RPC URL or Helius key in Settings stops this request being made at all, and it is never made on Devnet</li>
       <li>Public mint addresses sent to CoinGecko for USD prices on mainnet only</li>
       <li>dApp origins you approve, which see the public addresses you connect</li>
-      <li>Token and NFT images load directly from whatever host the token's own metadata names (commonly IPFS or Arweave gateways, or a project's own server). Those hosts see the request and your IP address; Cinder does not choose them and does not proxy them</li>
+      <li>Token and collectible images load directly from whatever host the token's own metadata names (commonly IPFS or Arweave gateways, or a project's own server). Those hosts see the request and your IP address; Cinder does not choose them and does not proxy them</li>
+      <li>Viewing a collectible fetches its metadata document, and then its image, from whatever host that collectible's creator named in its on-chain metadata. Those hosts see the request and your IP address; Cinder does not choose them, does not proxy them, and sends no cookies or wallet address with the request. Nothing is fetched until you open the collectibles tab, and only for the items shown on screen</li>
       <li>Opening a transaction in the explorer hands off to <code>https://solana.fm</code> in a new tab, which receives that transaction signature. Nothing is sent there unless you click the link</li>
     </ul>
     <h2>What we do not do</h2>

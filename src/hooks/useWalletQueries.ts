@@ -2,6 +2,7 @@ import { infiniteQueryOptions, queryOptions, useInfiniteQuery, useQuery, useQuer
 import { getCluster, rpcUrlsFor, type Cluster } from '../config/constants';
 import { displayTokenAmount, shortMintLabel } from '../lib/parse-history';
 import { fromSmallestUnit } from '../lib/units';
+import { COLLECTIBLES_PAGE, fetchCollectibleImage } from '../services/collectibles';
 import { heliusService, type Transaction as ChainTransaction, type TokenNameRef } from '../services/helius';
 import { walletService } from '../services/wallet';
 import type { NFT, Token, Transaction } from '../store/slices/walletSlice';
@@ -15,6 +16,9 @@ const PRICES_STALE_MS = 60_000;
 const NFTS_STALE_MS = 60_000;
 const HISTORY_STALE_MS = 60_000;
 const TOKEN_NAMES_STALE_MS = 5 * 60_000;
+const COLLECTIBLES_STALE_MS = 5 * 60_000;
+/** A metadata document at a content-addressed host does not change; asking twice is waste. */
+const COLLECTIBLE_IMAGE_STALE_MS = 30 * 60_000;
 
 function tokenLabel(mint?: string): string {
   return mint ? shortMintLabel(mint) : 'token';
@@ -127,6 +131,62 @@ export function nftsQueryOptions({ cluster, primaryUrl }: QueryScope, address?: 
 
 export function useNFTs(address?: string) {
   return useQuery(nftsQueryOptions(useQueryScope(), address));
+}
+
+/**
+ * Names and metadata URIs for the keyless one-of-ones, a page of
+ * `COLLECTIBLES_PAGE` mints at a time.
+ *
+ * `mints` comes out of the balances the home tab already fetched
+ * (`WalletBalances.collectibles`), so nothing here re-discovers anything. The
+ * query is separate from balances on purpose and the token path never awaits
+ * it: only the collectibles tab mounts the hook that runs it, and a collector
+ * holding hundreds pays for the page they are looking at rather than all of
+ * them. A page that fails is not retried — an unnamed collectible still shows,
+ * by its mint.
+ */
+export function collectiblesQueryOptions({ cluster, primaryUrl }: QueryScope, mints: string[]) {
+  return infiniteQueryOptions({
+    queryKey: ['collectibles', cluster, primaryUrl, mints],
+    enabled: mints.length > 0,
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) => heliusService.getCollectibles(mints.slice(pageParam, pageParam + COLLECTIBLES_PAGE)),
+    getNextPageParam: (_lastPage, _pages, lastPageParam) => {
+      const next = lastPageParam + COLLECTIBLES_PAGE;
+      return next < mints.length ? next : undefined;
+    },
+    staleTime: COLLECTIBLES_STALE_MS,
+    retry: false,
+  });
+}
+
+export function useCollectibles(mints: string[]) {
+  return useInfiniteQuery(collectiblesQueryOptions(useQueryScope(), mints));
+}
+
+/**
+ * One collectible's picture, from the off-chain document its metadata account
+ * points at. Per item and per URI, so the request is made by the card that is
+ * actually on screen and by no one else; keyed on the URI alone because that
+ * document is nothing to do with the cluster or the endpoint.
+ *
+ * `null` is the answer when there is no usable picture — a host that refused,
+ * timed out, served something oversized or not JSON, or named an image this
+ * wallet will not load. It is a resolved answer, not an error: the card shows
+ * its placeholder and nothing retries.
+ */
+export function collectibleImageQueryOptions(uri?: string) {
+  return queryOptions({
+    queryKey: ['collectible-image', uri],
+    enabled: !!uri,
+    queryFn: async ({ signal }) => (await fetchCollectibleImage(uri!, signal)) ?? null,
+    staleTime: COLLECTIBLE_IMAGE_STALE_MS,
+    retry: false,
+  });
+}
+
+export function useCollectibleImage(uri?: string) {
+  return useQuery(collectibleImageQueryOptions(uri));
 }
 
 function toTransaction(tx: ChainTransaction): Transaction {

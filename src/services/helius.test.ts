@@ -509,6 +509,57 @@ describe('heliusService.getTokenNames', () => {
   });
 });
 
+describe('heliusService.getCollectibles', () => {
+  const mints = (count: number) =>
+    Array.from({ length: count }, (_, index) => new PublicKey(Buffer.alloc(32, index + 1)).toBase58());
+
+  function stubMetadata(answer: (pda: string) => AccountInfo<Buffer> | null = () => null): number[] {
+    const batchSizes: number[] = [];
+    vi.spyOn(Connection.prototype, 'getMultipleAccountsInfo').mockImplementation(async (keys) => {
+      batchSizes.push(keys.length);
+      return keys.map((key) => answer(key.toBase58()));
+    });
+    return batchSizes;
+  }
+
+  it('reads the metadata accounts at ten when the only endpoint is the public Mainnet one', async () => {
+    runtime.urls = [PUBLICNODE];
+    const batchSizes = stubMetadata();
+
+    await heliusService.getCollectibles(mints(15));
+
+    expect(batchSizes).toEqual([MINT_INFO_BATCH, 5]);
+  });
+
+  it('keeps the full batch for an endpoint the user configured', async () => {
+    runtime.settings.rpcUrl = CUSTOM;
+    runtime.urls = [CUSTOM, PUBLICNODE];
+    const batchSizes = stubMetadata();
+
+    await heliusService.getCollectibles(mints(15));
+
+    expect(batchSizes).toEqual([15]);
+  });
+
+  it('names a collectible from its own metadata account', async () => {
+    const [mint] = mints(1);
+    const pda = metadataPda(new PublicKey(mint)).toBase58();
+    stubMetadata((key) => (key === pda ? metaplexAccount('Frog #8699', 'FROG') : null));
+
+    await expect(heliusService.getCollectibles([mint])).resolves.toEqual([
+      { mint, name: 'Frog #8699', symbol: 'FROG' },
+    ]);
+  });
+
+  it('asks nothing at all when there is nothing to name', async () => {
+    const metadata = vi.spyOn(Connection.prototype, 'getMultipleAccountsInfo');
+
+    await expect(heliusService.getCollectibles([])).resolves.toEqual([]);
+
+    expect(metadata).not.toHaveBeenCalled();
+  });
+});
+
 describe('heliusService.getNFTs', () => {
   const asset = { id: 'nft1', interface: 'V1_NFT', content: { metadata: { name: 'One', symbol: 'ONE' } }, ownership: { owner: TEST_ADDRESS, frozen: false } };
 
@@ -678,13 +729,27 @@ describe('heliusService.getTokenBalances, keyless Jupiter fallback', () => {
   const blocked = () =>
     new SolanaJSONRPCError({ code: -32602, message: 'Request blocked' }, 'failed to get token accounts');
 
-  /** An SPL mint account exactly as the chain stores it; byte 44 is the decimals a send converts with. */
-  function mintAccount(decimals: number, programId: PublicKey, initialized = true): AccountInfo<Buffer> {
+  /**
+   * An SPL mint account exactly as the chain stores it; bytes 36..43 are the u64
+   * supply and byte 44 the decimals a send converts with. Supply defaults to a
+   * fungible figure, so a fixture is a token unless it says otherwise.
+   */
+  function mintAccount(
+    decimals: number,
+    programId: PublicKey,
+    initialized = true,
+    supply = 1_000_000n,
+  ): AccountInfo<Buffer> {
     const data = Buffer.alloc(82);
+    data.writeBigUInt64LE(supply, 36);
     data.writeUInt8(decimals, 44);
     data.writeUInt8(initialized ? 1 : 0, 45);
     return { executable: false, owner: programId, lamports: 1_461_600, data };
   }
+
+  /** The real shape of a regular NFT: one unit, indivisible. */
+  const oneOfOneAccount = (programId: PublicKey = TOKEN_PROGRAM_ID): AccountInfo<Buffer> =>
+    mintAccount(0, programId, true, 1n);
 
   /** Jupiter's two endpoints answered from `payload`; every other URL refuses like publicnode. */
   function stubJupiter(options: {
@@ -911,6 +976,129 @@ describe('heliusService.getTokenBalances, keyless Jupiter fallback', () => {
     expect(balances.tokensSource).toBeUndefined();
   });
 
+  /**
+   * The defect SHIP-15 shipped: Jupiter's balances carry the wallet's NFTs, and
+   * a collector on a keyless Mainnet install read one token row of "1" for each
+   * one. The mint account says supply 1 at 0 decimals; that is enough to know.
+   */
+  it('keeps a one-of-one out of the token list entirely', async () => {
+    stubJupiter({
+      balances: {
+        [MINT]: { amount: '1500000', uiAmount: 1.5 },
+        [MINT_B]: { amount: '1', uiAmount: 1 },
+      },
+    });
+    stubMintAccounts(
+      (mint) => (mint === MINT_B ? oneOfOneAccount() : mintAccount(6, TOKEN_PROGRAM_ID)),
+      () => 1_500_000n,
+    );
+
+    const balances = await heliusService.getTokenBalances(TEST_ADDRESS);
+
+    expect(balances.tokens.map((token) => token.mint)).toEqual([MINT]);
+  });
+
+  /**
+   * "Unconfirmed" is a sentence about the endpoint — the line under the list tells
+   * the user the chain would not back a holding up. The chain backed this one up
+   * perfectly well; it is simply not a token, and saying otherwise would send the
+   * user looking for an endpoint problem that is not there.
+   */
+  it('does not count a one-of-one as a holding the chain would not confirm', async () => {
+    stubJupiter({
+      balances: {
+        [MINT]: { amount: '1500000', uiAmount: 1.5 },
+        [MINT_B]: { amount: '1', uiAmount: 1 },
+      },
+    });
+    stubMintAccounts(
+      (mint) => (mint === MINT_B ? oneOfOneAccount() : mintAccount(6, TOKEN_PROGRAM_ID)),
+      () => 1_500_000n,
+    );
+
+    const balances = await heliusService.getTokenBalances(TEST_ADDRESS);
+
+    expect(balances.tokensOmitted).toBeUndefined();
+  });
+
+  it('still calls a supply-1 mint with decimals a token', async () => {
+    stubJupiter({ balances: { [MINT]: { amount: '1', uiAmount: 0.000001 } } });
+    // One whole unit of a six-decimal mint: divisible, so a token however small the supply.
+    stubMintAccounts(() => mintAccount(6, TOKEN_PROGRAM_ID, true, 1n), () => 1n);
+
+    const balances = await heliusService.getTokenBalances(TEST_ADDRESS);
+
+    expect(balances.tokens.map((token) => token.mint)).toEqual([MINT]);
+    expect(balances.tokens[0].decimals).toBe(6);
+  });
+
+  it('still calls a zero-decimal mint with a real supply a token', async () => {
+    stubJupiter({ balances: { [MINT]: { amount: '3', uiAmount: 3 } } });
+    stubMintAccounts(() => mintAccount(0, TOKEN_PROGRAM_ID, true, 21_000_000n), () => 3n);
+
+    const balances = await heliusService.getTokenBalances(TEST_ADDRESS);
+
+    expect(balances.tokens.map((token) => token.mint)).toEqual([MINT]);
+  });
+
+  /** Fewer accounts asked about, never more: the token path gets cheaper, not slower. */
+  it('never reads a token account for a one-of-one', async () => {
+    stubJupiter({ balances: { [MINT]: { amount: '1', uiAmount: 1 } } });
+    const batchSizes = stubMintAccounts(() => oneOfOneAccount());
+
+    await heliusService.getTokenBalances(TEST_ADDRESS);
+
+    // The mint pass, and no token-account pass at all.
+    expect(batchSizes).toEqual([1]);
+  });
+
+  /**
+   * A wallet of nothing but collectibles read correctly is an empty token list,
+   * not an unreadable one: the endpoint answered every question it was asked.
+   */
+  it('reports an empty token list, not an unavailable one, for a wallet of only collectibles', async () => {
+    stubJupiter({ balances: { [MINT]: { amount: '1', uiAmount: 1 } } });
+    stubMintAccounts(() => oneOfOneAccount());
+
+    const balances = await heliusService.getTokenBalances(TEST_ADDRESS);
+
+    expect(balances.tokens).toEqual([]);
+    expect(balances.tokensError).toBeUndefined();
+    expect(balances.tokensSource).toBe('jupiter');
+    expect(balances.tokensOmitted).toBeUndefined();
+    expect(balances.collectibles).toEqual([MINT]);
+  });
+
+  it('hands the one-of-ones back as mints, without asking anything about them', async () => {
+    const requested = stubJupiter({
+      balances: {
+        [MINT]: { amount: '1500000', uiAmount: 1.5 },
+        [MINT_B]: { amount: '1', uiAmount: 1 },
+      },
+    });
+    stubMintAccounts(
+      (mint) => (mint === MINT_B ? oneOfOneAccount() : mintAccount(6, TOKEN_PROGRAM_ID)),
+      () => 1_500_000n,
+    );
+
+    const balances = await heliusService.getTokenBalances(TEST_ADDRESS);
+
+    expect(balances.collectibles).toEqual([MINT_B]);
+    // Nothing was fetched about it: no metadata host, no image host, no second discovery call.
+    expect(requested.filter((url) => url.startsWith(`${JUPITER_BALANCES_URL}/`))).toHaveLength(1);
+    expect(requested.some((url) => url.includes('arweave') || url.includes('ipfs'))).toBe(false);
+  });
+
+  it('leaves collectibles off a list the RPC served itself', async () => {
+    runtime.urls = [A];
+    stubTokenAccounts(() => oneClassic());
+
+    const balances = await heliusService.getTokenBalances(TEST_ADDRESS);
+
+    expect(balances.tokensSource).toBe('rpc');
+    expect(balances.collectibles).toBeUndefined();
+  });
+
   it('leaves today\'s unavailable state exactly as it was when no mint can be confirmed', async () => {
     stubJupiter({ balances: { [MINT]: { amount: '5', uiAmount: 5 } } });
     vi.spyOn(Connection.prototype, 'getMultipleAccountsInfo').mockRejectedValue(new Error('503 Service Unavailable: {}'));
@@ -1067,19 +1255,26 @@ describe('mintFactsFrom', () => {
     return { executable: false, owner, lamports: 1, data };
   }
 
-  it('reads decimals and the owning token program from an initialised mint', () => {
+  it('reads decimals, supply and the owning token program from an initialised mint', () => {
     const info = account(TOKEN_PROGRAM_ID, (data) => {
+      data.writeBigUInt64LE(1_000_000_000_000n, 36);
       data.writeUInt8(9, 44);
       data.writeUInt8(1, 45);
     });
 
-    expect(mintFactsFrom(MINT_KEY, info)).toEqual({ decimals: 9, programId: CLASSIC });
+    expect(mintFactsFrom(MINT_KEY, info)).toEqual({
+      decimals: 9,
+      programId: CLASSIC,
+      supply: 1_000_000_000_000n,
+      isOneOfOne: false,
+    });
   });
 
   it('reads a Token-2022 mint whose account carries extensions past the base layout', () => {
     const info = account(
       TOKEN_2022_PROGRAM_ID,
       (data) => {
+        data.writeBigUInt64LE(500n, 36);
         data.writeUInt8(2, 44);
         data.writeUInt8(1, 45);
         data.writeUInt8(1, 165); // account type: mint
@@ -1087,7 +1282,43 @@ describe('mintFactsFrom', () => {
       300,
     );
 
-    expect(mintFactsFrom(MINT_KEY, info)).toEqual({ decimals: 2, programId: TOKEN_2022 });
+    expect(mintFactsFrom(MINT_KEY, info)).toEqual({
+      decimals: 2,
+      programId: TOKEN_2022,
+      supply: 500n,
+      isOneOfOne: false,
+    });
+  });
+
+  /** The real Frog #8699 shape, read from mainnet: supply 1, decimals 0, and not a token. */
+  it('calls a supply-1 zero-decimal mint a one-of-one', () => {
+    const info = account(TOKEN_PROGRAM_ID, (data) => {
+      data.writeBigUInt64LE(1n, 36);
+      data.writeUInt8(0, 44);
+      data.writeUInt8(1, 45);
+    });
+
+    expect(mintFactsFrom(MINT_KEY, info)).toEqual({
+      decimals: 0,
+      programId: CLASSIC,
+      supply: 1n,
+      isOneOfOne: true,
+    });
+  });
+
+  it.each([
+    ['supply 1 with decimals', 1n, 6],
+    ['supply 2 without decimals', 2n, 0],
+    ['a burned one-of-one, supply 0', 0n, 0],
+    ['a whole fungible supply at 0 decimals', 1_000_000n, 0],
+  ])('does not call %s a one-of-one', (_label, supply, decimals) => {
+    const info = account(TOKEN_PROGRAM_ID, (data) => {
+      data.writeBigUInt64LE(supply, 36);
+      data.writeUInt8(decimals, 44);
+      data.writeUInt8(1, 45);
+    });
+
+    expect(mintFactsFrom(MINT_KEY, info)?.isOneOfOne).toBe(false);
   });
 
   it.each([

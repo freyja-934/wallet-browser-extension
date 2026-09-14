@@ -16,6 +16,12 @@ export interface WalletBalances {
   tokensSource?: 'rpc' | 'jupiter';
   /** Holdings discovered but not shown, split by reason: not confirmed on-chain, or past the per-refresh cap. */
   tokensOmitted?: OmittedHoldings;
+  /**
+   * Mints the keyless path found to be one-of-ones, kept out of `tokens` and
+   * handed to the collectibles tab. Addresses only: naming and picturing them is
+   * that tab's work, and none of it happens here.
+   */
+  collectibles?: string[];
 }
 
 /** USD prices, fetched apart from balances so a CoinGecko failure never hides a balance. */
@@ -27,8 +33,16 @@ export interface WalletPrices {
 class WalletService {
   /** Balances only; rejects (with `EndpointsUnreachableError` when nothing answered) rather than resolving zeros. */
   async getTokenBalances(address: string): Promise<WalletBalances> {
-    const { nativeBalance, lamports, tokens, tokensError, endpointsUnreachable, tokensSource, tokensOmitted } =
-      await heliusService.getTokenBalances(address);
+    const {
+      nativeBalance,
+      lamports,
+      tokens,
+      tokensError,
+      endpointsUnreachable,
+      tokensSource,
+      tokensOmitted,
+      collectibles,
+    } = await heliusService.getTokenBalances(address);
     return {
       solBalance: nativeBalance,
       lamports,
@@ -37,6 +51,7 @@ class WalletService {
       ...(endpointsUnreachable ? { endpointsUnreachable: true } : {}),
       ...(tokensSource !== undefined ? { tokensSource } : {}),
       ...(tokensOmitted !== undefined ? { tokensOmitted } : {}),
+      ...(collectibles !== undefined ? { collectibles } : {}),
     };
   }
 
