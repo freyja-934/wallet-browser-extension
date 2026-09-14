@@ -69,16 +69,19 @@ export function NFTGallery() {
   }
 
   // No configured endpoint serves DAS: a configuration state, not an empty wallet.
+  // Unlike token balances, this one has no keyless fallback at all — every source
+  // that lists a wallet's collectibles wants a key, and the one that does not is a
+  // marketplace's own index, which is a different thing from reading the chain.
   if (data?.nftsUnavailable) {
     return (
       <div className="px-4 py-4">
         <EmptyState
           icon="nft"
           title="Collectibles need an endpoint"
-          body="The configured RPC endpoints do not serve NFT data."
+          body="Listing what a wallet holds takes the DAS API, and no free endpoint serves it on Mainnet. Cinder will not guess this one from a third party."
         />
         <p className="-mt-6 px-6 text-center text-xs leading-relaxed text-fg-2" data-testid="nfts-unavailable">
-          Add an RPC endpoint in <SettingsLink /> to see NFTs
+          Add your own RPC endpoint or a Helius key in <SettingsLink /> to see NFTs
         </p>
       </div>
     );

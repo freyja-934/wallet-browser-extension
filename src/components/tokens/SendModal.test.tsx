@@ -8,15 +8,26 @@
  */
 
 import '@testing-library/jest-dom/vitest';
+import {
+  ACCOUNT_SIZE,
+  AccountLayout,
+  TOKEN_PROGRAM_ID,
+  getAssociatedTokenAddressSync,
+} from '@solana/spl-token';
+import { Connection, PublicKey, SolanaJSONRPCError, type AccountInfo } from '@solana/web3.js';
 import { type QueryClient } from '@tanstack/react-query';
+import { Buffer } from 'buffer';
 import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { JUPITER_BALANCES_URL, JUPITER_TOKEN_SEARCH_URL } from '../../config/constants';
 import { DEFAULT_SETTINGS } from '../../lib/messages';
 import { resetRpcCooldowns } from '../../lib/rpc-rotate';
 import { FALLBACK_FEE_LAMPORTS } from '../../lib/units';
 import { showSend } from '../../store/slices/uiSlice';
 import { stubChain } from '../../test/chain';
 import { installChromeStub, uninstallChromeStub, type ChromeStub } from '../../test/chrome-stub';
+import { TEST_ADDRESS } from '../../test/fixtures';
+import { acceptCrossRealmUint8Arrays } from '../../test/realm';
 import { makeQueryClient, makeStore, renderWithProviders } from '../../test/render';
 import { SendModal } from './SendModal';
 
@@ -34,13 +45,17 @@ const FEE_LAMPORTS = 7500n;
 /** Any valid on-curve address that is not the sender. */
 const RECIPIENT = 'Fbfa7UPLAfng7Wkvr2qCrZVPqEwMzLFPvD8McPRfhBkS';
 
+/** A mint the chain confirms, and one it does not. */
+const CONFIRMED_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+const UNCONFIRMED_MINT = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
+
 let chrome: ChromeStub;
 
-function stubWorker(): void {
+function stubWorker(cluster: 'devnet' | 'mainnet-beta' = 'devnet'): void {
   chrome = installChromeStub();
   chrome.runtime.respond((message) => {
     const { type } = message as { type?: string };
-    if (type === 'GET_SETTINGS') return { success: true, settings: { ...DEFAULT_SETTINGS, cluster: 'devnet' } };
+    if (type === 'GET_SETTINGS') return { success: true, settings: { ...DEFAULT_SETTINGS, cluster } };
     if (type === 'ESTIMATE_FEE') {
       return {
         success: true,
@@ -99,6 +114,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   uninstallChromeStub();
 });
 
@@ -150,5 +166,128 @@ describe('SendModal', () => {
 
     // 7,500 lamports as SOL, not "…" and not "Unavailable".
     await waitFor(() => expect(screen.getByTestId('send-fee')).toHaveTextContent('0.0000075 SOL'));
+  });
+});
+
+/**
+ * The keyless mainnet list, end to end through the real service and query layer:
+ * Jupiter names the mints, `getMultipleAccounts` says what their decimals are and
+ * what the wallet's own token account of each one holds, and the send selector is
+ * built from the result. The decimals assertion is the point — they are what
+ * `parseAmount` converts the typed amount with, so a value taken from Jupiter
+ * instead of the chain would be a wrong send amount — and the balance beside it is
+ * the account's, not Jupiter's, so Max cannot offer what a send could not move.
+ */
+describe('SendModal, keyless token list', () => {
+  // The list derives the wallet's associated token account per mint to read its balance.
+  acceptCrossRealmUint8Arrays();
+
+  /** An SPL mint account; byte 44 is the decimals, byte 45 the initialised flag. */
+  function mintAccount(decimals: number): AccountInfo<Buffer> {
+    const data = Buffer.alloc(82);
+    data.writeUInt8(decimals, 44);
+    data.writeUInt8(1, 45);
+    return { executable: false, owner: TOKEN_PROGRAM_ID, lamports: 1_461_600, data };
+  }
+
+  /** The wallet's own token account of `mint`, holding `amount` smallest units. */
+  function tokenAccountInfo(mint: PublicKey, amount: bigint): AccountInfo<Buffer> {
+    const data = Buffer.alloc(ACCOUNT_SIZE);
+    AccountLayout.encode(
+      {
+        mint,
+        owner: new PublicKey(TEST_ADDRESS),
+        amount,
+        delegateOption: 0,
+        delegate: PublicKey.default,
+        delegatedAmount: 0n,
+        state: 1,
+        isNativeOption: 0,
+        isNative: 0n,
+        closeAuthorityOption: 0,
+        closeAuthority: PublicKey.default,
+      },
+      data,
+    );
+    return { executable: false, owner: TOKEN_PROGRAM_ID, lamports: 2_039_280, data };
+  }
+
+  /** Mainnet, nothing configured, and a host that refuses `getTokenAccountsByOwner` as publicnode does. */
+  async function openOnKeylessMainnet() {
+    uninstallChromeStub();
+    stubWorker('mainnet-beta');
+    stubChain({
+      balance: async () => BALANCE_LAMPORTS,
+      tokens: async () => {
+        throw new SolanaJSONRPCError({ code: -32602, message: 'Request blocked' }, 'failed to get token accounts');
+      },
+    });
+    const confirmed = new PublicKey(CONFIRMED_MINT);
+    const holding = getAssociatedTokenAddressSync(confirmed, new PublicKey(TEST_ADDRESS), true, TOKEN_PROGRAM_ID);
+    vi.spyOn(Connection.prototype, 'getMultipleAccountsInfo').mockImplementation(async (keys) =>
+      // Jupiter claims both mints; only one has a mint account to read and a token
+      // account of this wallet's to read a balance out of, and only that one is shown.
+      keys.map((key) => {
+        const address = key.toBase58();
+        if (address === CONFIRMED_MINT) return mintAccount(6);
+        if (address === holding.toBase58()) return tokenAccountInfo(confirmed, 1_500_000n);
+        return null;
+      }),
+    );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL) => {
+        const url = String(input);
+        if (url.startsWith(`${JUPITER_BALANCES_URL}/`)) {
+          return Response.json({
+            SOL: { amount: String(BALANCE_LAMPORTS), uiAmount: 1 },
+            [CONFIRMED_MINT]: { amount: '1500000', uiAmount: 1.5 },
+            [UNCONFIRMED_MINT]: { amount: '99', uiAmount: 99 },
+          });
+        }
+        if (url.startsWith(JUPITER_TOKEN_SEARCH_URL)) {
+          return Response.json([{ id: CONFIRMED_MINT, name: 'USD Coin', symbol: 'USDC' }]);
+        }
+        return Response.json({ jsonrpc: '2.0', id: 'cinder', error: { code: -32601, message: 'Method not found' } });
+      }),
+    );
+
+    const store = makeStore();
+    const view = renderWithProviders(<SendModal />, { store, queryClient: makeQueryClient() });
+    store.dispatch(showSend());
+    await waitFor(() => expect(screen.getByTestId('send-available')).toHaveTextContent('1.000009973 SOL'));
+    return view;
+  }
+
+  it('offers the mint the chain confirmed, keyed by mint because no token account is known', async () => {
+    await openOnKeylessMainnet();
+
+    const selector = await screen.findByTestId('send-asset');
+    await waitFor(() => expect(selector).toHaveTextContent('USDC — 1.5'));
+
+    const values = Array.from(selector.querySelectorAll('option')).map((option) => option.value);
+    expect(values).toEqual(['SOL', CONFIRMED_MINT]);
+    // The mint whose account could not be read is not offered at any decimals.
+    expect(values).not.toContain(UNCONFIRMED_MINT);
+  });
+
+  it('converts the typed amount with the decimals the chain gave, not any Jupiter stated', async () => {
+    await openOnKeylessMainnet();
+
+    const selector = await screen.findByTestId('send-asset');
+    await waitFor(() => expect(selector).toHaveTextContent('USDC'));
+    fireEvent.change(selector, { target: { value: CONFIRMED_MINT } });
+
+    await waitFor(() => expect(screen.getByTestId('send-available')).toHaveTextContent('1.5 USDC'));
+    fillRecipientAndAcknowledge();
+
+    // Seven decimal places against the six the mint account declares.
+    fireEvent.change(amountField(), { target: { value: '0.1234567' } });
+    expect(await screen.findByTestId('send-amount-error')).toHaveTextContent('Use at most 6 decimal places');
+    expect(screen.getByTestId('send-continue')).toBeDisabled();
+
+    // Six go through, so it was the decimals that blocked it.
+    fireEvent.change(amountField(), { target: { value: '0.123456' } });
+    await waitFor(() => expect(screen.getByTestId('send-continue')).toBeEnabled());
   });
 });

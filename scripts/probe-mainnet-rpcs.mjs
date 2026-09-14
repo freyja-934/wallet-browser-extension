@@ -12,6 +12,13 @@
  * Only a fetch issued from a `chrome-extension://` page tells you what the wallet
  * will actually experience, so that is what this does.
  *
+ * It also probes the two Jupiter endpoints the keyless token list depends on, for
+ * the same reason and in the same way: they are the fallback for discovering which
+ * mints a Mainnet address holds when no endpoint will enumerate token accounts, and
+ * the claim that they serve a `chrome-extension://` origin has to stay re-verifiable.
+ * Jupiter supplies discovery and cosmetics only — every number the wallet shows is
+ * read from the chain — so what is checked here is reachability and shape, nothing more.
+ *
  * Nothing here signs or sends. It reads one balance per endpoint.
  */
 import { chromium } from '@playwright/test';
@@ -23,6 +30,27 @@ const extensionPath = path.join(repo, process.env.CINDER_OUT_DIR || 'dist');
 
 /** Any address will do; this is the public fixture, and the call is read-only. */
 const ADDRESS = 'HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk';
+
+/** The keyless token-discovery fallback; see `src/services/jupiter.ts`. */
+const JUPITER = [
+  {
+    label: 'jup.ag ultra/v1/balances',
+    url: (address) => `https://lite-api.jup.ag/ultra/v1/balances/${address}`,
+    describe: (body) =>
+      body && typeof body === 'object' && !Array.isArray(body)
+        ? `serves this origin (${Object.keys(body).length} entries incl. SOL)`
+        : 'no object body',
+  },
+  {
+    label: 'jup.ag tokens/v2/search',
+    // Two well-known mints: enough to prove the shape without leaking an address.
+    url: () =>
+      'https://lite-api.jup.ag/tokens/v2/search?query=' +
+      'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v,So11111111111111111111111111111111111111112',
+    describe: (body) =>
+      Array.isArray(body) ? `serves this origin (${body.length} rows, e.g. ${body[0]?.symbol ?? '?'})` : 'no array body',
+  },
+];
 
 const CANDIDATES = [
   'https://solana-rpc.publicnode.com',
@@ -85,6 +113,31 @@ async function main() {
             ? body
             : 'no JSON-RPC answer';
     console.log(`${url.padEnd(56, ' ')} ${String(outcome.status).padEnd(8)} ${verdict}`);
+  }
+
+  console.log('');
+  for (const endpoint of JUPITER) {
+    const outcome = await page.evaluate(
+      async ({ url }) => {
+        try {
+          const response = await fetch(url, { method: 'GET', credentials: 'omit', headers: { Accept: 'application/json' } });
+          let body;
+          try {
+            body = await response.json();
+          } catch {
+            body = undefined;
+          }
+          return { status: response.status, body };
+        } catch (error) {
+          return { status: 'blocked', body: String(error).slice(0, 100) };
+        }
+      },
+      { url: endpoint.url(ADDRESS) }
+    );
+
+    const verdict =
+      outcome.status === 200 ? endpoint.describe(outcome.body) : `refused: ${String(outcome.body).slice(0, 90)}`;
+    console.log(`${endpoint.label.padEnd(56, ' ')} ${String(outcome.status).padEnd(8)} ${verdict}`);
   }
 
   await context.close();

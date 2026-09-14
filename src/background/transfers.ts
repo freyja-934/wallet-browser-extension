@@ -127,13 +127,40 @@ export async function buildTransfer(connection: Connection, signer: Keypair, par
   const { decimals } = await getMint(connection, params.mint, 'confirmed', programId);
   const source = params.source
     ? await checkedSource(connection, params.source, signer.publicKey, params.mint, programId)
-    : getAssociatedTokenAddressSync(params.mint, signer.publicKey, true, programId);
+    : await derivedSource(connection, params.mint, signer.publicKey, programId);
   const destination = getAssociatedTokenAddressSync(params.mint, params.to, true, programId);
   transaction.add(
     createAssociatedTokenAccountIdempotentInstruction(signer.publicKey, destination, params.to, params.mint, programId),
     createTransferCheckedInstruction(source, params.mint, destination, signer.publicKey, params.amount, decimals, [], programId),
   );
   return { transaction, mint: { programId, decimals }, destination };
+}
+
+/**
+ * The signer's associated token account for this mint, checked to exist before a
+ * transfer is built on it.
+ *
+ * A row that carries no `source` — the keyless Jupiter-sourced list, which knows
+ * mints and not accounts — spends from the address derived here. Deriving it is
+ * safe on its own: it is always the signer's own account, so nothing can be spent
+ * from somewhere else. What the read adds is a closed failure: without it the
+ * estimate prices a fee, Review enables Confirm, and the send fails at preflight
+ * with a raw simulation blob and a signature that never reached the cluster. The
+ * line thrown here is one `friendlyError` already puts on the screen as it stands.
+ */
+async function derivedSource(
+  connection: Connection,
+  mint: PublicKey,
+  owner: PublicKey,
+  programId: PublicKey,
+): Promise<PublicKey> {
+  const source = getAssociatedTokenAddressSync(mint, owner, true, programId);
+  try {
+    await getAccount(connection, source, 'confirmed', programId);
+  } catch {
+    throw new Error('Token account not found');
+  }
+  return source;
 }
 
 /**

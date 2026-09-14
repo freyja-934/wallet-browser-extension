@@ -44,7 +44,8 @@
     "https://api.devnet.solana.com/*",
     "https://*.helius-rpc.com/*",
     "https://api.helius.xyz/*",
-    "https://api.coingecko.com/*"
+    "https://api.coingecko.com/*",
+    "https://lite-api.jup.ag/*"
   ],
   "optional_host_permissions": [
     "https://*/*"

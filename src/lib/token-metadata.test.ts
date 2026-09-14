@@ -152,6 +152,34 @@ describe('fetchTokenMetadata', () => {
     expect(mockedGetTokenMetadata).not.toHaveBeenCalled();
   });
 
+  /**
+   * Not every endpoint takes 100 keys a call: the keyless Mainnet host caps
+   * `getMultipleAccounts` at ten. A caller that knows this passes its own size
+   * rather than lowering it for users who configured an endpoint of their own.
+   */
+  it('honours a smaller batch size the caller asks for, and never exceeds the RPC limit', async () => {
+    const mints = Array.from({ length: 25 }, () => PublicKey.unique());
+    const { run, calls } = fakeConnection((keys) => keys.map(() => null));
+
+    await fetchTokenMetadata(
+      run,
+      mints.map((mint) => ({ mint: mint.toBase58(), programId: TOKEN_PROGRAM_ID.toBase58() })),
+      10,
+    );
+
+    expect(calls.map((keys) => keys.length)).toEqual([10, 10, 5]);
+
+    calls.length = 0;
+    await fetchTokenMetadata(
+      run,
+      mints.map((mint) => ({ mint: mint.toBase58(), programId: TOKEN_PROGRAM_ID.toBase58() })),
+      // Past the JSON-RPC limit: clamped, never sent as asked.
+      METADATA_BATCH + 50,
+    );
+
+    expect(calls.map((keys) => keys.length)).toEqual([25]);
+  });
+
   it('asks the Token-2022 metadata extension first and falls back to Metaplex when it has none', async () => {
     const withExtension = PublicKey.unique();
     const withoutExtension = PublicKey.unique();

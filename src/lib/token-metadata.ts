@@ -6,7 +6,13 @@ import { COOLDOWN_RPC_MESSAGE, SKIP_RPC_MESSAGE, connectionErrorHttpStatus, isTr
 /** Metaplex Token Metadata program. */
 export const METADATA_PROGRAM_ID = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
 
-/** `getMultipleAccountsInfo` accepts at most 100 keys per call. */
+/**
+ * `getMultipleAccountsInfo` accepts at most 100 keys per call, and that is what an
+ * endpoint of the user's own is asked for. Not every host allows it: publicnode,
+ * the one keyless Mainnet default, caps the method at ten (measured 2026-09-14 —
+ * eleven stalls three seconds and then fails), so `getTokenNames` passes its own
+ * smaller size for that case rather than lowering this one for everybody.
+ */
 export const METADATA_BATCH = 100;
 
 /** Token-2022 extension lookups in flight at once; each one is a `getAccountInfo` of the mint. */
@@ -104,10 +110,15 @@ async function token2022Names(run: ConnectionRunner, mint: PublicKey): Promise<T
  * Names for `mints` from chain data: Token-2022 mints try the metadata extension
  * (`getTokenMetadata`) first, `TOKEN_2022_CONCURRENCY` at a time and each
  * settled on its own, then every mint still unnamed is looked up at its Metaplex
- * PDA in batches of `METADATA_BATCH`. Mints with no metadata are left out of the
+ * PDA in batches of `batchSize` (`METADATA_BATCH` unless the caller knows the
+ * endpoint takes fewer keys per call). Mints with no metadata are left out of the
  * map; a per-mint failure is not an error, a failed Metaplex batch is.
  */
-export async function fetchTokenMetadata(run: ConnectionRunner, mints: MintRef[]): Promise<Map<string, TokenNames>> {
+export async function fetchTokenMetadata(
+  run: ConnectionRunner,
+  mints: MintRef[],
+  batchSize: number = METADATA_BATCH,
+): Promise<Map<string, TokenNames>> {
   const names = new Map<string, TokenNames>();
   const token2022 = TOKEN_2022_PROGRAM_ID.toBase58();
 
@@ -122,8 +133,9 @@ export async function fetchTokenMetadata(run: ConnectionRunner, mints: MintRef[]
   }
 
   const remaining = mints.filter(({ mint }) => !names.has(mint)).map(({ mint }) => new PublicKey(mint));
-  for (let i = 0; i < remaining.length; i += METADATA_BATCH) {
-    const chunk = remaining.slice(i, i + METADATA_BATCH);
+  const keysPerCall = Math.max(1, Math.min(batchSize, METADATA_BATCH));
+  for (let i = 0; i < remaining.length; i += keysPerCall) {
+    const chunk = remaining.slice(i, i + keysPerCall);
     const accounts = await run((connection) => connection.getMultipleAccountsInfo(chunk.map(metadataPda)));
     accounts.forEach((account, index) => {
       if (!account || !account.owner.equals(METADATA_PROGRAM_ID)) return;

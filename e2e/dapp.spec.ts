@@ -63,6 +63,9 @@ async function approveNext(context: BrowserContext, action: () => Promise<void>,
 
 test('Connect, sign message, and sign v0 transfer', async ({ context, extensionId }) => {
   test.setTimeout(180_000);
+  // The v0 transfer is previewed and simulated before it can be signed, so the
+  // fixture has to be a viable fee payer even though nothing is broadcast.
+  await skipUnlessFixtureHolds(5_000n, 'previewing a transfer to sign');
   await importAndUnlock(context, extensionId);
 
   const dapp = await context.newPage();
