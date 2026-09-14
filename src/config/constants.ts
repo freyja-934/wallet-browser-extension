@@ -29,6 +29,9 @@ export type Cluster = 'mainnet-beta' | 'devnet';
  * transactions they sign, so a shared free-tier credential on a small provider is a trust
  * decision, not a redundancy win, and it would need saying in the privacy policy.
  *
+ * Verified 2026-09-14: publicnode serves a `chrome-extension://` origin, so the
+ * keyless path works for a user with no key at all.
+ *
  * The consequence is accepted: when publicnode is blocked or down the wallet has no
  * keyless mainnet endpoint, and it says exactly that rather than showing a balance it
  * cannot read. The fix offered to the user is a custom RPC URL or a Helius key in
