@@ -64,7 +64,7 @@ export default defineConfig({
         chunkFileNames: 'assets/[name]-[hash].js',
         assetFileNames: 'assets/[name]-[hash].[ext]',
         // Name the vendor groups instead of letting Rollup name a 500 KB chunk
-        // after whichever module happened to be first (it was `encryption-simple`).
+        // after whichever module happened to be first (it was `vault-crypto`).
         // `buffer` is deliberately absent: the polyfill has to stay the first thing
         // the worker evaluates, so it is not pulled into a shared vendor chunk.
         manualChunks(id) {

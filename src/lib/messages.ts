@@ -9,7 +9,7 @@ export const WALLET_CHANNEL = 'cinder-wallet';
  */
 export const PAGE_TIMEOUT_MS = 120_000;
 
-export const DAP_MESSAGE_TYPES = [
+export const DAPP_MESSAGE_TYPES = [
   'WALLET_CONNECT',
   'WALLET_DISCONNECT',
   'GET_ACCOUNTS',
@@ -19,7 +19,7 @@ export const DAP_MESSAGE_TYPES = [
 ] as const;
 
 export const EXTENSION_MESSAGE_TYPES = [
-  ...DAP_MESSAGE_TYPES,
+  ...DAPP_MESSAGE_TYPES,
   'GET_STATE',
   'CREATE_WALLET',
   'UNLOCK',
@@ -45,11 +45,11 @@ export const EXTENSION_MESSAGE_TYPES = [
   'REVOKE_SITE',
 ] as const;
 
-export type DappMessageType = (typeof DAP_MESSAGE_TYPES)[number];
+export type DappMessageType = (typeof DAPP_MESSAGE_TYPES)[number];
 export type ExtensionMessageType = (typeof EXTENSION_MESSAGE_TYPES)[number];
 
 export function isDappMessageType(type: string): type is DappMessageType {
-  return (DAP_MESSAGE_TYPES as readonly string[]).includes(type);
+  return (DAPP_MESSAGE_TYPES as readonly string[]).includes(type);
 }
 
 export function isExtensionMessageType(type: string): type is ExtensionMessageType {

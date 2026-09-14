@@ -9,7 +9,7 @@ import {
   V1_KDF,
   validatePasswordStrength,
   type EncryptedData,
-} from './encryption-simple';
+} from './vault-crypto';
 
 const SECRET = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 

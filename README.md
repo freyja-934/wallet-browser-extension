@@ -15,42 +15,19 @@ This is a portfolio implementation. It does not impersonate Phantom. It has not 
   <img src="docs/store/screenshots/04-send-1280x800.png" width="32%" alt="Send review with a network-quoted fee" />
 </p>
 
-## What you get, with and without an RPC key
+## What this demonstrates
 
-Cinder ships with no API key — a key in a Chrome Web Store zip is a key anyone can extract. The endpoint list comes from Settings, not the build, and what the wallet can show depends on what that endpoint serves.
-
-| | Store build, nothing configured | With your own RPC URL or Helius key in Settings |
-|---|---|---|
-| SOL balance, send, receive | yes | yes |
-| Transaction history | yes (decoded on-chain) | yes, enriched |
-| USD prices | yes (CoinGecko) | yes |
-| SPL and Token-2022 balances | **no** on Mainnet — `getTokenAccountsByOwner` is refused; yes on Devnet | yes |
-| Token names and logos | **no** on Mainnet | yes |
-| NFTs | **no** on Mainnet — needs DAS; yes on Devnet | yes |
-| dApp connect, sign, simulation preview | yes | yes |
-
-Keyless Mainnet has exactly one default, `https://solana-rpc.publicnode.com`. The obvious alternative is not there: `https://api.mainnet-beta.solana.com` returns 403 to any request carrying an `Origin` header — which every extension request does — so it could not serve a single call from here, and it is in neither the endpoint list nor the manifest. publicnode publishes CORS headers that accept a browser origin, and it is documented as serving no DAS and refusing `getTokenAccountsByOwner`, which is the line in the table above; that is what the wallet is built to expect, not something this repo has been able to measure (see the next section). Devnet's public host serves both, so Devnet is the full-feature demo.
-
-Where a read is not available, the popup says so: tokens and NFTs show "add an RPC endpoint in Settings", a failed read shows an error card with Retry, and the portfolio figure is marked `· SOL only`. It never shows a zero balance it does not know.
-
-Settings → RPC takes a custom HTTPS URL (probed with `getHealth` and `getGenesisHash`, and only used on the cluster it answered for) and a Helius API key. Both are stored in `chrome.storage.local` on that device and are never sent anywhere but the endpoint itself. A custom host outside the manifest is granted through `optional_host_permissions` at the moment you click Save. The order tried is custom URL, then Helius, then the public defaults.
-
-## Known limitations
-
-- **Localnet is not supported.** wallet-adapter maps a localhost endpoint to `solana:localnet`, and the wallet lists only `solana:mainnet` and `solana:devnet`. A request naming another chain is refused with "Cinder is on Devnet; switch networks in Settings". `just dapp` runs on devnet.
-- **Keyless Mainnet is SOL-only** for tokens and NFTs — see the table above. This is a property of the free public endpoints, not a bug to be fixed in the client.
-- **Keyless Mainnet rests on one third-party host.** publicnode is goodwill, provided AS IS with unpublished limits. It is now verified end to end: on 2026-09-14 `E2E_LIVE_MAINNET=1 just e2e e2e/rpc.spec.ts` passed from a `chrome-extension://` origin, and the shipping `just store` build read a real Mainnet balance through it with no key set. (Earlier probes from the author's connection all failed at the TLS handshake — an ISP filter, not the host, since `https://api.devnet.solana.com` answered 200 over the same network. That filter is what the test is opt-in for.) The one-host list is a decision, not an oversight: `node scripts/probe-mainnet-rpcs.mjs` re-runs the whole keyless field from a real extension origin, because curl does not enforce CORS and passes endpoints a browser refuses. It found OnFinality rate-limited, dRPC paywalled, Omniatech down, and Ankr and BlockEden demanding a key. One did answer, `solana.leorpc.com/?api_key=FREE`, and is deliberately not shipped: every host here receives the addresses you look up and the transactions you sign, so a shared free-tier credential on a small provider buys redundancy at a price this wallet is not willing to pay quietly. Devnet, the custom-RPC path and the Helius path are exercised for real too. When no endpoint answers, the popup says so and asks you to add one in Settings rather than showing a zero — if Mainnet looks dead on your network, check that first.
-- **Connecting a site shares every account, including ones created later.** The
-  connect screen says so, and each signature is still approved separately and
-  signed by the account the request names. But a second account added after the
-  connect is pushed to sites connected earlier in a `change` event, with no
-  fresh prompt, which links the two addresses for anyone watching that dApp.
-  Revoke the site in Settings if that matters to you. Per-origin account scoping
-  is recorded but not enforced; narrowing it is a permission-model change, not a
-  bug fix.
-- **Chrome 111 or later.** The Wallet Standard provider is a MAIN-world content script, which is what that version added. There is no Firefox build.
-- **No hardware wallets, swaps, staking, NFT transfers, or token-approval management.** Send covers SOL and SPL / Token-2022 tokens.
-- **Not audited.** The vault, the origin model and the approval lifecycle have unit and end-to-end tests, and no third-party review.
+- MV3 service worker lifecycle and idle-based auto-lock (`chrome.alarms`)
+- BIP39 → BIP44 `m/44'/501'/n'/0'` derivation (`mnemonicToSeed`, not `Buffer.from(mnemonic)`)
+- Wallet Standard: `standard:connect` (with `silent`), `standard:disconnect`, `standard:events`, `solana:signTransaction`, `solana:signAndSendTransaction`, `solana:signMessage`. Each account's `chains` is the active cluster and is re-stamped on a cluster change, so wallet-adapter can send on either.
+  - N inputs to one `signTransaction` or `signMessage` call (at most 10, and at most 256 KiB in total) are one approval window and N outputs in order; `signAndSendTransaction` takes exactly one transaction per call, forwards `skipPreflight`, `preflightCommitment`, `maxRetries` and `minContextSlot`, and waits for `commitment` for at most 30 s.
+  - `signMessage` refuses bytes that decode as a serialized transaction message — such a signature would be a valid transaction signature.
+  - The `account` input picks the signer: its address is resolved to a derivation index against the wallet's own accounts inside the worker (a page names an address, never an index) and pinned to the approval, so the key that signs is the one the approval window names; an address this wallet does not hold is refused, and switching the active account rejects an approval bound to another one.
+- Vault v2: the blob carries its own version and KDF parameters, PBKDF2-SHA256 at OWASP's 600,000 iterations with AES-256-GCM. A v1 blob (unversioned, 100k) is re-encrypted on the next successful unlock, written before anything else in that unlock; a blob this build cannot read is refused as `Unsupported vault format` rather than reported as a wrong password. See `docs/adr/0002-vault-v2.md`.
+- Multiple accounts: add (next `m/44'/501'/n'/0'`), rename, switch. Accounts are looked up by derivation index, never by position, list writes are serialised in the worker, and the list survives a lock.
+- Per-origin trust: connect once, revoke in Settings; the full approval lifecycle (window close, page timeout, revoke, lock) with `change` events pushed to connected pages.
+- Legacy and v0 transactions, with address lookup tables resolved in the preview.
+- Simulation preview: a balance diff (SOL and tokens, before → after) from `simulateTransaction` pinned to the slot of the account read, program names, `setAuthority` and approve warnings, unknown programs. Approve is disabled while the preview is unsettled, when an instruction is unreadable, or when the active account is not a required signer.
 
 ## Architecture
 
@@ -76,7 +53,44 @@ A site must be approved once (Connect) before it can read the address or ask for
 
 The toolbar popup is **380×600** (Chrome caps action popups at 600px). Approvals open `approve.html` via `chrome.windows.create`, never `chrome.action.openPopup()`.
 
+## What you get, with and without an RPC key
+
+Cinder ships with no API key — a key in a Chrome Web Store zip is a key anyone can extract. The endpoint list comes from Settings, not the build, and what the wallet can show depends on what that endpoint serves.
+
+| | Store build, nothing configured | With your own RPC URL or Helius key in Settings |
+|---|---|---|
+| SOL balance, send, receive | yes | yes |
+| Transaction history | yes (decoded on-chain) | yes, enriched |
+| USD prices | yes (CoinGecko) | yes |
+| SPL and Token-2022 balances | **no** on Mainnet — `getTokenAccountsByOwner` is refused; yes on Devnet | yes |
+| Token names and logos | **no** on Mainnet | yes |
+| NFTs | **no** on Mainnet — needs DAS; yes on Devnet | yes |
+| dApp connect, sign, simulation preview | yes | yes |
+
+Keyless Mainnet has exactly one default, `https://solana-rpc.publicnode.com`. The obvious alternative is not there: `https://api.mainnet-beta.solana.com` returns 403 to any request carrying an `Origin` header — which every extension request does — so it could not serve a single call from here, and it is in neither the endpoint list nor the manifest. publicnode publishes CORS headers that accept a browser origin, and it is documented as serving no DAS and refusing `getTokenAccountsByOwner`, which is the line in the table above; that is what the wallet is built to expect, not something this repo has been able to measure (see [ADR 0003](docs/adr/0003-keyless-mainnet-endpoint.md)). Devnet's public host serves both, so Devnet is the full-feature demo.
+
+Where a read is not available, the popup says so: tokens and NFTs show "add an RPC endpoint in Settings", a failed read shows an error card with Retry, and the portfolio figure is marked `· SOL only`. It never shows a zero balance it does not know.
+
+Settings → RPC takes a custom HTTPS URL (probed with `getHealth` and `getGenesisHash`, and only used on the cluster it answered for) and a Helius API key. Both are stored in `chrome.storage.local` on that device and are never sent anywhere but the endpoint itself. A custom host outside the manifest is granted through `optional_host_permissions` at the moment you click Save. The order tried is custom URL, then Helius, then the public defaults.
+
 Endpoint rotation, in one paragraph: HTTP 401/403 and a refused method (JSON-RPC `-32601`, `-32010`, `-32011`, or a message saying the method is unsupported or key-gated) skip to the next endpoint for that call only; 408/429/5xx, transport errors and node-health codes rest that endpoint for 30 s; any other JSON-RPC error is returned at once, because every endpoint would say the same. Balances stay fresh for 30 s, NFTs and history for 60 s, on-chain names for 5 min; switching account, cluster or endpoint shows a loading state rather than the previous scope's numbers.
+
+## Known limitations
+
+- **Localnet is not supported.** wallet-adapter maps a localhost endpoint to `solana:localnet`, and the wallet lists only `solana:mainnet` and `solana:devnet`. A request naming another chain is refused with "Cinder is on Devnet; switch networks in Settings". `just dapp` runs on devnet.
+- **Keyless Mainnet is SOL-only** for tokens and NFTs — see the table above. This is a property of the free public endpoints, not a bug to be fixed in the client.
+- **Keyless Mainnet rests on one third-party host.** publicnode is goodwill, provided AS IS with unpublished limits, and it is verified rather than assumed: on 2026-09-14 `E2E_LIVE_MAINNET=1 just e2e e2e/rpc.spec.ts` passed from a `chrome-extension://` origin (a `getHealth` 200), and `CINDER_OUT_DIR=dist-store node scripts/probe-mainnet-rpcs.mjs` read a real Mainnet balance through it from the shipping `just store` build with no key set. The one-host list is a decision, not an oversight — the rest of the free field either refuses a browser origin, demands a key, or would cost a shared credential this wallet is not willing to spend quietly; the provider-by-provider survey is in [`docs/adr/0003-keyless-mainnet-endpoint.md`](docs/adr/0003-keyless-mainnet-endpoint.md), and `node scripts/probe-mainnet-rpcs.mjs` re-runs it from a real extension origin. When no endpoint answers, the popup says so and asks you to add one in Settings rather than showing a zero — if Mainnet looks dead on your network, check that first.
+- **Connecting a site shares every account, including ones created later.** The
+  connect screen says so, and each signature is still approved separately and
+  signed by the account the request names. But a second account added after the
+  connect is pushed to sites connected earlier in a `change` event, with no
+  fresh prompt, which links the two addresses for anyone watching that dApp.
+  Revoke the site in Settings if that matters to you. Per-origin account scoping
+  is recorded but not enforced; narrowing it is a permission-model change, not a
+  bug fix.
+- **Chrome 111 or later.** The Wallet Standard provider is a MAIN-world content script, which is what that version added. There is no Firefox build.
+- **No hardware wallets, swaps, staking, NFT transfers, or token-approval management.** Send covers SOL and SPL / Token-2022 tokens.
+- **Not audited.** The vault, the origin model and the approval lifecycle have unit and end-to-end tests, and no third-party review.
 
 ## Load unpacked
 
@@ -97,18 +111,6 @@ just ext         # or: pnpm build:extension
 Check the network pill in the popup before you do anything with funds: it names the cluster the build was compiled for. `just store` builds Mainnet into `dist-store/` instead, so the unpacked extension you have loaded never changes network underneath you.
 
 Optional: set `VITE_HELIUS_API_KEY` in that `.env` to seed the Settings field during development. Never commit an API key; `just store` refuses to zip a build that contains one.
-
-## What this demonstrates
-
-- MV3 service worker lifecycle and idle-based auto-lock (`chrome.alarms`)
-- BIP39 → BIP44 `m/44'/501'/n'/0'` derivation (`mnemonicToSeed`, not `Buffer.from(mnemonic)`)
-- Wallet Standard: `standard:connect` (with `silent`), `standard:disconnect`, `standard:events`, `solana:signTransaction`, `solana:signAndSendTransaction`, `solana:signMessage`. Each account's `chains` is the active cluster and is re-stamped on a cluster change, so wallet-adapter can send on either. N inputs to one `signTransaction` or `signMessage` call (at most 10, and at most 256 KiB in total) are one approval window and N outputs in order; `signAndSendTransaction` takes exactly one transaction per call, forwards `skipPreflight`, `preflightCommitment`, `maxRetries` and `minContextSlot`, and waits for `commitment` for at most 30 s. `signMessage` refuses bytes that decode as a serialized transaction message — such a signature would be a valid transaction signature. The `account` input picks the signer: its address is resolved to a derivation index against the wallet's own accounts inside the worker (a page names an address, never an index) and pinned to the approval, so the key that signs is the one the approval window names; an address this wallet does not hold is refused, and switching the active account rejects an approval bound to another one.
-- Vault v2: the blob carries its own version and KDF parameters, PBKDF2-SHA256 at OWASP's 600,000 iterations with AES-256-GCM. A v1 blob (unversioned, 100k) is re-encrypted on the next successful unlock, written before anything else in that unlock; a blob this build cannot read is refused as `Unsupported vault format` rather than reported as a wrong password. See `docs/adr/0002-vault-v2.md`.
-- Multiple accounts: add (next `m/44'/501'/n'/0'`), rename, switch. Accounts are looked up by derivation index, never by position, list writes are serialised in the worker, and the list survives a lock.
-- Per-origin trust: connect once, revoke in Settings; the full approval lifecycle (window close, page timeout, revoke, lock) with `change` events pushed to connected pages.
-- Legacy and v0 transactions, with address lookup tables resolved in the preview.
-- Simulation preview: a balance diff (SOL and tokens, before → after) from `simulateTransaction` pinned to the slot of the account read, program names, `setAuthority` and approve warnings, unknown programs. Approve is disabled while the preview is unsettled, when an instruction is unreadable, or when the active account is not a required signer.
-- Honest failure: every read has an error card with Retry, and nothing renders an invented zero.
 
 ## Commands
 

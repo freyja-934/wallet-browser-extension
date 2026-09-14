@@ -67,9 +67,6 @@ export function kdfFor(data: EncryptedData): KdfParams {
   return kdf;
 }
 
-/**
- * Derives a key from password using PBKDF2 with the given parameters.
- */
 async function deriveKey(password: string, salt: Uint8Array, kdf: KdfParams): Promise<CryptoKey> {
   const enc = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey(
@@ -101,7 +98,6 @@ export async function encrypt(
   data: Uint8Array | string,
   password: string
 ): Promise<EncryptedData> {
-  // Convert string data to Uint8Array if needed
   const dataBytes = typeof data === 'string'
     ? new TextEncoder().encode(data)
     : new Uint8Array(data);
@@ -138,14 +134,12 @@ export async function decrypt(
   encryptedData: EncryptedData,
   password: string
 ): Promise<Uint8Array> {
-  // Parse hex strings back to buffers
   const salt = Buffer.from(encryptedData.salt, 'hex');
   const nonce = Buffer.from(encryptedData.nonce, 'hex');
   const ciphertext = Buffer.from(encryptedData.ciphertext, 'hex');
 
   const key = await deriveKey(password, salt, kdfFor(encryptedData));
 
-  // Decrypt
   const plaintext = await crypto.subtle.decrypt(
     {
       name: 'AES-GCM',
@@ -158,9 +152,6 @@ export async function decrypt(
   return new Uint8Array(plaintext);
 }
 
-/**
- * Validates password strength
- */
 export function validatePasswordStrength(password: string): {
   isValid: boolean;
   score: number;
@@ -168,8 +159,7 @@ export function validatePasswordStrength(password: string): {
 } {
   const feedback: string[] = [];
   let score = 0;
-  
-  // Length check
+
   if (password.length >= 12) {
     score += 2;
   } else if (password.length >= 8) {
@@ -178,24 +168,24 @@ export function validatePasswordStrength(password: string): {
   } else {
     feedback.push('Password must be at least 8 characters long');
   }
-  
+
   // Complexity checks
   if (/[a-z]/.test(password)) score += 1;
   else feedback.push('Include lowercase letters');
-  
+
   if (/[A-Z]/.test(password)) score += 1;
   else feedback.push('Include uppercase letters');
-  
+
   if (/[0-9]/.test(password)) score += 1;
   else feedback.push('Include numbers');
-  
+
   if (/[^a-zA-Z0-9]/.test(password)) score += 1;
   else feedback.push('Include special characters');
-  
+
   // Common patterns check
   if (!/(.)\1{2,}/.test(password)) score += 1;
   else feedback.push('Avoid repeating characters');
-  
+
   return {
     isValid: password.length >= 8 && score >= 4,
     score: Math.min(score, 5),

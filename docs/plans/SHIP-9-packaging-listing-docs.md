@@ -7,7 +7,7 @@ Ship a zip under 2 MB that paints fast, a manifest with nothing unused, a listin
 ## Context
 
 - The store zip is 19.5 MB: `public/media/bg-video.mp4` (9.2 MB, 1280×720 H.264, decoded on every popup open), `nft-video.mp4` (3.8 MB), `nft-img.png` (2.5 MB), `token-img.png` (2.7 MB); only `scripts/mint-cinder.mjs` (line 10 reads `public/media`) uses the last three.
-- The popup statically imports about 920 KB of minified JS including the BIP39 wordlist; `modulePreload` is off; the vendor chunk is named after `encryption-simple.ts`; `approve.html` loads the full popup chunk.
+- The popup statically imports about 920 KB of minified JS including the BIP39 wordlist; `modulePreload` is off; the vendor chunk is named after `vault-crypto.ts`; `approve.html` loads the full popup chunk.
 - `buffer-polyfill` is imported first in `service-worker.ts` but bundled code can reference `Buffer` before it evaluates; `copy:icons` duplicates Vite's `publicDir` copy; `.DS_Store` files are copied into `dist/`; the version lives in `package.json`, `manifest.json`, and (until SHIP-8a) `constants.ts`; `just store` overwrites `dist/` with the mainnet build; `outDir` is hardcoded in three Vite configs and two `cp` scripts.
 - Manifest: `web_accessible_resources` still exposes `assets/*`; `clipboardWrite` may be unnecessary; the CSP is the bare default.
 - Listing: screenshots come from SHIP-0 item 8 (owner); the 128 px icon has no padding; promo tile text is clipped; `listing.md` names categories that no longer exist and omits account prerequisites; the privacy policy omits the solana.fm hand-off and third-party image hosts.

@@ -16,7 +16,7 @@ Close the live bridge vulnerability and fix the four one-file bugs in the featur
 ## Steps
 
 1. [x] Files: `src/lib/bridge.ts`, `src/lib/bridge.test.ts`, `src/content/content-script.ts`, `src/background/service-worker.ts`, `e2e/dapp.spec.ts`
-   Bridge builds the worker message from explicit fields; worker allow-lists page senders to `DAP_MESSAGE_TYPES` + `POLL_APPROVAL` and ignores payload `origin`.
+   Bridge builds the worker message from explicit fields; worker allow-lists page senders to `DAPP_MESSAGE_TYPES` + `POLL_APPROVAL` and ignores payload `origin`.
    Verify: `just check` (34 tests); new e2e fails on old `dist/`, passes on new. Done.
 
 2. Files: `src/background/service-worker.ts`, `examples/test-dapp/main.js`, `e2e/dapp.spec.ts`

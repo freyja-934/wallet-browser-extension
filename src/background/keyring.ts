@@ -9,7 +9,7 @@ import {
   kdfFor,
   validatePasswordStrength,
   type EncryptedData,
-} from '../lib/encryption-simple';
+} from '../lib/vault-crypto';
 import {
   DEFAULT_SETTINGS,
   MAX_ACCOUNT_NAME_LENGTH,

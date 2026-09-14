@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion';
 import { useMemo, useState, type FormEvent } from 'react';
-import { validatePasswordStrength } from '../../lib/encryption-simple';
+import { validatePasswordStrength } from '../../lib/vault-crypto';
 import { Banner, StepHeader } from '../ui/EmptyState';
 import { GhostButton, PrimaryButton } from '../ui/Button';
 import { FieldLabel, PasswordField } from '../ui/Input';
