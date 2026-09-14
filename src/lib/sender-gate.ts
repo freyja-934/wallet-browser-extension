@@ -1,8 +1,8 @@
-import { DAP_MESSAGE_TYPES } from './messages';
+import { DAPP_MESSAGE_TYPES } from './messages';
 
 /** Message types a content script (any web page) may send. Everything else is popup / approval only. */
 export const PAGE_ALLOWED_TYPES: ReadonlySet<string> = new Set([
-  ...DAP_MESSAGE_TYPES,
+  ...DAPP_MESSAGE_TYPES,
   'POLL_APPROVAL',
   'CANCEL_APPROVAL',
 ]);

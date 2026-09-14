@@ -1,5 +1,5 @@
 {
-  "name": "solana-wallet-extension",
+  "name": "cinder-wallet",
   "version": "0.4.0",
   "description": "Cinder Wallet — a Solana wallet browser extension",
   "type": "module",

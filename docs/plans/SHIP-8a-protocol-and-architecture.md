@@ -9,7 +9,7 @@ Finish what SHIP-2 started: an exhaustive typed protocol with `no-explicit-any` 
 - After SHIP-2 through SHIP-7 every message type is in `src/lib/protocol.ts`, but `.eslintrc.cjs` still has `@typescript-eslint/no-explicit-any: off` and `any` remains in `src/services/helius.ts`, `src/services/coingecko.ts`, and `src/content/injected.ts` (`Promise<any>` in `send`).
 - `uiSlice` still mirrors `cluster`, `hideSmallBalances`, `theme` and carries dead reducers (`showSeedPhrase`, `hideSeedPhrase`, `showTransaction`, `hideTransaction`, `toggleHideSmallBalances`, `setSearchQuery`, `setTheme`, `setLoadingMessage`); `useWalletQueries.ts`, `TokenList.tsx`, `TransactionHistory.tsx`, `BalanceCard.tsx`, `App.tsx`, `Settings.tsx`, `AppShell.tsx` read the mirror.
 - Derived state via `useEffect` + `useState`: recipient validation and selected token in `SendModal.tsx`, `hasViewed` in `SeedPhraseDisplay.tsx`, strength in `PasswordCreate.tsx`.
-- Unused exports: `constants.ts` (`AUTO_LOCK_OPTIONS`, `SUPPORTED_CURRENCIES`, `DEFAULT_COMMITMENT`, `API_ENDPOINTS` parts, `NATIVE_SOL_MINT`), `encryption-simple.ts` (`encryptString`, `decryptString`, `clearMemory`, `generateSessionKey`), `wallet.ts` (`getWordList`, `isValidWord`, `getWordSuggestions` unless `SeedPhraseImport` uses them), `helius.ts` (`Transaction` event types), `coingecko.ts` leftovers. `WALLET_VERSION` is hand-copied from `package.json`; `tsconfig.json` has `resolveJsonModule: true`.
+- Unused exports: `constants.ts` (`AUTO_LOCK_OPTIONS`, `SUPPORTED_CURRENCIES`, `DEFAULT_COMMITMENT`, `API_ENDPOINTS` parts, `NATIVE_SOL_MINT`), `vault-crypto.ts` (`encryptString`, `decryptString`, `clearMemory`, `generateSessionKey`), `wallet.ts` (`getWordList`, `isValidWord`, `getWordSuggestions` unless `SeedPhraseImport` uses them), `helius.ts` (`Transaction` event types), `coingecko.ts` leftovers. `WALLET_VERSION` is hand-copied from `package.json`; `tsconfig.json` has `resolveJsonModule: true`.
 - Turning the lint rule on must be the last step so `just check` stays green after each step.
 
 ## Steps
@@ -30,7 +30,7 @@ Finish what SHIP-2 started: an exhaustive typed protocol with `no-explicit-any` 
    Replace derived-state effects with computed values (`useMemo` or plain expressions); keep test ids.
    Verify: `just check`; `just e2e e2e/send.spec.ts e2e/create.spec.ts`.
 
-5. Files: `src/config/constants.ts`, `src/lib/encryption-simple.ts`, `src/lib/wallet.ts`, `src/services/coingecko.ts`, `src/services/helius.ts`
+5. Files: `src/config/constants.ts`, `src/lib/vault-crypto.ts`, `src/lib/wallet.ts`, `src/services/coingecko.ts`, `src/services/helius.ts`
    Delete unused exports (confirm each with a repo-wide grep first); `WALLET_VERSION` becomes `import pkg from '../../package.json'` + `pkg.version`; replace `any` in `helius.ts` and `coingecko.ts` with narrow types.
    Verify: `just check`.
 

@@ -112,7 +112,7 @@ and tagged on 2026-09-14.
 **Design.**
 
 - `src/background/router.ts` exports `handleMessage(request, sender)`, `fulfillApproval`, `previewTransaction`; `service-worker.ts` keeps only imports, listener registration (synchronous, at module top), and the polyfill. Listeners for `chrome.windows.onRemoved` and `chrome.tabs.onRemoved` are registered here now (no-op bodies until SHIP-5) so they exist at worker start.
-- `src/lib/protocol.ts`: a discriminated union `WalletRequest` with one member per existing message type and a `WalletResponse<T>` map; `parseRequest(unknown): WalletRequest` hand-written validators (no new dependency) that reject unknown types and malformed payloads; `extensionClient` typed from the union. `handleMessage` switches on the parsed union. The sender allow-list lives next to `parseRequest`: requests from tab senders (`sender.tab` set) may only carry `DAP_MESSAGE_TYPES` plus `POLL_APPROVAL`; every other type requires `sender.url` to start with `chrome.runtime.getURL('')`. Origin comes from `sender.origin`; the `origin` field in the payload is ignored.
+- `src/lib/protocol.ts`: a discriminated union `WalletRequest` with one member per existing message type and a `WalletResponse<T>` map; `parseRequest(unknown): WalletRequest` hand-written validators (no new dependency) that reject unknown types and malformed payloads; `extensionClient` typed from the union. `handleMessage` switches on the parsed union. The sender allow-list lives next to `parseRequest`: requests from tab senders (`sender.tab` set) may only carry `DAPP_MESSAGE_TYPES` plus `POLL_APPROVAL`; every other type requires `sender.url` to start with `chrome.runtime.getURL('')`. Origin comes from `sender.origin`; the `origin` field in the payload is ignored.
 - `src/test/chrome-stub.ts`: `installChromeStub()` returns an in-memory `chrome` with `storage.local` / `storage.session` (with `onChanged`), `alarms`, `windows.create` / `onRemoved`, `tabs.sendMessage` / `onRemoved`, `runtime.getURL` / `onMessage` / `sendMessage`. Tests import and install it explicitly; no `vite.config.ts` change.
 - `src/hooks/useSettings.ts`: `useSettings()` (React Query, key `['settings']`) and `useUpdateSettings()` (mutation that invalidates the key). Popup screens that need `cluster` read it from here; the Redux mirror stays for now so SHIP-3/4/5 do not need to touch every consumer.
 
@@ -281,7 +281,7 @@ and tagged on 2026-09-14.
 
 **Steps (outline).**
 
-1. Files: `src/lib/encryption-simple.ts` + test, `src/background/keyring.ts` + new test (stub from SHIP-2), new `docs/adr/0002-vault-v2.md`
+1. Files: `src/lib/vault-crypto.ts` + test, `src/background/keyring.ts` + new test (stub from SHIP-2), new `docs/adr/0002-vault-v2.md`
 2. Files: `src/background/keyring.ts` (idle lock, accounts), `src/background/router.ts`, `src/lib/protocol.ts`
 3. Files: `src/components/wallet/SeedPhraseImport.tsx`, `src/components/wallet/SeedPhraseDisplay.tsx`, `src/components/wallet/WalletCreationFlow.tsx`
 4. Files: `src/components/settings/Settings.tsx`, `src/store/slices/walletSlice.ts` + test, `src/store/store.ts`
@@ -302,7 +302,7 @@ and tagged on 2026-09-14.
 - Exhaustive switch over the full `WalletRequest` union; remove every remaining `String()` / `as` coercion. Turn `@typescript-eslint/no-explicit-any` on only in the step after the last `any` site is gone (`helius.ts`, `coingecko.ts`, `injected.ts`).
 - Redux mirror removed in two steps so `tsc` stays green: (a) switch `useWalletQueries.ts`, `TokenList.tsx`, `TransactionHistory.tsx`, `BalanceCard.tsx` to `useSettings`; (b) switch `App.tsx`, `Settings.tsx`, `AppShell.tsx`, delete `cluster` / `hideSmallBalances` / `theme` and the eight dead reducers from `uiSlice`.
 - Derived-state effects replaced with computed values (recipient validation, selected token, seed reveal).
-- Delete unused exports across `constants.ts`, `encryption-simple.ts`, `wallet.ts`, `coingecko.ts`, `helius.ts`. `WALLET_VERSION` becomes `import pkg from '../../package.json'` (`resolveJsonModule` is already on).
+- Delete unused exports across `constants.ts`, `vault-crypto.ts`, `wallet.ts`, `coingecko.ts`, `helius.ts`. `WALLET_VERSION` becomes `import pkg from '../../package.json'` (`resolveJsonModule` is already on).
 
 **Steps (outline).**
 
@@ -310,7 +310,7 @@ and tagged on 2026-09-14.
 2. Files: `src/hooks/useWalletQueries.ts`, `src/components/tokens/TokenList.tsx`, `src/components/transactions/TransactionHistory.tsx`, `src/components/wallet/BalanceCard.tsx`
 3. Files: `src/store/slices/uiSlice.ts`, `src/popup/App.tsx`, `src/components/settings/Settings.tsx`, `src/components/shell/AppShell.tsx`
 4. Files: `src/components/tokens/SendModal.tsx`, `src/components/wallet/SeedPhraseDisplay.tsx`, `src/components/wallet/PasswordCreate.tsx`
-5. Files: `src/config/constants.ts`, `src/lib/encryption-simple.ts`, `src/lib/wallet.ts`, `src/services/coingecko.ts`, `src/services/helius.ts`
+5. Files: `src/config/constants.ts`, `src/lib/vault-crypto.ts`, `src/lib/wallet.ts`, `src/services/coingecko.ts`, `src/services/helius.ts`
 6. Files: `.eslintrc.cjs`, `src/content/injected.ts` (enable `no-explicit-any`)
 
 **Verify.** `just check` with the rule on; `just e2e`.

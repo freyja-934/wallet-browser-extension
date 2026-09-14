@@ -10,7 +10,7 @@ None of this is in the repo; the dashboard blocks the submission until each is d
 2. 2-Step Verification on the Google account that owns it — the dashboard refuses to publish without it.
 3. The trader / non-trader declaration (EU DSA). A personal demo with no revenue is **non-trader**; the account still has to answer it.
 4. A verified contact email on the developer account, shown on the listing.
-5. A privacy policy at a URL you control. GitHub Pages must be on for this repo (Settings → Pages → branch `main`, folder `/docs`) before the URL below resolves.
+5. A privacy policy at a URL you control. GitHub Pages is already on for this repo (Settings → Pages → branch `main`, folder `/docs`), so the URL below resolves.
 
 ## Listing
 
@@ -22,7 +22,7 @@ None of this is in the repo; the dashboard blocks the submission until each is d
 - **Support:** https://github.com/freyja-934/wallet-browser-extension/issues
 - **Privacy policy URL:** https://freyja-934.github.io/wallet-browser-extension/legal/privacy.html
 
-That URL is the file `docs/legal/privacy.html`, which Pages serves byte-for-byte (an HTML file with no front matter is passed through, not rendered by Jekyll — which is why the policy is published as HTML and not as the `.md` next to it). It needs SHIP-0 item 3 (Pages on, branch `main`, folder `/docs`) and nothing else; open it in a browser and confirm it loads before you paste it, because a reviewer will. Until Pages is on, the only fallback is the file on `main`: https://github.com/freyja-934/wallet-browser-extension/blob/main/docs/legal/privacy.html — that shows GitHub's source view of the page, which a review can reject, so turn Pages on first. The same file ships inside the extension at `legal/privacy.html` (Settings → Privacy policy); `src/config/legal.test.ts` fails if the published copy and the shipped copy drift, and `node scripts/sync-legal.mjs` re-syncs them.
+That URL is the file `docs/legal/privacy.html`, which Pages serves byte-for-byte (an HTML file with no front matter is passed through, not rendered by Jekyll — which is why the policy is published as HTML and not as the `.md` next to it). Pages was turned on for this repo on 2026-09-13 (SHIP-0 item 3) and both the privacy and terms pages answer 200; still open the URL in a browser and confirm it loads before you paste it, because a reviewer will. The same file ships inside the extension at `legal/privacy.html` (Settings → Privacy policy); `src/config/legal.test.ts` fails if the published copy and the shipped copy drift, and `node scripts/sync-legal.mjs` re-syncs them.
 
 ## Detailed description
 

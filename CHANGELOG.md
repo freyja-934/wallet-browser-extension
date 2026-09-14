@@ -42,7 +42,6 @@ zip; and the listing images say what the product does.
   is a ratchet and not an aspiration. It is deliberately not part of
   `just check`, which is run narrow (`just test <file>`) too often for a
   whole-suite threshold; wiring coverage into CI is an owner decision.
-
 - **SHIP-11** — The approval window's Connect screen names the account and the
   cluster the site is being connected to, and spells out what the site will and
   will not be able to do.
@@ -69,6 +68,11 @@ zip; and the listing images say what the product does.
   devnet, which rate-limits GitHub-hosted runners hard enough that the job's
   result was decided by the faucet rather than by the code. `just e2e` remains
   the strict local gate.
+- **SHIP-14** — dApp surface: a site that passed `accounts[1]` to
+  `signMessage`, `signTransaction` or `signAndSendTransaction` and silently
+  received `accounts[0]`'s signature now receives `accounts[1]`'s. The approval
+  window names the signing account on every signature request, not only on
+  connect.
 
 ### Fixed
 
@@ -98,14 +102,6 @@ zip; and the listing images say what the product does.
   than signed for by whichever account happened to be active, inputs that name
   two different accounts are refused, and switching the active account while an
   approval is waiting rejects it instead of re-pointing it at the new key.
-
-### Changed
-
-- **SHIP-14** — dApp surface: a site that passed `accounts[1]` to
-  `signMessage`, `signTransaction` or `signAndSendTransaction` and silently
-  received `accounts[0]`'s signature now receives `accounts[1]`'s. The approval
-  window names the signing account on every signature request, not only on
-  connect.
 
 ## [0.3.0] — 2026-09-12
 

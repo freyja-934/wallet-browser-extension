@@ -7,7 +7,7 @@ import {
   MAX_TRANSACTION_BYTES,
   SINGLE_SEND_MESSAGE,
 } from './bridge';
-import { DAP_MESSAGE_TYPES, EXTENSION_MESSAGE_TYPES } from './messages';
+import { DAPP_MESSAGE_TYPES, EXTENSION_MESSAGE_TYPES } from './messages';
 
 const ORIGIN = 'https://dapp.example';
 /** A valid base58 Solana address: the public devnet fixture. */
@@ -22,12 +22,12 @@ describe('buildRuntimeMessage', () => {
 
   it('never lets a privileged type through, whatever the payload says', () => {
     const privileged = EXTENSION_MESSAGE_TYPES.filter(
-      (type) => !(DAP_MESSAGE_TYPES as readonly string[]).includes(type),
+      (type) => !(DAPP_MESSAGE_TYPES as readonly string[]).includes(type),
     );
     expect(privileged.length).toBeGreaterThan(0);
     for (const type of privileged) {
       expect(() => buildRuntimeMessage(type, {}, ORIGIN)).toThrow('Unknown message type');
-      for (const outer of DAP_MESSAGE_TYPES) {
+      for (const outer of DAPP_MESSAGE_TYPES) {
         const payload = outer.startsWith('SIGN_')
           ? { type, transactions: [[1]], messages: [[1]] }
           : { type };

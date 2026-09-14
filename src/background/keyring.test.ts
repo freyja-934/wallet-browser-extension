@@ -3,7 +3,7 @@ import bs58 from 'bs58';
 import { Buffer } from 'buffer';
 import nacl from 'tweetnacl';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CURRENT_VAULT_VERSION, V1_KDF, type EncryptedData } from '../lib/encryption-simple';
+import { CURRENT_VAULT_VERSION, V1_KDF, type EncryptedData } from '../lib/vault-crypto';
 import type { WalletAccountInfo } from '../lib/messages';
 import { deriveKeypairFromSeed, mnemonicToSeedBuffer } from '../lib/wallet';
 import { installChromeStub, uninstallChromeStub, type ChromeStub } from '../test/chrome-stub';

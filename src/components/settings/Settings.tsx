@@ -5,7 +5,7 @@ import { getCluster, WALLET_NAME, WALLET_VERSION, type Cluster } from '../../con
 import { SETTINGS_QUERY_KEY, syncSettings, useSettings, useUpdateSettings } from '../../hooks/useSettings';
 import { useInvalidateWalletData } from '../../hooks/useWalletQueries';
 import { errorMessage } from '../../lib/errors';
-import { validatePasswordStrength } from '../../lib/encryption-simple';
+import { validatePasswordStrength } from '../../lib/vault-crypto';
 import { accountAt, DEFAULT_SETTINGS } from '../../lib/messages';
 import { originPatternFor, parseHttpsUrl, saveRpcSettings, type RpcProbeResult, type SaveRpcOutcome } from '../../lib/rpc-save';
 import { extensionClient } from '../../messaging/client';
