@@ -17,7 +17,7 @@ Release notes are in `../CHANGELOG.md`; the conventions an agent works under are
 ## What the gate does and does not cover
 
 `just check` is three things: `tsc --noEmit`, ESLint over `src/`, and the Vitest
-suite — 614 tests in 35 files. Most run in the `node` environment. The component
+suite — 629 tests in 36 files. Most run in the `node` environment. The component
 tests (`BalanceCard`, `SendModal`, and `Modal`'s focus management) each opt into
 a DOM with their own `// @vitest-environment jsdom` docblock, so the worker and
 library tests do not pay for jsdom. They render over the real query layer and the

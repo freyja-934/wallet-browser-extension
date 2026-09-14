@@ -149,8 +149,8 @@ Privacy and terms: `docs/legal/` (the same text ships as `legal/privacy.html` an
 ## Security notes
 
 - Not audited. Do not use this with mainnet funds you cannot lose
-- Rotate any RPC key that was ever committed to a public repo
-- The old `window.phantom` / `isPhantom` provider has been removed; Cinder registers only as itself
+- Cinder registers under its own name only. It never sets `isPhantom` and never writes `window.phantom`
+- An RPC key belongs in Settings, on the device. Nothing in the shipped build carries one, and `just store` refuses to zip a bundle that does
 
 ## License
 

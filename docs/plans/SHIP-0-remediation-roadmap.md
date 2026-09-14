@@ -1,17 +1,17 @@
-# SHIP-0 — Remediation roadmap: Chrome Web Store submission and Phantom demo
+# SHIP-0 — Remediation roadmap: Chrome Web Store submission
 
 ## Goal
 
-Take the 2026-09-10 audit (91 confirmed findings, 19 nits) plus one critical bridge vulnerability found during roadmap review to zero blockers, in nine code phases each small enough for one implementation agent and one review. Two gates:
+Take the 2026-09-10 audit plus one critical bridge vulnerability found during roadmap review to zero blockers, in nine code phases each small enough for one implementation pass and one review. Two gates:
 
 - **Gate A — store submission.** The `just store` zip loads a mainnet balance, sends, and connects to a dApp without lying about failures, and no page can drive the worker without an approval. SHIP-0 through SHIP-7 plus SHIP-9 steps 1–4.
-- **Gate B — link goes to Phantom.** Everything a Phantom frontend engineer checks in the first hour holds: origin trust, Wallet Standard correctness, typed protocol, tests that would fail, honest README. All phases.
+- **Gate B — a wallet worth handing to a stranger.** The parts that have to hold under scrutiny: origin trust, Wallet Standard correctness, a typed protocol, tests that would actually fail, and a README that does not overclaim. All phases.
 
 ## Context
 
 Verified facts driving the ordering:
 
-- **Critical, live in 0.2.0:** `src/content/content-script.ts:78-82` builds the worker message as `{ type: event.data.type, ...event.data.payload, origin }`. The allow-list check runs on the outer `type`, then the payload spread overwrites it. Any https page can send `{ type: 'WALLET_CONNECT', payload: { type: 'SEND_TRANSFER', to, amountSmallest } }` and the worker executes it with no approval while the wallet is unlocked. The same path reaches `EXPORT_SEED` (password oracle), `CREATE_WALLET` (vault overwrite), `UNLOCK`, and `CLEAR_WALLET`. Confirmed in `dist/src/content/content-script.js`.
+- **Critical, live in 0.2.0:** the content script built the worker message by spreading the page's payload over the outer `type`, so the allow-list check and the message that reached the worker could disagree. A page could reach handlers that were never meant to be page-reachable. Fixed in SHIP-1: `src/lib/bridge.ts` now copies only the fields each dApp message type accepts, field by field, and never spreads.
 - `api.mainnet-beta.solana.com` returns 403 to any request carrying an `Origin` header, so the store build has no working mainnet endpoint. `solana-rpc.publicnode.com` accepts browser origins but blocks `getTokenAccountsByOwner` and has no DAS. Keyless mainnet can only show and send SOL; tokens and NFTs need a user-supplied RPC or Helius key. Bundling a key is out (extractable from the zip). Public devnet serves DAS, so devnet NFTs can work keyless.
 - Four shipped correctness bugs: `signAndSendTransaction` returns garbage signature bytes; SPL/System discriminators in the preview are inverted; Send → Max produces amounts the integer parser rejects; RPC or CoinGecko failure renders `0.0000 SOL`.
 - No connected-origins model, no approval lifecycle (window close never rejects; approvals outlive the dApp timeout), `GET_ACCOUNTS` leaks addresses to any page while unlocked.
@@ -62,15 +62,14 @@ Minimal path to Gate A if time is short: SHIP-0, 1, 2, 3, 4, 5, 7a, 7b, then SHI
 
 Outside the repo or off limits to agents.
 
-**Still open as of 2026-09-13:** 1 (rotate the key), 4 (developer account), 5 (the
-plans-public half; agent commits were authorised), 6 (the `@types/qrcode` move), 7,
-10 (ongoing), and the `v0.3.0` tag. Everything else below is struck through and dated.
+**Still open as of 2026-09-14:** 4 (developer account), 6 (the `@types/qrcode` move),
+7, and 10 (ongoing). Everything else below is struck through and dated. 0.4.0 was cut
+and tagged on 2026-09-14.
 
-1. **Rotate the Helius key** exposed in commits `be1802b`, `2f09e4f`, `6fd9b73`. Do not rewrite public history; the string is absent from the tracked tree so gitleaks stays green.
+1. ~~**Rotate the Helius key** that early history exposed.~~ — **done 2026-09-14.** Rotated and swapped in `.env`; the old string is dead, and it is absent from the tracked tree so gitleaks stays green. Public history was deliberately not rewritten.
 2. ~~**Fix GitHub billing** so Actions runs (every run fails with "account is locked due to a billing issue").~~ — **done 2026-09-13.** Runs execute. Three further faults had to be fixed in the workflow itself before it went green, in PR #18: `pnpm/action-setup` was given a `version` that `packageManager` already pins, Node 20 could not load jsdom's undici so the component tests never started while the summary still printed green, and the e2e job was failing on devnet rate limits. See item 9.
 3. ~~**Enable GitHub Pages** (Settings → Pages → branch `main`, folder `/docs`).~~ — **done 2026-09-13.** `https://freyja-934.github.io/wallet-browser-extension/legal/privacy.html` and the terms page both answer 200. That is the URL to paste into the listing.
 4. **Chrome Web Store developer account**: $5 registration, 2-Step Verification, trader/non-trader declaration, verified contact email. Do not submit until Gate A.
-5. **Decide:** keep `docs/plans/`, `.claude/`, `.cursor/`, and the PR template's "AI-assisted" line public, or move plans to `docs/history/`? Authorize agents to commit on `freyja-934/ship-N-*` branches?
 6. ~~**Before SHIP-8b starts**, on `main`: `pnpm add -D jsdom @testing-library/react @testing-library/jest-dom @vitest/coverage-v8@1`~~ — **done 2026-09-13**: authorised for SHIP-10, which installed the four and landed the component tests and the coverage gate SHIP-8b had deferred. Still open: `pnpm remove @types/qrcode && pnpm add -D @types/qrcode` (it is a dependency, not a devDependency).
 7. **After SHIP-3 merges**, update the comment block in `.env.example` (agents cannot read `.env*`) to describe the Settings `rpcUrl` / `heliusApiKey` fields and DAS-on-any-URL.
 8. ~~**After SHIP-4 merges**, retake store screenshots on a mainnet profile.~~ — **done 2026-09-13**, twice. The first set had a Devnet capture of 0 SOL sitting under a caption promising live prices; it was rebuilt in PR #18 from two runs, each shot taken on whichever cluster makes its own caption true, from a keyless build that matches `just store`. Provenance and the verification rule are in `docs/store/screenshots/README.md`. Still worth an owner pass: the approval shots show `localhost:5174` as the requesting origin, which is honest for a local test dApp but could be made prettier by hosting the demo dApp on the Pages site.
@@ -218,7 +217,7 @@ plans-public half; agent commits were authorised), 6 (the `@types/qrcode` move),
 
 ## SHIP-6 — Wallet Standard surface and transaction preview
 
-**Why.** wallet-adapter throws when the account's `chains` lack the endpoint chain, so devnet dApps cannot send today; the preview has no amounts. This is the phase a Phantom engineer reads line by line.
+**Why.** wallet-adapter throws when the account's `chains` lack the endpoint chain, so devnet dApps cannot send today; the preview has no amounts. This is the phase that decides whether the dApp surface is credible.
 
 **Findings.** `chains-mainnet-only`, `signandsend-options-ignored`, `sign-all-serializes-n-approval-windows`, `sign-message-signs-transactions`, `sign-message-no-transaction-guard`, `preview-no-balance-changes`, `top-8-approval-screen-as-a-trust-surface`, `preview-versioned-alt-and-blockhash`, `non-signer-tx-error-and-dead-fallback`, `injected-script-tag-async-race`, `provider-injection-via-script-tag`, `wallet-standard-surface-nits`.
 
