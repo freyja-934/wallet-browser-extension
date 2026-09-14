@@ -1,6 +1,0 @@
----
-globs:
-  - src/lib/**
-  - src/background/**
----
-See `.claude/rules/keyring.md`.
