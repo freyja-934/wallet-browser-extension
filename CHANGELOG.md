@@ -11,6 +11,41 @@ own pull request, and the plan it shipped against is the detailed record.
 
 ### Added
 
+- **SHIP-16** — A one-of-one is no longer shown as a token. A regular NFT is an
+  ordinary SPL mint with a supply of 1 and 0 decimals, and Jupiter's balances carry
+  those alongside the fungible holdings, so a collector on a keyless Mainnet install
+  read one token row of "1" per collectible they owned. The mint account's `supply`
+  was already decoded and discarded; carrying it splits the two apart at no extra
+  network cost, and the split happens before the token-account pass, so the token
+  list now asks about fewer accounts than it did. A one-of-one is not counted as a
+  holding the chain would not confirm, because the chain confirmed it.
+- **SHIP-16** — Those collectibles now have a tab of their own on a keyless install,
+  with names and pictures read from the chain: each mint's Metaplex metadata account
+  through the existing rotated connection, twenty mints a page at the same ten keys
+  per call publicnode takes, and then the off-chain document that account points at
+  — fetched only for the cards on screen, only once the tab is opened, and never
+  from the home tab. An item whose metadata cannot be read still appears, by its
+  mint, rather than vanishing. The tab replaces the old "collectibles need an
+  endpoint" screen only where that discovery actually ran — Mainnet with no RPC URL
+  and no Helius key of your own. Configure your own DAS-less endpoint and you keep
+  the endpoint guidance, because nothing looked. A card's collection line shows a
+  verified on-chain collection or "Unknown collection", never the mint's own symbol:
+  that string is whatever the metadata's author wrote, and an airdropped scam does
+  not get to print itself where a verified collection goes.
+- **SHIP-16** — Creator-chosen hosts are treated as the hostile input they are. The
+  guards `src/services/jupiter.ts` already applied to a third party's response moved
+  to `src/lib/untrusted-http.ts` and are now shared: https only (`ipfs://` rewritten
+  onto a gateway, refusing any path that climbs out of its prefix),
+  `credentials: 'omit'`, an `AbortController` timeout, a size guard enforced against
+  the bytes as they arrive, and control and bidirectional characters stripped out of
+  every name. A refusal, a timeout, an oversized body, a body that is not JSON and a
+  non-https image all resolve to "no picture" and none of them throws.
+- **SHIP-16** — The collectibles tab states that compressed NFTs are not listed,
+  what they are, and that they need an endpoint of your own. They have no mint
+  account and no token account — only a leaf in a Merkle tree — so nothing but a DAS
+  indexer can find them, and an incomplete grid that reads as a complete collection
+  would be the worse failure. `docs/adr/0005-keyless-collectibles.md` records why.
+
 - **SHIP-15** — Keyless Mainnet now shows SPL and Token-2022 balances, with names,
   symbols and logos, for an install that has configured nothing. No free endpoint
   will enumerate token accounts — publicnode answers `getTokenAccountsByOwner` with

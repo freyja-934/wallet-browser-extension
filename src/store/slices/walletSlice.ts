@@ -133,7 +133,13 @@ export type NFT = {
   };
   compression?: { compressed: boolean; tree: string; leaf_id: number };
   grouping?: Array<{ group_key: string; group_value: string }>;
-  ownership: { owner: string; frozen: boolean };
+  /**
+   * DAS's ownership record. Optional because the keyless path has none: it reads
+   * a mint account and a metadata account, neither of which names an owner, so a
+   * keyless collectible carries no claim about ownership beyond the discovery
+   * that put it in the list.
+   */
+  ownership?: { owner: string; frozen: boolean };
 };
 export type Transaction = {
   signature: string;

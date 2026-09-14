@@ -21,6 +21,7 @@ import {
 } from '../lib/rpc-rotate';
 import { runtimeRpcUrls, runtimeSettings, runtimeSettingsOrUndefined } from '../lib/runtime-rpc';
 import { METADATA_BATCH, fetchTokenMetadata, type TokenNames } from '../lib/token-metadata';
+import { fetchCollectibles, type Collectible } from './collectibles';
 import { fetchJupiterBalances, fetchJupiterTokenInfo } from './jupiter';
 
 const NFT_INTERFACES = new Set([
@@ -57,11 +58,22 @@ export const MINT_INFO_BATCH = 10;
  */
 export const JUPITER_MAX_TOKENS = 200;
 
-/** What a mint account itself says: the two facts a send depends on. */
+/** What a mint account itself says: the facts a send depends on, and whether this is a token at all. */
 interface MintFacts {
   decimals: number;
   /** The account's owner, which *is* the token program: SPL Token or Token-2022. */
   programId: string;
+  /** Total supply in smallest units, exactly as the mint account states it. Integer, never scaled. */
+  supply: bigint;
+  /**
+   * Supply of exactly 1 at exactly 0 decimals: a regular NFT. That *is* what a
+   * one-of-one is on Solana — an ordinary SPL mint, which is why it turns up in
+   * Jupiter's balances alongside the fungible holdings and why the keyless list
+   * needs this test to tell them apart. It has no divisible balance to show, so
+   * it never belongs in the token list: a collector would otherwise read one row
+   * of "1" per collectible they own.
+   */
+  isOneOfOne: boolean;
 }
 
 /**
@@ -80,12 +92,16 @@ export interface OmittedHoldings {
 const TOKEN_PROGRAMS = new Set([TOKEN_PROGRAM_ID.toBase58(), TOKEN_2022_PROGRAM_ID.toBase58()]);
 
 /**
- * Decimals and token program read from the mint account, or `undefined` when this
- * account cannot be confirmed to be an initialised mint under a known token program.
+ * Decimals, supply and token program read from the mint account, or `undefined` when
+ * this account cannot be confirmed to be an initialised mint under a known token
+ * program.
  *
  * This is the load-bearing function of the keyless token list. `SendModal` feeds the
  * decimals it displays into the smallest-unit conversion, so a value taken on trust
  * from a third party would be a wrong send amount. Nothing here reads Jupiter.
+ *
+ * `supply` costs nothing: `unpackMint` has already decoded it out of the same bytes,
+ * and it is what separates a collectible from a token without a second call.
  */
 export function mintFactsFrom(mint: PublicKey, info: AccountInfo<Buffer> | null): MintFacts | undefined {
   if (!info) return undefined;
@@ -96,7 +112,15 @@ export function mintFactsFrom(mint: PublicKey, info: AccountInfo<Buffer> | null)
     if (!decoded.isInitialized) return undefined;
     // u8 on the chain; anything else means this is not the account we think it is.
     if (!Number.isInteger(decoded.decimals) || decoded.decimals < 0 || decoded.decimals > 255) return undefined;
-    return { decimals: decoded.decimals, programId };
+    // u64 on the chain, and a bigint here: compared, never scaled, never a float.
+    const supply = decoded.supply;
+    if (typeof supply !== 'bigint') return undefined;
+    return {
+      decimals: decoded.decimals,
+      programId,
+      supply,
+      isOneOfOne: supply === 1n && decoded.decimals === 0,
+    };
   } catch {
     // Too short, or not a mint at all: unconfirmed, which means dropped.
     return undefined;
@@ -344,6 +368,14 @@ export interface TokenBalances {
    * ask" and "the chain would not confirm it" are different news.
    */
   tokensOmitted?: OmittedHoldings;
+  /**
+   * Mints the keyless path discovered and found to be one-of-ones (see
+   * `MintFacts.isOneOfOne`): base58 addresses, nothing more. They are here rather
+   * than dropped so the collectibles tab can name and picture them without a
+   * second discovery call, and they carry nothing that cost a request — no
+   * metadata, no image, no name. Absent on the RPC path, which has DAS for this.
+   */
+  collectibles?: string[];
 }
 
 export interface NFTAsset {
@@ -633,6 +665,7 @@ class HeliusService {
     let tokensError: string | undefined;
     let tokensSource: 'rpc' | 'jupiter' | undefined;
     let tokensOmitted: OmittedHoldings | undefined;
+    let collectibles: string[] | undefined;
     let endpointsUnreachable = false;
     const tokenFailures: RpcFailure[] = [];
     try {
@@ -663,6 +696,7 @@ class HeliusService {
       if (fallback) {
         tokens = fallback.tokens;
         tokensOmitted = fallback.omitted;
+        collectibles = fallback.collectibles;
         tokensSource = 'jupiter';
         tokensError = undefined;
         endpointsUnreachable = false;
@@ -683,6 +717,7 @@ class HeliusService {
       ...(endpointsUnreachable ? { endpointsUnreachable: true } : {}),
       ...(tokensSource !== undefined ? { tokensSource } : {}),
       ...(tokensOmitted && tokensOmitted.unconfirmed + tokensOmitted.beyondCap > 0 ? { tokensOmitted } : {}),
+      ...(collectibles && collectibles.length > 0 ? { collectibles } : {}),
     };
   }
 
@@ -700,13 +735,19 @@ class HeliusService {
    * nothing but deciding which mints are worth asking the chain about. Names and
    * logos are asked for last, and only for the rows that survived.
    *
-   * Resolves `undefined` when nothing survives, which leaves `tokensError` exactly
-   * as the RPC path left it: today's behaviour, unchanged.
+   * A mint the chain says is a one-of-one leaves this path before the token-account
+   * read: it is not a token, it is not "unconfirmed" — the chain confirmed it
+   * perfectly well — and it is not counted as one, which would tell the user their
+   * mint accounts could not be read. It is handed back separately instead, and
+   * asking about fewer accounts makes the token path cheaper, never slower.
+   *
+   * Resolves `undefined` when nothing at all survives, which leaves `tokensError`
+   * exactly as the RPC path left it: today's behaviour, unchanged.
    */
   private async tokensFromJupiter(
     owner: PublicKey,
     urls: string[],
-  ): Promise<{ tokens: TokenBalance[]; omitted: OmittedHoldings } | undefined> {
+  ): Promise<{ tokens: TokenBalance[]; omitted: OmittedHoldings; collectibles: string[] } | undefined> {
     const holdings = await fetchJupiterBalances(owner.toBase58());
     if (holdings.length === 0) return undefined;
 
@@ -715,18 +756,40 @@ class HeliusService {
     const beyondCap = holdings.length - considered.length;
 
     const facts = await confirmMints(urls, considered.map((holding) => holding.mint));
-    const amounts = await confirmAmounts(urls, owner, facts);
 
-    const confirmed = considered.flatMap((holding) => {
+    // The split, made from the mint accounts already read: collectibles out, and
+    // out before the second chain read, so the token path asks about fewer
+    // accounts than it does today rather than more.
+    const collectibles: string[] = [];
+    const tokenHoldings: typeof considered = [];
+    const tokenFacts = new Map<string, MintFacts>();
+    for (const holding of considered) {
       const mintFacts = facts.get(holding.mint);
+      if (mintFacts?.isOneOfOne) {
+        collectibles.push(holding.mint);
+        continue;
+      }
+      tokenHoldings.push(holding);
+      if (mintFacts) tokenFacts.set(holding.mint, mintFacts);
+    }
+
+    const amounts = await confirmAmounts(urls, owner, tokenFacts);
+
+    const confirmed = tokenHoldings.flatMap((holding) => {
+      const mintFacts = tokenFacts.get(holding.mint);
       const amount = amounts.get(holding.mint);
       // A zero canonical account is a holding this wallet cannot see or spend; it
       // is counted as unconfirmed rather than shown as a balance of nothing.
       if (!mintFacts || amount === undefined || amount === 0n) return [];
-      return [{ mint: holding.mint, amount: amount.toString(), ...mintFacts }];
+      return [
+        { mint: holding.mint, amount: amount.toString(), decimals: mintFacts.decimals, programId: mintFacts.programId },
+      ];
     });
-    const omitted = { unconfirmed: considered.length - confirmed.length, beyondCap };
-    if (confirmed.length === 0) return undefined;
+    // Only the holdings this path actually asked the chain to back up as tokens.
+    const omitted = { unconfirmed: tokenHoldings.length - confirmed.length, beyondCap };
+    // A wallet of nothing but collectibles is a wallet the keyless path read
+    // correctly: an empty token list, not an unreadable one.
+    if (confirmed.length === 0 && collectibles.length === 0) return undefined;
 
     const info = await fetchJupiterTokenInfo(confirmed.map((holding) => holding.mint));
     const tokens = confirmed.map((holding): TokenBalance => {
@@ -741,7 +804,7 @@ class HeliusService {
         ...(named?.logoURI !== undefined ? { logoURI: named.logoURI } : {}),
       };
     });
-    return { tokens, omitted };
+    return { tokens, omitted, collectibles };
   }
 
   /** DAS on any URL that serves it. Names are a courtesy, never an error. */
@@ -783,6 +846,23 @@ class HeliusService {
       await metadataBatchFor(urls),
     );
     return Object.fromEntries(names);
+  }
+
+  /**
+   * Names, symbols and metadata URIs for one page of the one-of-one mints
+   * `getTokenBalances` handed back in `collectibles`, read from their Metaplex
+   * metadata accounts through the rotated connection.
+   *
+   * The collectibles tab is what calls this, one page at a time; the home tab
+   * never does. The batch size is the same one `getTokenNames` uses, which on the
+   * keyless Mainnet default is publicnode's measured cap of ten keys per call.
+   * Nothing off-chain is fetched here: the URI comes back for the card to follow
+   * if and when it is rendered.
+   */
+  async getCollectibles(mints: string[]): Promise<Collectible[]> {
+    if (mints.length === 0) return [];
+    const urls = await runtimeRpcUrls();
+    return fetchCollectibles((fn) => withRotatedConnection(urls, fn), mints, await metadataBatchFor(urls));
   }
 
   /**

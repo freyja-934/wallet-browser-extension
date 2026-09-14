@@ -12,6 +12,15 @@ export function NFTCard({
 }) {
   const imageUrl = nft.content.links?.image || nft.content.files?.[0]?.uri;
   const name = nft.content.metadata.name || 'Unnamed NFT';
+  /**
+   * The *verified* collection and nothing else. `grouping` is an on-chain
+   * verified collection key; `metadata.symbol` is a free string whichever
+   * account authority wrote the metadata chose, and most items have no grouping
+   * at all — so falling back to the symbol here would print an airdropped
+   * scam's self-declared "Mad Lads" in the field that means a verified Mad Lads
+   * collection, in the same styling, under the same word. An unverified string
+   * is worth less than the word "Unknown".
+   */
   const collection = nft.grouping?.find((g) => g.group_key === 'collection')?.group_value || 'Unknown collection';
   const isCompressed = nft.compression?.compressed || false;
 
