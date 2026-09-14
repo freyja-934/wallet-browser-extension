@@ -63,3 +63,10 @@ CLAUDE.local.md
 
 # Working crops for store tiles — ship only the composed 1280×800 / promo files
 docs/store/screenshots/raw/
+
+# Local agent tooling. Kept on disk so the editors that read it keep working,
+# untracked because it is harness configuration rather than part of the wallet.
+# AGENTS.md stays tracked: it is the vendor-neutral record of this repo's conventions.
+.cursor/
+CLAUDE.md
+docs/plans/agent-setup.md

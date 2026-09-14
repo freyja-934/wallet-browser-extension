@@ -1,7 +1,0 @@
----
-globs:
-  - src/background/**
-  - src/content/**
-  - manifest.json
----
-See `.claude/rules/extension-mv3.md`.
