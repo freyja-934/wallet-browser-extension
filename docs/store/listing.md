@@ -91,4 +91,4 @@ Then the three certifications, all of which are true here: data is not sold to t
 
 ## Single purpose
 
-Solana wallet. Not a general “multi-chain” product. Do not mention Phantom.
+Solana wallet. Not a general “multi-chain” product.

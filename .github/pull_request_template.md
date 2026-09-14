@@ -19,4 +19,4 @@ Paste evidence below.
 
 - [ ] `just check` is green
 - [ ] No secrets committed
-- [ ] AI-assisted — I have read and understand every line
+- [ ] I have read the whole diff and can explain every line of it
