@@ -17,7 +17,7 @@
   <main>
     <p>Cinder Wallet</p>
     <h1>Privacy Policy</h1>
-    <p>Last updated: 12 September 2026</p>
+    <p>Last updated: 14 September 2026</p>
     <p>Cinder Wallet is a browser extension. The seed phrase and private keys are encrypted on this device. We do not operate a backend that receives your seed, password, or private keys.</p>
     <h2>What stays on your device</h2>
     <ul>
@@ -29,6 +29,7 @@
     <ul>
       <li>Public addresses and signed transactions sent to a Solana JSON-RPC endpoint. With nothing configured, Mainnet uses <code>https://solana-rpc.publicnode.com</code> and Devnet uses <code>https://api.devnet.solana.com</code></li>
       <li>A custom RPC URL or Helius API key you enter in Settings receives the same public addresses and signed transactions. Both values are stored only in <code>chrome.storage.local</code> on this device; we never receive them</li>
+      <li>Your public wallet address sent to <code>https://lite-api.jup.ag</code> on Mainnet, and only when you have configured neither a custom RPC URL nor a Helius API key. The public Mainnet endpoint refuses to list token accounts, so without this the wallet can show SOL only. Jupiter is asked which mints the address holds and what those mints are called; the balances, decimals and token programs shown are read from the Solana endpoint, never from Jupiter. Entering any RPC URL or Helius key in Settings stops this request being made at all, and it is never made on Devnet</li>
       <li>Public mint addresses sent to CoinGecko for USD prices on mainnet only</li>
       <li>dApp origins you approve, which see the public addresses you connect</li>
       <li>Token and NFT images load directly from whatever host the token's own metadata names (commonly IPFS or Arweave gateways, or a project's own server). Those hosts see the request and your IP address; Cinder does not choose them and does not proxy them</li>
@@ -41,7 +42,7 @@
       <li>We cannot recover a forgotten password or a lost seed phrase</li>
     </ul>
     <h2>Chrome Limited Use</h2>
-    <p>Data read from the browser is used only to provide wallet functionality: encrypting the vault, showing balances, and signing transactions you approve. It is not transferred to third parties except the RPC and price providers named above, and only as needed for those features.</p>
+    <p>Data read from the browser is used only to provide wallet functionality: encrypting the vault, showing balances, and signing transactions you approve. It is not transferred to third parties except the RPC, token-list and price providers named above, and only as needed for those features.</p>
     <h2>Contact</h2>
     <p><a href="https://github.com/freyja-934/wallet-browser-extension/issues">GitHub issues</a></p>
   </main>

@@ -34,7 +34,11 @@ const feeRetryDelay = (attempt: number) => 400 * 2 ** attempt;
 
 /** The asset the modal is on: the selector's choice resolved against the balances query. */
 interface Selected {
-  /** What the selector holds: `SOL`, or the token account this balance sits in. */
+  /**
+   * What the selector holds: `SOL`, the token account this balance sits in, or —
+   * when the list came from the keyless fallback, which knows mints and not
+   * accounts — the mint itself. Same rule as `assetKey`.
+   */
   key: string;
   mint?: string;
   source?: string;
@@ -45,10 +49,19 @@ interface Selected {
   balanceSmallest: string | null;
 }
 
-/** One row, one key: a wallet can hold several accounts of the same mint, so the mint will not do. */
+/**
+ * One row, one key: a wallet can hold several accounts of the same mint, so the
+ * account is the key wherever it is known. The keyless fallback knows only the
+ * mint, and then the mint is the key — there is exactly one such row per mint.
+ */
 function assetKey(asset: SendAsset | null): string {
   if (!asset?.mint) return SOL_KEY;
   return asset.source ?? asset.mint;
+}
+
+/** The same rule applied to a balance row. */
+function tokenKey(token: { mint: string; tokenAccount?: string }): string {
+  return token.tokenAccount ?? token.mint;
 }
 
 function shortMint(mint: string): string {
@@ -66,7 +79,7 @@ export function friendlyError(raw: string): { headline: string; details?: string
   if (raw.startsWith(onChain)) return { headline: 'Transaction failed on-chain', details: raw.slice(onChain.length) };
   // The worker's own guard lines, word for word, are already written for the screen.
   const ownLine =
-    /^(Leave at least|New accounts need|Insufficient balance|Transaction expired|Confirmation timed out|A send is already in progress|Invalid recipient address|Invalid mint address|Invalid source address|Token account mismatch|Unknown token program|Mint not found|Wallet is locked)/;
+    /^(Leave at least|New accounts need|Insufficient balance|Transaction expired|Confirmation timed out|A send is already in progress|Invalid recipient address|Invalid mint address|Invalid source address|Token account mismatch|Token account not found|Unknown token program|Mint not found|Wallet is locked)/;
   if (ownLine.test(raw)) return { headline: raw };
   return { headline: 'Transaction failed', details: raw };
 }
@@ -145,12 +158,14 @@ export function SendModal() {
     if (selectedKey === SOL_KEY) {
       return { key: SOL_KEY, symbol: 'SOL', decimals: SOL_DECIMALS, balanceSmallest: data?.lamports ?? null };
     }
-    const token = tokens.find((candidate) => candidate.tokenAccount === selectedKey);
+    const token = tokens.find((candidate) => tokenKey(candidate) === selectedKey);
     if (token) {
       return {
-        key: token.tokenAccount,
+        key: tokenKey(token),
         mint: token.mint,
-        source: token.tokenAccount,
+        // Absent for a keyless-fallback row: the send then derives the associated
+        // token address, which is the right derivation for a canonical holding.
+        ...(token.tokenAccount !== undefined ? { source: token.tokenAccount } : {}),
         symbol: token.symbol || token.name || shortMint(token.mint),
         decimals: token.decimals,
         programId: token.programId,
@@ -315,7 +330,7 @@ export function SendModal() {
               <Select value={selected.key} onChange={(e) => setSelectedKey(e.target.value)} data-testid="send-asset">
                 <option value={SOL_KEY}>SOL — {data ? formatUnits(data.lamports, SOL_DECIMALS) : '—'}</option>
                 {tokens.map((token) => (
-                  <option key={token.tokenAccount} value={token.tokenAccount}>
+                  <option key={tokenKey(token)} value={tokenKey(token)}>
                     {token.symbol || token.name || shortMint(token.mint)} — {formatUnits(token.amount, token.decimals)}
                   </option>
                 ))}

@@ -1,4 +1,4 @@
-import { CHAIN_TIMEOUT_MS } from './devnet';
+import { CHAIN_TIMEOUT_MS, skipUnlessFixtureHolds } from './devnet';
 import { expect, test } from './fixtures';
 import { importAndUnlock, importWallet, openPopup, TEST_ADDRESS, TEST_MNEMONIC, TEST_PASSWORD } from './popup';
 
@@ -70,6 +70,9 @@ test('a second create is refused rather than replacing the wallet', async ({ con
 
 test('the Send sheet keeps keyboard focus inside it and hands it back on Escape', async ({ context, extensionId }) => {
   test.setTimeout(120_000);
+  // It reaches Review, so Continue has to be enabled, so the fixture has to cover
+  // the 0.001 it types plus the fee. An empty faucet address is not a focus bug.
+  await skipUnlessFixtureHolds(1_000_000n + 5_000n, 'reaching Review to check focus');
   const popup = await importAndUnlock(context, extensionId);
 
   /** Where focus is: whether it is inside the sheet, and which control it is on. */

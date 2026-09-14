@@ -136,11 +136,21 @@ function chainOf(entries: Array<[PublicKey, AccountInfo<Buffer>]>) {
   });
 }
 
-/** `getAccountInfo` that knows the mint and otherwise says "no account". */
-function chainWithMint(mint: PublicKey, programId: PublicKey, decimals: number) {
-  return vi.fn(async (address: PublicKey): Promise<AccountInfo<Buffer> | null> =>
-    address.equals(mint) ? mintAccount(programId, decimals) : null,
-  );
+/**
+ * `getAccountInfo` that knows the mint and, when `owner` is given, that owner's
+ * associated token account of it — the account a send with no explicit `source`
+ * spends from, and which `buildTransfer` reads before it builds a transfer on it.
+ * Anything else is "no account".
+ */
+function chainWithMint(mint: PublicKey, programId: PublicKey, decimals: number, owner?: PublicKey) {
+  const entries: Array<[PublicKey, AccountInfo<Buffer>]> = [[mint, mintAccount(programId, decimals)]];
+  if (owner) {
+    entries.push([
+      getAssociatedTokenAddressSync(mint, owner, true, programId),
+      tokenAccount(programId, mint, owner),
+    ]);
+  }
+  return chainOf(entries);
 }
 
 /** The transaction the fake RPC was asked to broadcast. */
@@ -299,8 +309,8 @@ describe('sendTransfer (SPL)', () => {
   const spl = (amount: string) => ({ to: recipient.toBase58(), amountSmallest: amount, mint: mint.toBase58() });
 
   it('creates the recipient ATA idempotently and moves the amount with a checked transfer', async () => {
-    const rpc = fakeRpc({ getAccountInfo: chainWithMint(mint, TOKEN_PROGRAM_ID, 6) });
     const signer = Keypair.generate();
+    const rpc = fakeRpc({ getAccountInfo: chainWithMint(mint, TOKEN_PROGRAM_ID, 6, signer.publicKey) });
     await expect(sendTransfer(spl('1500000'), io(rpc, signer))).resolves.toBe(SIGNATURE);
     const [create, transfer] = broadcast(rpc).instructions;
     expect(broadcast(rpc).instructions).toHaveLength(2);
@@ -329,8 +339,8 @@ describe('sendTransfer (SPL)', () => {
   });
 
   it('threads Token-2022 through the ATA derivation, the create, and the transfer', async () => {
-    const rpc = fakeRpc({ getAccountInfo: chainWithMint(mint, TOKEN_2022_PROGRAM_ID, 9) });
     const signer = Keypair.generate();
+    const rpc = fakeRpc({ getAccountInfo: chainWithMint(mint, TOKEN_2022_PROGRAM_ID, 9, signer.publicKey) });
     await sendTransfer(spl('7'), io(rpc, signer));
     const [create, transfer] = broadcast(rpc).instructions;
     const destination = getAssociatedTokenAddressSync(mint, recipient, true, TOKEN_2022_PROGRAM_ID);
@@ -350,8 +360,9 @@ describe('sendTransfer (SPL)', () => {
 
   it('sends to an off-curve owner, deriving its ATA', async () => {
     const [pda] = PublicKey.findProgramAddressSync([Buffer.from('vault')], SystemProgram.programId);
-    const rpc = fakeRpc({ getAccountInfo: chainWithMint(mint, TOKEN_PROGRAM_ID, 0) });
-    await sendTransfer({ to: pda.toBase58(), amountSmallest: '1', mint: mint.toBase58() }, io(rpc));
+    const signer = Keypair.generate();
+    const rpc = fakeRpc({ getAccountInfo: chainWithMint(mint, TOKEN_PROGRAM_ID, 0, signer.publicKey) });
+    await sendTransfer({ to: pda.toBase58(), amountSmallest: '1', mint: mint.toBase58() }, io(rpc, signer));
     const [create] = broadcast(rpc).instructions;
     expect(create.keys[1].pubkey.equals(getAssociatedTokenAddressSync(mint, pda, true, TOKEN_PROGRAM_ID))).toBe(true);
   });
@@ -365,8 +376,9 @@ describe('sendTransfer (SPL)', () => {
   });
 
   it('prices a token send from the same two-instruction message', async () => {
-    const rpc = fakeRpc({ getAccountInfo: chainWithMint(mint, TOKEN_PROGRAM_ID, 6) });
-    const estimate = await estimateTransfer(spl('1'), io(rpc));
+    const signer = Keypair.generate();
+    const rpc = fakeRpc({ getAccountInfo: chainWithMint(mint, TOKEN_PROGRAM_ID, 6, signer.publicKey) });
+    const estimate = await estimateTransfer(spl('1'), io(rpc, signer));
     expect(estimate.feeLamports).toBe('5000');
     const [message] = rpc.getFeeForMessage.mock.calls[0];
     expect(message.compiledInstructions).toHaveLength(2);
@@ -410,10 +422,31 @@ describe('sendTransfer (SPL)', () => {
     }
   });
 
+  /**
+   * The keyless Jupiter-sourced list carries no `source`, so this is the path every
+   * one of its rows takes. Without the check in `buildTransfer` the estimate priced
+   * a fee, Review enabled Confirm, and the failure arrived from preflight as a raw
+   * simulation blob attached to a signature that never reached the cluster.
+   */
+  it('refuses a send with no source when the signer has no associated token account', async () => {
+    const signer = Keypair.generate();
+    const rpc = fakeRpc({ getAccountInfo: chainWithMint(mint, TOKEN_PROGRAM_ID, 6) });
+
+    await expect(sendTransfer(spl('5'), io(rpc, signer))).rejects.toThrow('Token account not found');
+    expect(rpc.sendRawTransaction).not.toHaveBeenCalled();
+    // And it is priced as a failure on Review, not discovered at broadcast.
+    await expect(estimateTransfer(spl('5'), io(rpc, signer))).rejects.toThrow('Token account not found');
+  });
+
   it('reports the recipient ATA, not the wallet, and the rent a token account needs', async () => {
+    const signer = Keypair.generate();
     const destination = getAssociatedTokenAddressSync(mint, recipient, true, TOKEN_PROGRAM_ID);
-    const absent = fakeRpc({ getAccountInfo: chainOf([[mint, mintAccount(TOKEN_PROGRAM_ID, 6)]]) });
-    const missing = await estimateTransfer(spl('1'), io(absent));
+    const sender: [PublicKey, AccountInfo<Buffer>] = [
+      getAssociatedTokenAddressSync(mint, signer.publicKey, true, TOKEN_PROGRAM_ID),
+      tokenAccount(TOKEN_PROGRAM_ID, mint, signer.publicKey),
+    ];
+    const absent = fakeRpc({ getAccountInfo: chainOf([[mint, mintAccount(TOKEN_PROGRAM_ID, 6)], sender]) });
+    const missing = await estimateTransfer(spl('1'), io(absent, signer));
     expect(missing.recipient).toEqual({ exists: false, walletExists: false, isTokenAccount: false, offCurve: false });
     expect(missing.rentExemptMin).toBe(String(TOKEN_RENT));
     expect(absent.getMinimumBalanceForRentExemption).toHaveBeenCalledWith(ACCOUNT_SIZE);
@@ -422,11 +455,12 @@ describe('sendTransfer (SPL)', () => {
     const present = fakeRpc({
       getAccountInfo: chainOf([
         [mint, mintAccount(TOKEN_PROGRAM_ID, 6)],
+        sender,
         [recipient, account(SystemProgram.programId)],
         [destination, tokenAccount(TOKEN_PROGRAM_ID, mint, recipient)],
       ]),
     });
-    expect((await estimateTransfer(spl('1'), io(present))).recipient).toEqual({
+    expect((await estimateTransfer(spl('1'), io(present, signer))).recipient).toEqual({
       exists: true,
       walletExists: true,
       isTokenAccount: false,
@@ -437,10 +471,11 @@ describe('sendTransfer (SPL)', () => {
     const walletOnly = fakeRpc({
       getAccountInfo: chainOf([
         [mint, mintAccount(TOKEN_PROGRAM_ID, 6)],
+        sender,
         [recipient, account(SystemProgram.programId)],
       ]),
     });
-    const estimate = await estimateTransfer(spl('1'), io(walletOnly));
+    const estimate = await estimateTransfer(spl('1'), io(walletOnly, signer));
     expect(estimate.recipient.exists).toBe(false);
     expect(estimate.recipient.walletExists).toBe(true);
   });

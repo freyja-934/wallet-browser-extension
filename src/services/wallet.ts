@@ -1,6 +1,6 @@
 import type { TokenNames } from '../lib/token-metadata';
 import { coinGeckoService, type TokenPrice } from './coingecko';
-import { heliusService, type TokenBalance, type TokenNameRef } from './helius';
+import { heliusService, type OmittedHoldings, type TokenBalance, type TokenNameRef } from './helius';
 
 export interface WalletBalances {
   /** SOL as a float, for the current UI. Prefer `lamports`. */
@@ -12,6 +12,10 @@ export interface WalletBalances {
   tokensError?: string;
   /** The token-account call found no endpoint reachable at all. */
   endpointsUnreachable?: boolean;
+  /** Which source listed the mints: the RPC's token accounts, or the keyless Jupiter fallback. */
+  tokensSource?: 'rpc' | 'jupiter';
+  /** Holdings discovered but not shown, split by reason: not confirmed on-chain, or past the per-refresh cap. */
+  tokensOmitted?: OmittedHoldings;
 }
 
 /** USD prices, fetched apart from balances so a CoinGecko failure never hides a balance. */
@@ -23,7 +27,7 @@ export interface WalletPrices {
 class WalletService {
   /** Balances only; rejects (with `EndpointsUnreachableError` when nothing answered) rather than resolving zeros. */
   async getTokenBalances(address: string): Promise<WalletBalances> {
-    const { nativeBalance, lamports, tokens, tokensError, endpointsUnreachable } =
+    const { nativeBalance, lamports, tokens, tokensError, endpointsUnreachable, tokensSource, tokensOmitted } =
       await heliusService.getTokenBalances(address);
     return {
       solBalance: nativeBalance,
@@ -31,6 +35,8 @@ class WalletService {
       tokens,
       ...(tokensError !== undefined ? { tokensError } : {}),
       ...(endpointsUnreachable ? { endpointsUnreachable: true } : {}),
+      ...(tokensSource !== undefined ? { tokensSource } : {}),
+      ...(tokensOmitted !== undefined ? { tokensOmitted } : {}),
     };
   }
 

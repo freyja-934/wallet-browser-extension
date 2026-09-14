@@ -9,6 +9,53 @@ own pull request, and the plan it shipped against is the detailed record.
 
 ## [Unreleased]
 
+### Added
+
+- **SHIP-15** — Keyless Mainnet now shows SPL and Token-2022 balances, with names,
+  symbols and logos, for an install that has configured nothing. No free endpoint
+  will enumerate token accounts — publicnode answers `getTokenAccountsByOwner` with
+  `-32602 Request blocked` — so the *list of mints* comes from Jupiter's free public
+  API, reached only after the RPC path has already refused.
+- **SHIP-15** — Every number stays on-chain. Each discovered mint's own account is
+  read through the existing rotated connection for `decimals` and the token program,
+  and then the wallet's own associated token account of that mint for the amount it
+  holds — both batched at ten (publicnode's measured `getMultipleAccounts` cap: ten
+  answer in 195 ms, eleven stall three seconds and fail). The send screen converts a
+  typed amount with the decimals it displays and offers the balance beside them as
+  Max, so neither is taken from Jupiter: its own amount decides which mints to ask
+  the chain about and nothing else. A holding the chain will not confirm is dropped
+  from the list rather than guessed at, and the count is printed under it — apart
+  from the count of holdings past the 200 mints one refresh reads, which were never
+  asked about.
+- **SHIP-15** — `docs/adr/0004-keyless-token-discovery.md` records what was measured
+  and what was rejected: deriving associated token addresses from a curated mint
+  list (missed two of seven accounts on a real wallet, including 227 SOL of wrapped
+  SOL), and the two keyless RPCs that do serve the method but throttle below this
+  wallet's request pattern and exclude the use in their own documentation.
+- **SHIP-15** — `scripts/probe-mainnet-rpcs.mjs` now probes both Jupiter endpoints
+  alongside the RPC field, from a real `chrome-extension://` page, so the
+  reachability claim stays re-verifiable rather than dated.
+
+### Changed
+
+- **SHIP-15** — `TokenBalance.tokenAccount` is optional. A Jupiter-sourced row knows
+  a mint and an amount but no account, so the send derives the associated token
+  address; a balance held in a non-canonical account will display and then fail at
+  send rather than spend from an account the user did not mean.
+- **SHIP-15** — The NFT empty state says why collectibles are missing instead of
+  only what to do about it: listing them takes the DAS API, no free endpoint serves
+  it, and a marketplace's own ownership index is a different trust class from
+  reading the chain. NFTs remain keyless-unavailable on purpose.
+- **SHIP-15** — The privacy policy, the store listing and the README name
+  `lite-api.jup.ag` as a host that receives the user's address when no endpoint is
+  configured, and say that entering any RPC URL or Helius key stops the request
+  being made. `src/config/legal.test.ts` keeps the shipped and published copies from
+  drifting apart.
+- **SHIP-15** — `src/config/constants.ts` and the README now say plainly what the
+  endpoint rotation can and cannot do: the mechanism is real, but Mainnet's public
+  list has one entry, so a keyless install has nothing to fail over to. No second
+  public RPC host was added; that is a data-recipient decision for the owner.
+
 ## [0.4.0] — 2026-09-14
 
 Five phases over 0.3.0, and the first tagged release. The dApp surface now signs

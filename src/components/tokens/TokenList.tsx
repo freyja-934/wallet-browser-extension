@@ -6,7 +6,13 @@ import { accountAt, DEFAULT_SETTINGS } from '../../lib/messages';
 import { errorMessage } from '../../lib/errors';
 import { displayTokenAmount } from '../../lib/parse-history';
 import { formatLamports } from '../../lib/units';
-import { TOKENS_UNAVAILABLE, isEndpointsUnreachable, type TokenBalance } from '../../services/helius';
+import {
+  JUPITER_MAX_TOKENS,
+  TOKENS_UNAVAILABLE,
+  isEndpointsUnreachable,
+  type OmittedHoldings,
+  type TokenBalance,
+} from '../../services/helius';
 import { setRefreshing, showSend } from '../../store/slices/uiSlice';
 import { useAppDispatch, useAppSelector } from '../../store/store';
 import { EndpointsUnreachableBody, ErrorCard, SettingsLink, Skeleton } from '../ui/EmptyState';
@@ -27,9 +33,42 @@ function shortMint(mint: string): string {
   return `${mint.slice(0, 4)}…${mint.slice(-4)}`;
 }
 
+/**
+ * One row, one key: the token account where it is known, since a wallet can hold
+ * several accounts of one mint; the mint itself for a keyless-fallback row, which
+ * knows mints and not accounts and yields exactly one row per mint.
+ */
+function rowKey(token: TokenBalance): string {
+  return token.tokenAccount ?? token.mint;
+}
+
 /** What a token is called on screen: symbol, then name, then its short mint. Never a placeholder. */
 function tokenLabel(token: TokenBalance): string {
   return token.symbol || token.name || shortMint(token.mint);
+}
+
+/**
+ * What was discovered and not shown, in the user's terms, one clause per reason.
+ *
+ * The two reasons are deliberately not merged. `beyondCap` holdings were never
+ * asked about — the wallet stopped at `JUPITER_MAX_TOKENS` mints for one refresh —
+ * so telling the user their mint accounts could not be read would be false, and
+ * would point them at an RPC problem instead of at the cap. `unconfirmed` means the
+ * chain was asked and did not back the holding up: no mint account, or no readable
+ * token account at the address this wallet would spend from.
+ */
+export function omittedHoldingsLine(omitted: OmittedHoldings | undefined): string {
+  if (!omitted) return '';
+  const clauses: string[] = [];
+  if (omitted.unconfirmed > 0) {
+    const holdings = omitted.unconfirmed === 1 ? '1 holding' : `${omitted.unconfirmed} holdings`;
+    clauses.push(`${holdings} the chain would not confirm ${omitted.unconfirmed === 1 ? 'is' : 'are'} not shown.`);
+  }
+  if (omitted.beyondCap > 0) {
+    const holdings = omitted.beyondCap === 1 ? '1 further holding' : `${omitted.beyondCap} further holdings`;
+    clauses.push(`${holdings} went unread: one refresh reads the first ${JUPITER_MAX_TOKENS} mints Jupiter returned.`);
+  }
+  return clauses.join(' ');
 }
 
 async function copyMint(mint: string): Promise<void> {
@@ -115,6 +154,10 @@ export function TokenList() {
 
   const solDisplay = formatLamports(BigInt(data.lamports));
   const tokensUnavailable = data.tokensError === TOKENS_UNAVAILABLE || data.endpointsUnreachable === true;
+  // Said, not swallowed: a holding the chain would not confirm, and one past the
+  // number of mints a single refresh reads, are counted here rather than dropped
+  // quietly — and counted apart, because they are not the same news.
+  const omittedLine = omittedHoldingsLine(data.tokensOmitted);
 
   return (
     <div className="space-y-3 pb-4">
@@ -156,7 +199,7 @@ export function TokenList() {
           const named = Boolean(token.symbol || token.name);
           return (
             <AssetRow
-              key={token.tokenAccount}
+              key={rowKey(token)}
               testId={`asset-${token.mint}`}
               icon={
                 token.logoURI ? (
@@ -194,7 +237,7 @@ export function TokenList() {
                     balanceSmallest: token.amount,
                     decimals: token.decimals,
                     programId: token.programId,
-                    source: token.tokenAccount,
+                    ...(token.tokenAccount !== undefined ? { source: token.tokenAccount } : {}),
                   }),
                 )
               }
@@ -211,6 +254,15 @@ export function TokenList() {
         <ErrorCard testId="tokens-error" title="Could not load tokens" body={data.tokensError} onRetry={handleRefresh} />
       ) : rows.length === 0 && query ? (
         <p className="py-6 text-center text-sm text-fg-3">No tokens found</p>
+      ) : null}
+
+      {data.tokensSource === 'jupiter' ? (
+        <p className="px-3 pt-1 text-center text-[11px] leading-relaxed text-fg-3" data-testid="tokens-from-jupiter">
+          No endpoint here lists your token accounts, so this list of mints came from Jupiter. Every
+          amount, and the decimals it is shown in, was then read from the chain — from each mint&rsquo;s
+          own account, and from the token account this wallet would send from.
+          {omittedLine ? ` ${omittedLine}` : ''}
+        </p>
       ) : null}
     </div>
   );

@@ -1,6 +1,12 @@
-import { PublicKey, type Connection, type ParsedTransactionWithMeta } from '@solana/web3.js';
-import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from '@solana/spl-token';
-import { PUBLIC_DEVNET_RPCS, PUBLIC_MAINNET_RPCS, rpcUrlsFor } from '../config/constants';
+import { PublicKey, type AccountInfo, type Connection, type ParsedTransactionWithMeta } from '@solana/web3.js';
+import {
+  TOKEN_2022_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  getAssociatedTokenAddressSync,
+  unpackAccount,
+  unpackMint,
+} from '@solana/spl-token';
+import { PUBLIC_DEVNET_RPCS, PUBLIC_MAINNET_RPCS, jupiterEnabledFor, rpcUrlsFor } from '../config/constants';
 import { errorMessage } from '../lib/errors';
 import { activityFromParsedTx, normalizeHeliusTransfers } from '../lib/parse-history';
 import {
@@ -13,8 +19,9 @@ import {
   withRotatedConnection,
   type RpcFailure,
 } from '../lib/rpc-rotate';
-import { runtimeRpcUrls, runtimeSettings } from '../lib/runtime-rpc';
-import { fetchTokenMetadata, type TokenNames } from '../lib/token-metadata';
+import { runtimeRpcUrls, runtimeSettings, runtimeSettingsOrUndefined } from '../lib/runtime-rpc';
+import { METADATA_BATCH, fetchTokenMetadata, type TokenNames } from '../lib/token-metadata';
+import { fetchJupiterBalances, fetchJupiterTokenInfo } from './jupiter';
 
 const NFT_INTERFACES = new Set([
   'V1_NFT',
@@ -24,6 +31,107 @@ const NFT_INTERFACES = new Set([
 ]);
 
 const PARSE_BATCH = 5;
+
+/**
+ * Mints per `getMultipleAccounts` call. publicnode caps that method at 10 accounts,
+ * measured on 2026-09-14: 11 fails, and an over-cap call stalls about three seconds
+ * before erroring, so this is a number to hold to rather than discover at runtime.
+ */
+export const MINT_INFO_BATCH = 10;
+
+/**
+ * How many Jupiter-discovered mints one refresh will confirm on-chain. Each ten cost
+ * two round trips through the single keyless mainnet host — one for the mint
+ * accounts, one for the wallet's token accounts — and a hot wallet can hold
+ * thousands, so this is where the popup stops asking. Whatever is left over is
+ * counted into `tokensOmitted.beyondCap` and said out loud under the list, apart
+ * from the holdings the chain would not confirm, because these were never asked
+ * about and nothing is claimed about them.
+ *
+ * These are the first 200 in Jupiter's own response order, which is not a documented
+ * contract and is deliberately not re-sorted here: ranking by value would need the
+ * decimals of every discovered mint, which is the read this cap exists to avoid, and
+ * ranking by raw integer amounts across unknown decimals compares nothing. The line
+ * under the list says the cap is the first 200 Jupiter returned rather than implying
+ * a judgement that was not made.
+ */
+export const JUPITER_MAX_TOKENS = 200;
+
+/** What a mint account itself says: the two facts a send depends on. */
+interface MintFacts {
+  decimals: number;
+  /** The account's owner, which *is* the token program: SPL Token or Token-2022. */
+  programId: string;
+}
+
+/**
+ * Holdings a refresh discovered and did not show, split by the reason, because the
+ * two reasons are not the same news and the user can act on only one of them.
+ * `beyondCap` is the cap this wallet chose (`JUPITER_MAX_TOKENS`) and says nothing
+ * about those mints; `unconfirmed` means the chain did not back the holding up.
+ */
+export interface OmittedHoldings {
+  /** Discovered, asked about, and not confirmed on-chain: no mint account, or no readable token account. */
+  unconfirmed: number;
+  /** Past `JUPITER_MAX_TOKENS`, so never asked about at all. */
+  beyondCap: number;
+}
+
+const TOKEN_PROGRAMS = new Set([TOKEN_PROGRAM_ID.toBase58(), TOKEN_2022_PROGRAM_ID.toBase58()]);
+
+/**
+ * Decimals and token program read from the mint account, or `undefined` when this
+ * account cannot be confirmed to be an initialised mint under a known token program.
+ *
+ * This is the load-bearing function of the keyless token list. `SendModal` feeds the
+ * decimals it displays into the smallest-unit conversion, so a value taken on trust
+ * from a third party would be a wrong send amount. Nothing here reads Jupiter.
+ */
+export function mintFactsFrom(mint: PublicKey, info: AccountInfo<Buffer> | null): MintFacts | undefined {
+  if (!info) return undefined;
+  const programId = info.owner.toBase58();
+  if (!TOKEN_PROGRAMS.has(programId)) return undefined;
+  try {
+    const decoded = unpackMint(mint, info, info.owner);
+    if (!decoded.isInitialized) return undefined;
+    // u8 on the chain; anything else means this is not the account we think it is.
+    if (!Number.isInteger(decoded.decimals) || decoded.decimals < 0 || decoded.decimals > 255) return undefined;
+    return { decimals: decoded.decimals, programId };
+  } catch {
+    // Too short, or not a mint at all: unconfirmed, which means dropped.
+    return undefined;
+  }
+}
+
+/**
+ * What the owner's own token account holds, or `undefined` when this account is not
+ * an initialised token account of that mint belonging to that owner.
+ *
+ * The second half of the rule that Jupiter supplies discovery and not numbers: the
+ * amount a row displays is the amount this account holds, read from the chain, and
+ * never the figure Jupiter reported. The account read is the associated token
+ * address, which is exactly the account `buildTransfer` spends from when a row
+ * carries no `source`, so what the list shows and what a send can move are the same
+ * number by construction.
+ */
+export function tokenAmountFrom(
+  account: PublicKey,
+  mint: PublicKey,
+  owner: PublicKey,
+  programId: PublicKey,
+  info: AccountInfo<Buffer> | null,
+): bigint | undefined {
+  if (!info || !info.owner.equals(programId)) return undefined;
+  try {
+    const decoded = unpackAccount(account, info, programId);
+    if (!decoded.isInitialized) return undefined;
+    if (!decoded.mint.equals(mint) || !decoded.owner.equals(owner)) return undefined;
+    return decoded.amount;
+  } catch {
+    // Too short, or not a token account at all: unconfirmed, which means dropped.
+    return undefined;
+  }
+}
 
 /**
  * `tokensError` value meaning no configured endpoint serves the token-account
@@ -197,8 +305,14 @@ export interface TokenBalance {
   symbol?: string;
   name?: string;
   logoURI?: string;
-  tokenAccount: string;
-  /** Owning token program, base58: SPL Token or Token-2022. */
+  /**
+   * The token account this balance sits in, base58 — when it is known. The RPC
+   * path enumerates accounts and always knows it; the keyless Jupiter fallback
+   * returns a mint and an amount and never does, in which case the send derives
+   * the associated token address instead (see `buildTransfer`).
+   */
+  tokenAccount?: string;
+  /** Owning token program, base58: SPL Token or Token-2022. Read from the mint account's owner. */
   programId: string;
 }
 
@@ -216,6 +330,20 @@ export interface TokenBalances {
   tokensError?: string;
   /** The token-account call found no endpoint reachable at all (see `EndpointsUnreachableError`). */
   endpointsUnreachable?: boolean;
+  /**
+   * Where the list of mints came from. `rpc` is `getTokenAccountsByOwner`, which
+   * knows every account. `jupiter` is the keyless fallback, which knows only which
+   * mints are held — their decimals, token programs and amounts are all read from
+   * the chain afterwards, and the UI says so under the list.
+   */
+  tokensSource?: 'rpc' | 'jupiter';
+  /**
+   * Holdings discovered but not shown, split by reason (see `OmittedHoldings`).
+   * Counted rather than hidden — a wallet that silently omits a real holding is
+   * worse than one that says it could not read it — and split because "we did not
+   * ask" and "the chain would not confirm it" are different news.
+   */
+  tokensOmitted?: OmittedHoldings;
 }
 
 export interface NFTAsset {
@@ -342,6 +470,96 @@ type ParsedTokenAccounts = Awaited<ReturnType<Connection['getParsedTokenAccounts
 /** What `getTokenNames` needs of a token: which mint, which program, and whether DAS already named it. */
 export type TokenNameRef = Pick<TokenBalance, 'mint' | 'programId' | 'name' | 'symbol'>;
 
+/**
+ * Read `mints`' own accounts through the rotated connection and keep what they say,
+ * in batches of `MINT_INFO_BATCH`. A batch no endpoint served leaves its mints out
+ * of the map: unconfirmed is dropped, never inferred. A mint whose address will not
+ * even parse is skipped before any call.
+ */
+async function confirmMints(urls: string[], mints: string[]): Promise<Map<string, MintFacts>> {
+  const facts = new Map<string, MintFacts>();
+  const keys: Array<{ mint: string; key: PublicKey }> = [];
+  for (const mint of mints) {
+    try {
+      keys.push({ mint, key: new PublicKey(mint) });
+    } catch {
+      // Not an address; there is no account to ask about.
+    }
+  }
+
+  for (let i = 0; i < keys.length; i += MINT_INFO_BATCH) {
+    const batch = keys.slice(i, i + MINT_INFO_BATCH);
+    let infos: Array<AccountInfo<Buffer> | null>;
+    try {
+      infos = await withRotatedConnection(urls, (connection) =>
+        connection.getMultipleAccountsInfo(
+          batch.map((entry) => entry.key),
+          'confirmed',
+        ),
+      );
+    } catch {
+      continue;
+    }
+    batch.forEach((entry, index) => {
+      const confirmed = mintFactsFrom(entry.key, infos[index] ?? null);
+      if (confirmed) facts.set(entry.mint, confirmed);
+    });
+  }
+  return facts;
+}
+
+/**
+ * How much `owner` holds of each confirmed mint, read from the owner's associated
+ * token account through the rotated connection, in the same batches of
+ * `MINT_INFO_BATCH`.
+ *
+ * `confirmMints` has to have run first: the associated token address is derived
+ * under the mint's *own* program, and that program is one of the two facts the mint
+ * account supplies. A mint whose token account is absent, unreadable, or not this
+ * owner's is left out of the map — the row is then dropped and counted, rather than
+ * showing a balance the send path could not spend. A holding kept in a
+ * non-canonical token account looks exactly like this, which is the known limit of
+ * the keyless path and is stated in `docs/adr/0004-keyless-token-discovery.md`.
+ */
+async function confirmAmounts(
+  urls: string[],
+  owner: PublicKey,
+  facts: Map<string, MintFacts>,
+): Promise<Map<string, bigint>> {
+  const amounts = new Map<string, bigint>();
+  const keys: Array<{ mint: string; key: PublicKey; account: PublicKey; programId: PublicKey }> = [];
+  for (const [mint, { programId }] of facts) {
+    try {
+      const key = new PublicKey(mint);
+      const program = new PublicKey(programId);
+      // Off-curve owners allowed: a PDA holds tokens at its associated address too.
+      keys.push({ mint, key, account: getAssociatedTokenAddressSync(key, owner, true, program), programId: program });
+    } catch {
+      // Not an address; there is no account to ask about.
+    }
+  }
+
+  for (let i = 0; i < keys.length; i += MINT_INFO_BATCH) {
+    const batch = keys.slice(i, i + MINT_INFO_BATCH);
+    let infos: Array<AccountInfo<Buffer> | null>;
+    try {
+      infos = await withRotatedConnection(urls, (connection) =>
+        connection.getMultipleAccountsInfo(
+          batch.map((entry) => entry.account),
+          'confirmed',
+        ),
+      );
+    } catch {
+      continue;
+    }
+    batch.forEach((entry, index) => {
+      const amount = tokenAmountFrom(entry.account, entry.key, owner, entry.programId, infos[index] ?? null);
+      if (amount !== undefined) amounts.set(entry.mint, amount);
+    });
+  }
+  return amounts;
+}
+
 function tokensFrom(parsed: ParsedTokenAccounts, programId: PublicKey): TokenBalance[] {
   return parsed.value
     .map((entry) => {
@@ -355,6 +573,24 @@ function tokensFrom(parsed: ParsedTokenAccounts, programId: PublicKey): TokenBal
       };
     })
     .filter((token) => token.amount !== '0');
+}
+
+/**
+ * Keys per Metaplex `getMultipleAccounts` call for this endpoint list.
+ *
+ * `METADATA_BATCH` is 100, which is the JSON-RPC limit and what a user's own
+ * endpoint is asked for. The keyless Mainnet default is not a user's own endpoint:
+ * publicnode caps the method at ten, the same measurement `MINT_INFO_BATCH`
+ * records, so a 100-key batch there stalls three seconds and then fails — and
+ * `fetchTokenMetadata` treats a failed Metaplex batch as an endpoint failure, which
+ * would lose every name it had already collected. Before this the path was
+ * unreachable keyless, because a keyless list was always empty; the Jupiter
+ * fallback is what put names in front of it.
+ */
+async function metadataBatchFor(urls: string[]): Promise<number> {
+  const cluster = (await runtimeSettings()).cluster;
+  const publicMainnetOnly = cluster === 'mainnet-beta' && urls.length > 0 && urls.every(isPublicUrl);
+  return publicMainnetOnly ? MINT_INFO_BATCH : METADATA_BATCH;
 }
 
 /**
@@ -372,6 +608,11 @@ class HeliusService {
   async getTokenBalances(address: string): Promise<TokenBalances> {
     const pubkey = new PublicKey(address);
     const urls = await runtimeRpcUrls();
+    // Deliberately not `runtimeSettings()`: its build-time defaults carry no
+    // `rpcUrl` and no `heliusApiKey`, which is the exact shape `jupiterEnabledFor`
+    // says yes to. A worker that did not answer must not be what sends a
+    // configured user's address to Jupiter, so the gate below fails closed.
+    const settings = await runtimeSettingsOrUndefined();
 
     // Two independent rotated calls: a public endpoint that refuses
     // getTokenAccountsByOwner must never discard the SOL balance.
@@ -390,6 +631,8 @@ class HeliusService {
 
     let tokens: TokenBalance[] = [];
     let tokensError: string | undefined;
+    let tokensSource: 'rpc' | 'jupiter' | undefined;
+    let tokensOmitted: OmittedHoldings | undefined;
     let endpointsUnreachable = false;
     const tokenFailures: RpcFailure[] = [];
     try {
@@ -404,6 +647,7 @@ class HeliusService {
         },
         (failure) => tokenFailures.push(failure),
       );
+      tokensSource = 'rpc';
     } catch (error) {
       endpointsUnreachable = allUnreachable(tokenFailures, urls);
       tokensError =
@@ -412,7 +656,22 @@ class HeliusService {
           : describeFailures(tokenFailures, urls, error);
     }
 
-    if (tokens.length > 0) {
+    // No endpoint enumerates token accounts from here — the ordinary keyless mainnet
+    // case. Jupiter can still say which mints are held; every number stays on-chain.
+    if (tokensError === TOKENS_UNAVAILABLE && settings && jupiterEnabledFor(settings.cluster, settings)) {
+      const fallback = await this.tokensFromJupiter(pubkey, urls);
+      if (fallback) {
+        tokens = fallback.tokens;
+        tokensOmitted = fallback.omitted;
+        tokensSource = 'jupiter';
+        tokensError = undefined;
+        endpointsUnreachable = false;
+      }
+    }
+
+    // DAS names an RPC-sourced list; a Jupiter-sourced one is already named by the
+    // search, and whatever it left unnamed is `getTokenNames`' on-chain job.
+    if (tokens.length > 0 && tokensSource === 'rpc') {
       await this.nameFromDas(address, urls, tokens);
     }
 
@@ -422,7 +681,67 @@ class HeliusService {
       tokens,
       ...(tokensError !== undefined ? { tokensError } : {}),
       ...(endpointsUnreachable ? { endpointsUnreachable: true } : {}),
+      ...(tokensSource !== undefined ? { tokensSource } : {}),
+      ...(tokensOmitted && tokensOmitted.unconfirmed + tokensOmitted.beyondCap > 0 ? { tokensOmitted } : {}),
     };
+  }
+
+  /**
+   * The keyless fallback: Jupiter says *which* mints, the chain says every number.
+   *
+   * Order matters, and there are two chain reads, not one. Discovery first, then
+   * **`getMultipleAccounts` on the mints themselves** for `decimals` and the owning
+   * token program, then **`getMultipleAccounts` on the owner's associated token
+   * accounts** for the amount each one actually holds. Both are batched at
+   * `MINT_INFO_BATCH` through the rotated connection, and both drop rather than
+   * guess: the decimals a row displays are what `SendModal` converts the typed
+   * amount with, and the balance it displays is what Max fills in and what the
+   * insufficient-balance check is made against. Jupiter's own `amount` is used for
+   * nothing but deciding which mints are worth asking the chain about. Names and
+   * logos are asked for last, and only for the rows that survived.
+   *
+   * Resolves `undefined` when nothing survives, which leaves `tokensError` exactly
+   * as the RPC path left it: today's behaviour, unchanged.
+   */
+  private async tokensFromJupiter(
+    owner: PublicKey,
+    urls: string[],
+  ): Promise<{ tokens: TokenBalance[]; omitted: OmittedHoldings } | undefined> {
+    const holdings = await fetchJupiterBalances(owner.toBase58());
+    if (holdings.length === 0) return undefined;
+
+    const considered = holdings.slice(0, JUPITER_MAX_TOKENS);
+    // Never asked about, so nothing is claimed about them: a cap this wallet chose.
+    const beyondCap = holdings.length - considered.length;
+
+    const facts = await confirmMints(urls, considered.map((holding) => holding.mint));
+    const amounts = await confirmAmounts(urls, owner, facts);
+
+    const confirmed = considered.flatMap((holding) => {
+      const mintFacts = facts.get(holding.mint);
+      const amount = amounts.get(holding.mint);
+      // A zero canonical account is a holding this wallet cannot see or spend; it
+      // is counted as unconfirmed rather than shown as a balance of nothing.
+      if (!mintFacts || amount === undefined || amount === 0n) return [];
+      return [{ mint: holding.mint, amount: amount.toString(), ...mintFacts }];
+    });
+    const omitted = { unconfirmed: considered.length - confirmed.length, beyondCap };
+    if (confirmed.length === 0) return undefined;
+
+    const info = await fetchJupiterTokenInfo(confirmed.map((holding) => holding.mint));
+    const tokens = confirmed.map((holding): TokenBalance => {
+      const named = info.get(holding.mint);
+      return {
+        mint: holding.mint,
+        amount: holding.amount,
+        decimals: holding.decimals,
+        programId: holding.programId,
+        ...(named?.name !== undefined ? { name: named.name } : {}),
+        ...(named?.symbol !== undefined ? { symbol: named.symbol } : {}),
+        ...(named?.logoURI !== undefined ? { logoURI: named.logoURI } : {}),
+      };
+    });
+    return { tokens, omitted };
   }
 
   /** DAS on any URL that serves it. Names are a courtesy, never an error. */
@@ -461,6 +780,7 @@ class HeliusService {
     const names = await fetchTokenMetadata(
       (fn) => withRotatedConnection(urls, fn),
       unnamed.map(({ mint, programId }) => ({ mint, programId })),
+      await metadataBatchFor(urls),
     );
     return Object.fromEntries(names);
   }

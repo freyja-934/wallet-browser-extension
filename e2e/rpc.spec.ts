@@ -27,6 +27,8 @@ test('the built manifest grants publicnode, drops the hosts it cannot use, and c
   const hosts = manifest.host_permissions ?? [];
   expect(hosts).toContain('https://solana-rpc.publicnode.com/*');
   expect(hosts).toContain('https://api.devnet.solana.com/*');
+  // The keyless token-discovery fallback; without this grant a store install sees SOL only.
+  expect(hosts).toContain('https://lite-api.jup.ag/*');
   expect(hosts.some((host) => host.includes('api.testnet.solana.com'))).toBe(false);
   // `api.mainnet-beta.solana.com` 403s every request carrying an `Origin` header, so asking
   // for it would be a permission the extension can never spend. It is out of the rotation too.
