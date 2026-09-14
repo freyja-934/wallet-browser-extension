@@ -9,6 +9,13 @@ own pull request, and the plan it shipped against is the detailed record.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-09-14
+
+Five phases over 0.3.0, and the first tagged release. The dApp surface now signs
+with the account a site actually asks for; the component tests and coverage gate
+that SHIP-8b deferred are in; CI runs on every pull request and builds the store
+zip; and the listing images say what the product does.
+
 ### Added
 
 - **SHIP-10** — Component tests and a coverage gate, the one piece SHIP-8b
@@ -102,11 +109,9 @@ own pull request, and the plan it shipped against is the detailed record.
 
 ## [0.3.0] — 2026-09-12
 
-Nine remediation phases over 0.2.0, the first Chrome Web Store build. The
-`v0.3.0` tag and the GitHub release are still to be cut; `git tag -l` is empty
-today, and cutting them is an owner action (SHIP-0 item 4's neighbourhood).
-Everything under Unreleased above has landed on `main` since, so a release cut
-now should carry a version of its own rather than reuse this one.
+Nine remediation phases over 0.2.0, the first Chrome Web Store build. No
+`v0.3.0` tag was ever cut; 0.4.0 above is the first tagged release, and it is
+what goes to the store.
 
 ### Security
 
