@@ -1053,6 +1053,35 @@ describe('heliusService.getTokenBalances, keyless Jupiter fallback', () => {
   });
 
   /**
+   * The public fixture, and every brand-new wallet, look like this on Jupiter:
+   * a `SOL` key and nothing else. That is a successful look, not a down host.
+   */
+  it('reports an empty token list, not an unavailable one, for a wallet of only SOL', async () => {
+    stubJupiter({
+      balances: { SOL: { amount: '2114588590', uiAmount: 2.11458859, slot: 1, isFrozen: false } },
+    });
+
+    const balances = await heliusService.getTokenBalances(TEST_ADDRESS);
+
+    expect(balances.tokens).toEqual([]);
+    expect(balances.tokensError).toBeUndefined();
+    expect(balances.tokensSource).toBe('jupiter');
+    expect(balances.collectibles).toBeUndefined();
+  });
+
+  it('leaves tokens unavailable when Jupiter itself does not answer', async () => {
+    stubFetch((url) => {
+      if (url.startsWith(`${JUPITER_BALANCES_URL}/`)) return new Response('slow down', { status: 429 });
+      return rpcError(-32601, 'Method not found');
+    });
+
+    const balances = await heliusService.getTokenBalances(TEST_ADDRESS);
+
+    expect(balances.tokensError).toBe(TOKENS_UNAVAILABLE);
+    expect(balances.tokensSource).toBeUndefined();
+  });
+
+  /**
    * A wallet of nothing but collectibles read correctly is an empty token list,
    * not an unreadable one: the endpoint answered every question it was asked.
    */

@@ -12,7 +12,7 @@ Take the 2026-09-10 audit plus one critical bridge vulnerability found during ro
 Verified facts driving the ordering:
 
 - **Critical, live in 0.2.0:** the content script built the worker message by spreading the page's payload over the outer `type`, so the allow-list check and the message that reached the worker could disagree. A page could reach handlers that were never meant to be page-reachable. Fixed in SHIP-1: `src/lib/bridge.ts` now copies only the fields each dApp message type accepts, field by field, and never spreads.
-- `api.mainnet-beta.solana.com` returns 403 to any request carrying an `Origin` header, so the store build has no working mainnet endpoint. `solana-rpc.publicnode.com` accepts browser origins but blocks `getTokenAccountsByOwner` and has no DAS. Keyless mainnet can only show and send SOL; tokens and NFTs need a user-supplied RPC or Helius key. Bundling a key is out (extractable from the zip). Public devnet serves DAS, so devnet NFTs can work keyless.
+- `api.mainnet-beta.solana.com` returns 403 to any request carrying an `Origin` header, so the store build has no working mainnet endpoint. `solana-rpc.publicnode.com` accepts browser origins but blocks `getTokenAccountsByOwner` and has no DAS. Keyless Mainnet shows SOL from publicnode, token *mints* from Jupiter (SHIP-15), and regular collectibles from on-chain metadata (SHIP-16). Compressed NFTs still need a user-supplied DAS endpoint. Bundling a key is out (extractable from the zip). Public devnet serves DAS, so Devnet collectibles including compressed ones can work keyless.
 - Four shipped correctness bugs: `signAndSendTransaction` returns garbage signature bytes; SPL/System discriminators in the preview are inverted; Send → Max produces amounts the integer parser rejects; RPC or CoinGecko failure renders `0.0000 SOL`.
 - No connected-origins model, no approval lifecycle (window close never rejects; approvals outlive the dApp timeout), `GET_ACCOUNTS` leaks addresses to any page while unlocked.
 - Tests cover only `src/lib` helpers. `service-worker.ts` exports nothing and registers listeners at import, so worker routing cannot be unit-tested until it is split.
@@ -62,14 +62,15 @@ Minimal path to Gate A if time is short: SHIP-0, 1, 2, 3, 4, 5, 7a, 7b, then SHI
 
 Outside the repo or off limits to agents.
 
-**Still open as of 2026-09-14:** 4 (developer account), 6 (the `@types/qrcode` move),
-7, and 10 (ongoing). Everything else below is struck through and dated. 0.4.0 was cut
-and tagged on 2026-09-14.
+**Still open as of 2026-09-14:** 4 (upload and submit 0.5.0), 6 (the `@types/qrcode` move),
+7, and 10 (ongoing). Everything else below is struck through and dated. 0.5.0 was cut
+on 2026-09-14 (SHIP-15, SHIP-16, and the SOL-only Jupiter look). 0.4.0 was tagged
+the same day, before those phases.
 
 1. ~~**Rotate the Helius key** that early history exposed.~~ — **done 2026-09-14.** Rotated and swapped in `.env`; the old string is dead, and it is absent from the tracked tree so gitleaks stays green. Public history was deliberately not rewritten.
 2. ~~**Fix GitHub billing** so Actions runs (every run fails with "account is locked due to a billing issue").~~ — **done 2026-09-13.** Runs execute. Three further faults had to be fixed in the workflow itself before it went green, in PR #18: `pnpm/action-setup` was given a `version` that `packageManager` already pins, Node 20 could not load jsdom's undici so the component tests never started while the summary still printed green, and the e2e job was failing on devnet rate limits. See item 9.
 3. ~~**Enable GitHub Pages** (Settings → Pages → branch `main`, folder `/docs`).~~ — **done 2026-09-13.** `https://freyja-934.github.io/wallet-browser-extension/legal/privacy.html` and the terms page both answer 200. That is the URL to paste into the listing.
-4. **Chrome Web Store developer account**: $5 registration, 2-Step Verification, trader/non-trader declaration, verified contact email. Do not submit until Gate A.
+4. **Chrome Web Store listing**: the developer account exists (owner confirmed 2026-09-14; an older build is already uploaded). Remaining: paste `docs/store/listing.md`, upload `cinder-wallet-store.zip` at **0.5.0**, and submit. Gate A is met for a keyless Mainnet install that holds SOL — tokens and regular collectibles no longer need a key. Do not reuse the 0.4.0 zip; the store rejects a version that does not go up.
 6. ~~**Before SHIP-8b starts**, on `main`: `pnpm add -D jsdom @testing-library/react @testing-library/jest-dom @vitest/coverage-v8@1`~~ — **done 2026-09-13**: authorised for SHIP-10, which installed the four and landed the component tests and the coverage gate SHIP-8b had deferred. Still open: `pnpm remove @types/qrcode && pnpm add -D @types/qrcode` (it is a dependency, not a devDependency).
 7. **After SHIP-3 merges**, update the comment block in `.env.example` (agents cannot read `.env*`) to describe the Settings `rpcUrl` / `heliusApiKey` fields and DAS-on-any-URL.
 8. ~~**After SHIP-4 merges**, retake store screenshots on a mainnet profile.~~ — **done 2026-09-13**, twice. The first set had a Devnet capture of 0 SOL sitting under a caption promising live prices; it was rebuilt in PR #18 from two runs, each shot taken on whichever cluster makes its own caption true, from a keyless build that matches `just store`. Provenance and the verification rule are in `docs/store/screenshots/README.md`. Still worth an owner pass: the approval shots show `localhost:5174` as the requesting origin, which is honest for a local test dApp but could be made prettier by hosting the demo dApp on the Pages site.

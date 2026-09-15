@@ -82,6 +82,8 @@ describe('fetchJupiterBalances', () => {
     stubFetch(() => Response.json(payload));
 
     const holdings = await fetchJupiterBalances(TEST_ADDRESS);
+    expect(holdings).toBeDefined();
+    if (holdings === undefined) throw new Error('Jupiter answered; holdings must be defined');
 
     expect(holdings).toHaveLength(held.length);
     expect(new Set(holdings.map((holding) => holding.mint))).toEqual(new Set(held));
@@ -92,6 +94,12 @@ describe('fetchJupiterBalances', () => {
     stubFetch(() => Response.json({ SOL: { amount: '0', uiAmount: 0, slot: 1, isFrozen: false } }));
 
     await expect(fetchJupiterBalances(TEST_ADDRESS)).resolves.toEqual([]);
+  });
+
+  it('treats a JSON-RPC error envelope as no document, not as an empty wallet', async () => {
+    stubFetch(() => Response.json({ jsonrpc: '2.0', error: { code: -32601, message: 'Method not found' }, id: 'cinder' }));
+
+    await expect(fetchJupiterBalances(TEST_ADDRESS)).resolves.toBeUndefined();
   });
 
   it.each([
@@ -125,17 +133,17 @@ describe('fetchJupiterBalances', () => {
         throw new TypeError('Failed to fetch');
       },
     ],
-  ])('resolves empty, never throwing, on %s', async (_label, respond) => {
+  ])('resolves undefined, never throwing, on %s', async (_label, respond) => {
     stubFetch(respond as () => Response);
 
-    await expect(fetchJupiterBalances(TEST_ADDRESS)).resolves.toEqual([]);
+    await expect(fetchJupiterBalances(TEST_ADDRESS)).resolves.toBeUndefined();
   });
 
   it('refuses a body larger than the size guard before parsing it', async () => {
     const huge = `{"${USDC}":{"amount":"1","pad":"${'x'.repeat(JUPITER_MAX_RESPONSE)}"}}`;
     stubFetch(() => body(huge));
 
-    await expect(fetchJupiterBalances(TEST_ADDRESS)).resolves.toEqual([]);
+    await expect(fetchJupiterBalances(TEST_ADDRESS)).resolves.toBeUndefined();
   });
 
   it('refuses a body whose declared content-length is over the guard, without reading it', async () => {
@@ -150,7 +158,7 @@ describe('fetchJupiterBalances', () => {
         }) as unknown as Response,
     );
 
-    await expect(fetchJupiterBalances(TEST_ADDRESS)).resolves.toEqual([]);
+    await expect(fetchJupiterBalances(TEST_ADDRESS)).resolves.toBeUndefined();
     expect(text).not.toHaveBeenCalled();
   });
 
@@ -184,7 +192,7 @@ describe('fetchJupiterBalances', () => {
         ),
     );
 
-    await expect(fetchJupiterBalances(TEST_ADDRESS)).resolves.toEqual([]);
+    await expect(fetchJupiterBalances(TEST_ADDRESS)).resolves.toBeUndefined();
 
     expect(cancelled).toBe(true);
     // It gave up just past the cap rather than reading everything the host sent; the
@@ -228,7 +236,7 @@ describe('fetchJupiterBalances', () => {
     const pending = fetchJupiterBalances(TEST_ADDRESS);
     await vi.advanceTimersByTimeAsync(JUPITER_TIMEOUT_MS + 1);
 
-    await expect(pending).resolves.toEqual([]);
+    await expect(pending).resolves.toBeUndefined();
   });
 
   it('asks nothing at all for an address that is not base58', async () => {
@@ -243,7 +251,7 @@ describe('fetchJupiterBalances', () => {
     controller.abort();
     const calls = stubFetch(() => Response.json({}));
 
-    await expect(fetchJupiterBalances(TEST_ADDRESS, controller.signal)).resolves.toEqual([]);
+    await expect(fetchJupiterBalances(TEST_ADDRESS, controller.signal)).resolves.toBeUndefined();
     expect(calls).toEqual([]);
   });
 });
