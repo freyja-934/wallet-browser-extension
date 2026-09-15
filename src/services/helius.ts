@@ -741,15 +741,18 @@ class HeliusService {
    * mint accounts could not be read. It is handed back separately instead, and
    * asking about fewer accounts makes the token path cheaper, never slower.
    *
-   * Resolves `undefined` when nothing at all survives, which leaves `tokensError`
-   * exactly as the RPC path left it: today's behaviour, unchanged.
+   * Resolves `undefined` when Jupiter did not answer, or when it listed mints
+   * and none of them survived confirmation. A wallet that answered and holds
+   * nothing but SOL is an empty success, not an unavailable one — otherwise the
+   * popup asks for an RPC that the keyless path does not need.
    */
   private async tokensFromJupiter(
     owner: PublicKey,
     urls: string[],
   ): Promise<{ tokens: TokenBalance[]; omitted: OmittedHoldings; collectibles: string[] } | undefined> {
     const holdings = await fetchJupiterBalances(owner.toBase58());
-    if (holdings.length === 0) return undefined;
+    if (holdings === undefined) return undefined;
+    if (holdings.length === 0) return { tokens: [], omitted: { unconfirmed: 0, beyondCap: 0 }, collectibles: [] };
 
     const considered = holdings.slice(0, JUPITER_MAX_TOKENS);
     // Never asked about, so nothing is claimed about them: a cap this wallet chose.

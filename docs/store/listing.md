@@ -1,6 +1,6 @@
 # Chrome Web Store listing (paste)
 
-Build the zip with `just store`. Upload `cinder-wallet-store.zip` (manifest at zip root). Distribution: **Unlisted** until Send and a hosted privacy URL are verified.
+Build the zip with `just store`. Upload `cinder-wallet-store.zip` (manifest at zip root). The current cut is **0.5.0**; the store rejects an upload that does not raise the version. Distribution: **Unlisted** until Send and a hosted privacy URL are verified.
 
 ## Before you can submit
 

@@ -9,6 +9,13 @@ own pull request, and the plan it shipped against is the detailed record.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-09-14
+
+Keyless Mainnet now shows tokens and regular collectibles. Jupiter lists the
+mints; the chain confirms every number and which of those mints is a one-of-one.
+A wallet that holds only SOL is a successful look, not an unavailable one.
+Compressed NFTs stay off the list and the tab says so.
+
 ### Added
 
 - **SHIP-16** — A one-of-one is no longer shown as a token. A regular NFT is an
@@ -45,6 +52,12 @@ own pull request, and the plan it shipped against is the detailed record.
   account and no token account — only a leaf in a Merkle tree — so nothing but a DAS
   indexer can find them, and an incomplete grid that reads as a complete collection
   would be the worse failure. `docs/adr/0005-keyless-collectibles.md` records why.
+- **SHIP-16** — A Jupiter document that is only native SOL is a successful look,
+  not a down host. The public fixture and every new wallet answer that way, and
+  treating the empty mint list as `TOKENS_UNAVAILABLE` put the old "add an endpoint
+  to see tokens and NFTs" copy back on a keyless Mainnet install that had just
+  asked Jupiter and been told the truth. A timeout or HTTP error from Jupiter
+  still leaves that copy up.
 
 - **SHIP-15** — Keyless Mainnet now shows SPL and Token-2022 balances, with names,
   symbols and logos, for an install that has configured nothing. No free endpoint
@@ -188,8 +201,8 @@ zip; and the listing images say what the product does.
 ## [0.3.0] — 2026-09-12
 
 Nine remediation phases over 0.2.0, the first Chrome Web Store build. No
-`v0.3.0` tag was ever cut; 0.4.0 above is the first tagged release, and it is
-what goes to the store.
+`v0.3.0` tag was ever cut; 0.4.0 was the first tagged release. The store build
+is 0.5.0.
 
 ### Security
 

@@ -19,8 +19,10 @@ import { cleanText, fetchGuardedJson, httpsUrl } from '../lib/untrusted-http';
  * Both bodies are untrusted HTTP, treated exactly as `HeliusEnhancedTransaction`
  * is treated in `helius.ts`: every field is `unknown` until it is checked, and
  * anything unrecognised is ignored rather than passed along. Neither exported
- * function throws: a refusal, a timeout, a truncated body or a hostile one all
- * degrade to "nothing found", which is the state the wallet was already in.
+ * function throws. `fetchJupiterBalances` resolves `undefined` when it never
+ * got a document (timeout, HTTP error, unreadable body) so a SOL-only wallet
+ * is not mistaken for a down host; a hostile but well-formed body still
+ * degrades to an empty list.
  */
 
 /** Per request. Jupiter answered the whale case in well under a second; this is the give-up point. */
@@ -78,13 +80,24 @@ async function getJson(url: string, signal?: AbortSignal): Promise<unknown> {
  * that this wallet already reads from the chain and so ignores here. Each value
  * carries an integer `amount` string and a float `uiAmount`; only the first is
  * read. A key that is not a base58 address, an amount that is not an integer or
- * does not fit a u64, and a zero balance are all skipped — as is the whole call
- * when anything at all goes wrong.
+ * does not fit a u64, and a zero balance are all skipped. A transport failure
+ * (timeout, HTTP error, unreadable body) resolves `undefined` so the caller can
+ * tell that apart from a wallet that answered and holds nothing but SOL.
  */
-export async function fetchJupiterBalances(address: string, signal?: AbortSignal): Promise<JupiterHolding[]> {
+export async function fetchJupiterBalances(
+  address: string,
+  signal?: AbortSignal,
+): Promise<JupiterHolding[] | undefined> {
   if (!BASE58_ADDRESS.test(address)) return [];
   const body = await getJson(`${JUPITER_BALANCES_URL}/${address}`, signal);
+  // `fetchGuardedJson` uses `undefined` for "we never got a document". An empty
+  // array here would erase that, and a SOL-only wallet would look like Jupiter
+  // was down.
+  if (body === undefined) return undefined;
   if (body === null || typeof body !== 'object' || Array.isArray(body)) return [];
+  // A JSON-RPC error envelope is not a balances document. Tests and a confused
+  // proxy both produce one; treating it as "no mints" would clear `tokensError`.
+  if ('jsonrpc' in body) return undefined;
 
   const holdings: JupiterHolding[] = [];
   for (const [mint, raw] of Object.entries(body as Record<string, unknown>)) {
