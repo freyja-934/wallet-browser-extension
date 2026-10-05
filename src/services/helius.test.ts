@@ -16,10 +16,11 @@ import {
 import { Buffer } from 'buffer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  CINDER_MAINNET_RPC,
   JUPITER_BALANCES_URL,
   JUPITER_TOKEN_SEARCH_URL,
   PUBLIC_DEVNET_RPCS,
-  PUBLIC_MAINNET_RPCS,
+  PUBLICNODE_MAINNET_RPC,
   heliusRpcUrlFor,
 } from '../config/constants';
 import { resetRpcCooldowns } from '../lib/rpc-rotate';
@@ -30,11 +31,11 @@ const A = 'https://a.example';
 const B = 'https://b.example';
 /** The user's own URL: not in the public lists, so a 401/403 from it is a real failure. */
 const CUSTOM = 'https://rpc.custom.example/v1';
-const [PUBLICNODE] = PUBLIC_MAINNET_RPCS;
+const PUBLICNODE = PUBLICNODE_MAINNET_RPC;
 /**
- * A second endpoint that `helius.ts` counts as public: mainnet's public list is one host
- * now (`api.mainnet-beta.solana.com` 403s every browser origin and is gone), and the
- * "public URL" set the classifier uses spans both clusters.
+ * A second endpoint that `helius.ts` counts as public. Mainnet's list is the proxy
+ * and then publicnode; devnet's public host is what these tests use when they need
+ * another public URL that is not publicnode.
  */
 const [PUBLIC_DEVNET] = PUBLIC_DEVNET_RPCS;
 const FAKE_KEY = 'not-a-real-key';
@@ -478,6 +479,49 @@ describe('heliusService.getTokenNames', () => {
     expect(batchSizes).toEqual([MINT_INFO_BATCH, 5]);
   });
 
+  it('batches the Metaplex reads in one call when the proxy is the first endpoint', async () => {
+    runtime.urls = [CINDER_MAINNET_RPC, PUBLICNODE];
+    vi.spyOn(Connection.prototype, 'getAccountInfo').mockResolvedValue(null);
+    const batchSizes: number[] = [];
+    vi.spyOn(Connection.prototype, 'getMultipleAccountsInfo').mockImplementation(async (keys) => {
+      batchSizes.push(keys.length);
+      return keys.map(() => null);
+    });
+
+    await heliusService.getTokenNames(
+      Array.from({ length: 15 }, (_, index) => ({
+        mint: new PublicKey(Buffer.alloc(32, index + 1)).toBase58(),
+        programId: CLASSIC,
+      })),
+    );
+
+    expect(batchSizes).toEqual([15]);
+  });
+
+  it('slices to ten once the read falls through to publicnode', async () => {
+    runtime.urls = [CINDER_MAINNET_RPC, PUBLICNODE];
+    vi.spyOn(Connection.prototype, 'getAccountInfo').mockResolvedValue(null);
+    const seen: Array<{ url: string; size: number }> = [];
+    vi.spyOn(Connection.prototype, 'getMultipleAccountsInfo').mockImplementation(async function (
+      this: Connection,
+      keys,
+    ) {
+      seen.push({ url: this.rpcEndpoint, size: keys.length });
+      if (this.rpcEndpoint === CINDER_MAINNET_RPC) throw new Error('503 Service Unavailable: {}');
+      return keys.map(() => null);
+    });
+
+    await heliusService.getTokenNames(
+      Array.from({ length: 15 }, (_, index) => ({
+        mint: new PublicKey(Buffer.alloc(32, index + 1)).toBase58(),
+        programId: CLASSIC,
+      })),
+    );
+
+    expect(seen.filter((call) => call.url === PUBLICNODE).map((call) => call.size)).toEqual([MINT_INFO_BATCH, 5]);
+    expect(Math.max(...seen.map((call) => call.size))).toBeLessThanOrEqual(15);
+  });
+
   it('keeps the full 100-key batch for an endpoint the user configured', async () => {
     runtime.settings.rpcUrl = CUSTOM;
     runtime.urls = [CUSTOM, PUBLICNODE];
@@ -826,13 +870,51 @@ describe('heliusService.getTokenBalances, keyless Jupiter fallback', () => {
   }
 
   beforeEach(() => {
-    // The shipping keyless shape: mainnet, nothing configured, one public host that
-    // serves getBalance and refuses the token-account call.
+    // The degraded keyless shape: publicnode alone, which serves getBalance and
+    // refuses the token-account call. The proxy-up path is the RPC describe above.
     runtime.urls = [PUBLICNODE];
     vi.spyOn(Connection.prototype, 'getBalance').mockResolvedValue(5_000);
     stubTokenAccounts(() => {
       throw blocked();
     });
+  });
+
+  it('reads SOL from publicnode when the proxy is down, and does not ask Jupiter', async () => {
+    runtime.urls = [CINDER_MAINNET_RPC, PUBLICNODE];
+    const requested = stubJupiter({ balances: { [MINT]: { amount: '1', uiAmount: 1 } } });
+    vi.spyOn(Connection.prototype, 'getBalance').mockImplementation(async function (this: Connection) {
+      if (this.rpcEndpoint === CINDER_MAINNET_RPC) {
+        throw new Error(`failed to get balance of account ${TEST_ADDRESS}: 503 Service Unavailable: {}`);
+      }
+      return 5_000;
+    });
+    vi.spyOn(Connection.prototype, 'getParsedTokenAccountsByOwner').mockImplementation(async function (this: Connection) {
+      if (this.rpcEndpoint === CINDER_MAINNET_RPC) {
+        throw new Error(`failed to get token accounts owned by account ${TEST_ADDRESS}: 503 Service Unavailable: {}`);
+      }
+      throw blocked();
+    });
+
+    const balances = await heliusService.getTokenBalances(TEST_ADDRESS);
+
+    expect(balances.lamports).toBe('5000');
+    expect(balances.tokensSource).not.toBe('jupiter');
+    expect(requested.some((url) => url.startsWith(`${JUPITER_BALANCES_URL}/`))).toBe(false);
+  });
+
+  it('asks Jupiter when the proxy and publicnode both refuse token enumeration', async () => {
+    runtime.urls = [CINDER_MAINNET_RPC, PUBLICNODE];
+    const requested = stubJupiter({
+      balances: { [MINT]: { amount: '1500000', uiAmount: 1.5 } },
+      search: [{ id: MINT, name: 'USD Coin', symbol: 'USDC', icon: 'https://example.test/usdc.png' }],
+    });
+    stubMintAccounts(() => mintAccount(6, TOKEN_PROGRAM_ID), () => 1_500_000n);
+
+    const balances = await heliusService.getTokenBalances(TEST_ADDRESS);
+
+    expect(balances.tokensSource).toBe('jupiter');
+    expect(balances.lamports).toBe('5000');
+    expect(requested.some((url) => url.startsWith(`${JUPITER_BALANCES_URL}/`))).toBe(true);
   });
 
   it('lists the mints Jupiter reports, with decimals and token program read from the mint account', async () => {

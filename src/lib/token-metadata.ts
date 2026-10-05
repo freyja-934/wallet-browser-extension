@@ -7,13 +7,30 @@ import { COOLDOWN_RPC_MESSAGE, SKIP_RPC_MESSAGE, connectionErrorHttpStatus, isTr
 export const METADATA_PROGRAM_ID = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
 
 /**
- * `getMultipleAccountsInfo` accepts at most 100 keys per call, and that is what an
- * endpoint of the user's own is asked for. Not every host allows it: publicnode,
- * the one keyless Mainnet default, caps the method at ten (measured 2026-09-14 —
- * eleven stalls three seconds and then fails), so `getTokenNames` passes its own
- * smaller size for that case rather than lowering this one for everybody.
+ * `getMultipleAccountsInfo` accepts at most 100 keys per call, and that is what the
+ * proxy and an endpoint of the user's own are asked for. publicnode caps the method
+ * at ten (measured 2026-09-14 — eleven stalls three seconds and then fails), so a
+ * call that lands there is sliced to `PUBLICNODE_ACCOUNT_BATCH` instead.
  */
 export const METADATA_BATCH = 100;
+
+/** publicnode's measured `getMultipleAccounts` cap. */
+export const PUBLICNODE_ACCOUNT_BATCH = 10;
+
+const PUBLICNODE_HOST = 'solana-rpc.publicnode.com';
+
+/**
+ * Keys one `getMultipleAccounts` may send to `url`. publicnode gets ten. The proxy,
+ * a user's own endpoint, and a runner that did not name a URL get the JSON-RPC limit.
+ */
+export function accountsBatchFor(url: string | undefined): number {
+  if (!url) return METADATA_BATCH;
+  try {
+    return new URL(url).hostname === PUBLICNODE_HOST ? PUBLICNODE_ACCOUNT_BATCH : METADATA_BATCH;
+  } catch {
+    return PUBLICNODE_ACCOUNT_BATCH;
+  }
+}
 
 /** Token-2022 extension lookups in flight at once; each one is a `getAccountInfo` of the mint. */
 export const TOKEN_2022_CONCURRENCY = 4;
@@ -39,8 +56,12 @@ export interface MintRef {
   programId?: string;
 }
 
-/** Runs a `Connection` callback against whichever endpoint answers (see `withRotatedConnection`). */
-export type ConnectionRunner = <T>(fn: (connection: Connection) => Promise<T>) => Promise<T>;
+/**
+ * Runs a `Connection` callback against whichever endpoint answers (see
+ * `withRotatedConnection`). `url` is that endpoint, so a batch can be sliced to
+ * what the host that actually answered will take.
+ */
+export type ConnectionRunner = <T>(fn: (connection: Connection, url?: string) => Promise<T>) => Promise<T>;
 
 /** The Metaplex metadata PDA for `mint`. */
 export function metadataPda(mint: PublicKey): PublicKey {
@@ -133,17 +154,26 @@ export async function fetchTokenMetadata(
   }
 
   const remaining = mints.filter(({ mint }) => !names.has(mint)).map(({ mint }) => new PublicKey(mint));
-  const keysPerCall = Math.max(1, Math.min(batchSize, METADATA_BATCH));
-  for (let i = 0; i < remaining.length; i += keysPerCall) {
-    const chunk = remaining.slice(i, i + keysPerCall);
-    const accounts = await run((connection) => connection.getMultipleAccountsInfo(chunk.map(metadataPda)));
-    accounts.forEach((account, index) => {
+  const ceiling = Math.max(1, Math.min(batchSize, METADATA_BATCH));
+  let index = 0;
+  while (index < remaining.length) {
+    const window = remaining.slice(index, index + ceiling);
+    // `used` is how many keys the host that answered was willing to take, which is
+    // ten on publicnode even when the caller asked for a hundred.
+    const { accounts, used } = await run(async (connection, url) => {
+      const cap = Math.max(1, Math.min(window.length, accountsBatchFor(url)));
+      const slice = window.slice(0, cap);
+      const accounts = await connection.getMultipleAccountsInfo(slice.map(metadataPda));
+      return { accounts, used: slice.length };
+    });
+    accounts.forEach((account, offset) => {
       if (!account || !account.owner.equals(METADATA_PROGRAM_ID)) return;
       const decoded = decodeMetadata(account.data);
       if (decoded && (decoded.name || decoded.symbol)) {
-        names.set(chunk[index].toBase58(), { name: decoded.name, symbol: decoded.symbol });
+        names.set(window[offset].toBase58(), { name: decoded.name, symbol: decoded.symbol });
       }
     });
+    index += used;
   }
 
   return names;

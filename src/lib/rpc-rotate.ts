@@ -251,13 +251,13 @@ export async function rpcJson<T>(
  */
 export async function withRotatedConnection<T>(
   urls: string[],
-  fn: (connection: Connection) => Promise<T>,
+  fn: (connection: Connection, url: string) => Promise<T>,
   onFailure?: RpcFailureObserver,
 ): Promise<T> {
   let lastError: unknown;
   for (const url of prioritizeRpcUrls(urls)) {
     try {
-      return await fn(makeConnection(url));
+      return await fn(makeConnection(url), url);
     } catch (error) {
       const verdict = classifyConnectionError(error);
       onFailure?.({ url, error, verdict });

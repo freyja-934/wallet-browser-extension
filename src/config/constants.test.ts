@@ -1,10 +1,29 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { JUPITER_BALANCES_URL, JUPITER_TOKEN_SEARCH_URL, jupiterEnabledFor } from './constants';
+import {
+  CINDER_MAINNET_RPC,
+  JUPITER_BALANCES_URL,
+  JUPITER_TOKEN_SEARCH_URL,
+  PUBLIC_MAINNET_RPCS,
+  PUBLICNODE_MAINNET_RPC,
+  jupiterEnabledFor,
+} from './constants';
 
 /**
  * The gate on the one third party this wallet talks to about an address. It is
  * deliberately narrow: mainnet only, and only for a user who configured nothing.
  */
+describe('keyless mainnet endpoints', () => {
+  it('tries the proxy first and keeps publicnode, and the manifest grants both', () => {
+    expect(PUBLIC_MAINNET_RPCS).toEqual([CINDER_MAINNET_RPC, PUBLICNODE_MAINNET_RPC]);
+    const manifest = JSON.parse(readFileSync('manifest.json', 'utf8')) as { host_permissions?: string[] };
+    const hosts = manifest.host_permissions ?? [];
+    expect(hosts).toContain(`${new URL(CINDER_MAINNET_RPC).origin}/*`);
+    expect(hosts).toContain(`${new URL(PUBLICNODE_MAINNET_RPC).origin}/*`);
+    expect(hosts.some((host) => host.includes('api.mainnet-beta.solana.com'))).toBe(false);
+  });
+});
+
 describe('jupiterEnabledFor', () => {
   it('is on for a mainnet install that has configured nothing', () => {
     expect(jupiterEnabledFor('mainnet-beta', {})).toBe(true);

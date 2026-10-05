@@ -13,53 +13,35 @@ export const BUILD_HELIUS_API_KEY = (import.meta.env.VITE_HELIUS_API_KEY as stri
 export type Cluster = 'mainnet-beta' | 'devnet';
 
 /**
- * Keyless mainnet default. There is deliberately only one.
- *
- * `api.mainnet-beta.solana.com` answers 403 to any request carrying an `Origin` header,
- * and every extension request carries one, so it could never serve a call from here and
- * is not in the manifest either.
- *
- * The rest of the keyless field was swept on 2026-09-13 with
- * `scripts/probe-mainnet-rpcs.mjs`, which fetches from a real `chrome-extension://` page
- * because curl does not enforce CORS and so reports endpoints as working that a browser
- * refuses. Of the candidates, OnFinality 429s without a key, dRPC answers 400 ("not
- * available on free plan"), Omniatech 521s, and Ankr and BlockEden demand a key. One did
- * serve the extension origin: `solana.leorpc.com/?api_key=FREE`. It is left out on
- * purpose. Every host in this list receives the addresses a user looks up and the
- * transactions they sign, so a shared free-tier credential on a small provider is a trust
- * decision, not a redundancy win, and it would need saying in the privacy policy.
- *
- * Verified 2026-09-14: publicnode serves a `chrome-extension://` origin, so the
- * keyless path works for a user with no key at all.
- *
- * The consequence is accepted: when publicnode is blocked or down the wallet has no
- * keyless mainnet endpoint, and it says exactly that rather than showing a balance it
- * cannot read. The fix offered to the user is a custom RPC URL or a Helius key in
- * Settings. Re-run the probe before revisiting this.
+ * First-party Mainnet RPC. The Helius key lives on this Worker, not in the zip.
+ * See `docs/adr/0006-keyless-rpc-proxy.md`. The host must be the one `wrangler deploy`
+ * prints; the manifest grants the same origin.
  */
-export const PUBLIC_MAINNET_RPCS: readonly string[] = ['https://solana-rpc.publicnode.com'];
+export const CINDER_MAINNET_RPC = 'https://cinder-rpc.freyja-934.workers.dev';
 
 /**
- * A note on failover, so nobody reads more into the rotation than is there.
- *
- * `src/lib/rpc-rotate.ts` is a real rotation: it classifies each endpoint's failure
- * as skip, cooldown or throw, rests an unwell URL for 30 seconds, reorders healthy
- * URLs ahead of resting ones, and moves on to the next URL — all of it covered by
- * `src/lib/rpc-rotate.test.ts`. The mechanism is not the gap.
- *
- * The gap is the data: on mainnet the list above has exactly **one** entry, so a
- * keyless install has nothing to fail over *to*. When publicnode is down or blocked,
- * the rotation runs out of URLs and the popup says no endpoint is reachable, which
- * is the honest answer rather than a redundancy the wallet does not have. Failover
- * begins to mean something only once the user adds their own URL or a Helius key in
- * Settings, which go ahead of this list.
- *
- * Adding a second public host is deliberately not done here: every host in this list
- * receives the addresses a user looks up and the transactions they sign, so it is a
- * data-recipient decision for the owner, not a free redundancy win. The candidates
- * that were measured, and how each one throttles, are in
- * `docs/adr/0004-keyless-token-discovery.md` and `docs/adr/0003-keyless-mainnet-endpoint.md`.
+ * publicnode, kept as the degraded keyless host. It accepts a browser origin and
+ * refuses `getTokenAccountsByOwner` and DAS. `api.mainnet-beta.solana.com` answers
+ * 403 to any request carrying an `Origin` header, so it is not in this list and
+ * not in the manifest.
  */
+export const PUBLICNODE_MAINNET_RPC = 'https://solana-rpc.publicnode.com';
+
+/**
+ * Keyless mainnet order: the proxy, then publicnode.
+ *
+ * A custom URL or a Helius key the user entered is tried ahead of this list
+ * (`rpcUrlsFor`), and a user who named one never hits the proxy. When the proxy
+ * is up it serves balances, token accounts and DAS. When it is down or resting,
+ * publicnode still serves SOL, sends and history. Jupiter runs only when every
+ * URL has refused token enumeration, which a mere proxy outage is not.
+ *
+ * The free field was swept on 2026-09-13 (`scripts/probe-mainnet-rpcs.mjs`) and
+ * again against newer public hosts on 2026-10-04. None of them is an indexed,
+ * browser-safe default. The proxy is how a keyless install gets those reads
+ * without a key in the zip. ADR 0003 and ADR 0006.
+ */
+export const PUBLIC_MAINNET_RPCS: readonly string[] = [CINDER_MAINNET_RPC, PUBLICNODE_MAINNET_RPC];
 
 export const PUBLIC_DEVNET_RPCS: readonly string[] = ['https://api.devnet.solana.com'];
 

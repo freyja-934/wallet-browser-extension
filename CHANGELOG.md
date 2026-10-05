@@ -9,6 +9,10 @@ own pull request, and the plan it shipped against is the detailed record.
 
 ## [Unreleased]
 
+### Added
+
+- **Keyless Mainnet RPC proxy.** The store build tries `https://cinder-rpc.freyja-934.workers.dev` before publicnode. The Worker holds the Helius key; the zip still does not. Allowlisted methods include `getTokenAccountsByOwner` and DAS `getAssetsByOwner`, so a keyless install can list token accounts and compressed NFTs while the proxy answers. publicnode remains the fallback for SOL, sends and history. Jupiter runs only when every endpoint has refused to enumerate token accounts. See `docs/adr/0006-keyless-rpc-proxy.md`.
+
 ## [0.5.0] — 2026-09-14
 
 Keyless Mainnet now shows tokens and regular collectibles. Jupiter lists the

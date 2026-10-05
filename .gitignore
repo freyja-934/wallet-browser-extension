@@ -12,6 +12,9 @@ build
 .env
 .env.local
 .env.production
+# Worker secret for `wrangler dev`. Never the Helius key.
+workers/rpc/.dev.vars
+workers/rpc/.wrangler/
 
 # IDE
 .vscode

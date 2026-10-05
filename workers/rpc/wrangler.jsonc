@@ -1,0 +1,33 @@
+{
+  "name": "cinder-rpc",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-05",
+  "compatibility_flags": ["nodejs_compat"],
+  // Status-only logs. Traces are sampled low because a trace of the Helius
+  // subrequest includes the API key in the query string; our own logs never do.
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.01
+    }
+  },
+  // Per-IP cap at the edge. The URL ships in the extension, so this is the quota
+  // guard. 30 requests / 10 seconds in one Cloudflare location. Helius free tier
+  // is 10 requests/second account-wide; alert in the Helius dashboard before the
+  // monthly credit cap. The key itself is `wrangler secret put HELIUS_API_KEY`.
+  "ratelimits": [
+    {
+      "name": "RPC_RATE_LIMIT",
+      "namespace_id": "1001",
+      "simple": {
+        "limit": 30,
+        "period": 10
+      }
+    }
+  ]
+}
