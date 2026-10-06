@@ -4,6 +4,7 @@ import { cleanText, fetchGuardedJson, httpsUrl } from '../lib/untrusted-http';
 import {
   METADATA_BATCH,
   METADATA_PROGRAM_ID,
+  accountsBatchFor,
   decodeMetadata,
   metadataPda,
   type ConnectionRunner,
@@ -106,18 +107,29 @@ export async function fetchCollectibles(
     }
   }
 
-  const perCall = Math.max(1, Math.min(batchSize, METADATA_BATCH));
+  const ceiling = Math.max(1, Math.min(batchSize, METADATA_BATCH));
   const out: Collectible[] = [];
-  for (let i = 0; i < keys.length; i += perCall) {
-    const batch = keys.slice(i, i + perCall);
+  let index = 0;
+  while (index < keys.length) {
+    const window = keys.slice(index, index + ceiling);
     let accounts: Array<AccountInfo<Buffer> | null>;
+    let used = window.length;
     try {
-      accounts = await run((connection) => connection.getMultipleAccountsInfo(batch.map(({ key }) => metadataPda(key))));
+      const read = await run(async (connection, url) => {
+        const cap = Math.max(1, Math.min(window.length, accountsBatchFor(url)));
+        const slice = window.slice(0, cap);
+        const rows = await connection.getMultipleAccountsInfo(slice.map(({ key }) => metadataPda(key)));
+        return { rows, used: slice.length };
+      });
+      accounts = read.rows;
+      used = read.used;
     } catch {
-      out.push(...batch.map(({ mint }) => ({ mint })));
+      out.push(...window.map(({ mint }) => ({ mint })));
+      index += used;
       continue;
     }
-    batch.forEach(({ mint }, index) => out.push(collectibleFrom(mint, accounts[index] ?? null)));
+    window.slice(0, used).forEach(({ mint }, offset) => out.push(collectibleFrom(mint, accounts[offset] ?? null)));
+    index += used;
   }
   return out;
 }

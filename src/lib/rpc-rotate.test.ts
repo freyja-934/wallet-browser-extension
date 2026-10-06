@@ -62,8 +62,11 @@ afterEach(() => {
 describe('rpcUrlsFor', () => {
   const custom = 'https://rpc.example/v1';
 
-  it('mainnet with no settings: publicnode and nothing else', () => {
-    expect(rpcUrlsFor('mainnet-beta')).toEqual(['https://solana-rpc.publicnode.com']);
+  it('mainnet with no settings: the proxy, then publicnode', () => {
+    expect(rpcUrlsFor('mainnet-beta')).toEqual([
+      'https://cinder-rpc.casey-722.workers.dev',
+      'https://solana-rpc.publicnode.com',
+    ]);
     expect(rpcUrlsFor('mainnet-beta', {})).toEqual([...PUBLIC_MAINNET_RPCS]);
   });
 
@@ -77,7 +80,10 @@ describe('rpcUrlsFor', () => {
       rpcUrlsFor('devnet', { rpcUrl: custom, heliusApiKey: KEY }),
     ].flat();
     expect(everywhere.some((url) => url.includes('api.mainnet-beta.solana.com'))).toBe(false);
-    expect(PUBLIC_MAINNET_RPCS).toHaveLength(1);
+    expect(PUBLIC_MAINNET_RPCS).toEqual([
+      'https://cinder-rpc.casey-722.workers.dev',
+      'https://solana-rpc.publicnode.com',
+    ]);
   });
 
   it('devnet with no settings: the public devnet host only', () => {
@@ -124,10 +130,12 @@ describe('rpcUrlsFor', () => {
   });
 
   it('removes duplicates, first occurrence wins', () => {
-    // The custom URL is the public default: it keeps the first slot and is not repeated last.
+    // The custom URL is the proxy, the first public default: it keeps the first slot and is not repeated.
+    // publicnode is a different host and stays behind the user's Helius key.
     expect(rpcUrlsFor('mainnet-beta', { rpcUrl: PUBLIC_MAINNET_RPCS[0], heliusApiKey: KEY })).toEqual([
       PUBLIC_MAINNET_RPCS[0],
       heliusRpcUrlFor('mainnet-beta', KEY),
+      PUBLIC_MAINNET_RPCS[1],
     ]);
     const helius = heliusRpcUrlFor('devnet', KEY)!;
     expect(rpcUrlsFor('devnet', { rpcUrl: helius, heliusApiKey: KEY })).toEqual([helius, ...PUBLIC_DEVNET_RPCS]);
@@ -142,7 +150,7 @@ describe('rpcUrlsFor', () => {
 
   it('treats a trailing slash as the same endpoint when removing duplicates', () => {
     const withSlash = `${PUBLIC_MAINNET_RPCS[0]}/`;
-    expect(rpcUrlsFor('mainnet-beta', { rpcUrl: withSlash })).toEqual([withSlash]);
+    expect(rpcUrlsFor('mainnet-beta', { rpcUrl: withSlash })).toEqual([withSlash, PUBLIC_MAINNET_RPCS[1]]);
     expect(rpcUrlsFor('devnet', { rpcUrl: 'https://API.devnet.solana.com' })).toEqual(['https://API.devnet.solana.com']);
     // Different paths are different endpoints.
     expect(rpcUrlsFor('devnet', { rpcUrl: `${PUBLIC_DEVNET_RPCS[0]}/v1` })).toEqual([

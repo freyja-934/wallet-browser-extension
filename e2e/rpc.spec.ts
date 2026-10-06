@@ -25,6 +25,7 @@ type Envelope = { success: true; settings: SettingsShape } | { success: false; e
 test('the built manifest grants publicnode, drops the hosts it cannot use, and can request any https origin', () => {
   const manifest = JSON.parse(readFileSync(distManifest, 'utf8')) as Manifest;
   const hosts = manifest.host_permissions ?? [];
+  expect(hosts).toContain('https://cinder-rpc.casey-722.workers.dev/*');
   expect(hosts).toContain('https://solana-rpc.publicnode.com/*');
   expect(hosts).toContain('https://api.devnet.solana.com/*');
   // The keyless token-discovery fallback; without this grant a store install sees SOL only.

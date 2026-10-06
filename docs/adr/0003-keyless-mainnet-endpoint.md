@@ -1,5 +1,8 @@
 # ADR 0003 — One keyless Mainnet endpoint: publicnode
 
+ADR 0006 supersedes the "no proxy" half of this decision. publicnode is still the
+degraded host. The keyless default is the first-party proxy, then publicnode.
+
 ## Context
 
 Cinder ships with no API key. A key inside a Chrome Web Store zip is a key anyone

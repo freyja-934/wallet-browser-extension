@@ -1,5 +1,8 @@
 # ADR 0004 — Keyless token discovery: Jupiter for the list, the chain for the numbers
 
+ADR 0006 is what a keyless install asks first. Jupiter remains the fallback this
+ADR describes, and only when every endpoint has refused to enumerate token accounts.
+
 ## Context
 
 ADR 0003 settled which keyless Mainnet endpoint a store install talks to, and

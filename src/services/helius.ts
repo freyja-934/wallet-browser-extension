@@ -15,12 +15,13 @@ import {
   SKIP_RPC_MESSAGE,
   connectionErrorHttpStatus,
   isUnreachableFailure,
+  prioritizeRpcUrls,
   rpcJson,
   withRotatedConnection,
   type RpcFailure,
 } from '../lib/rpc-rotate';
 import { runtimeRpcUrls, runtimeSettings, runtimeSettingsOrUndefined } from '../lib/runtime-rpc';
-import { METADATA_BATCH, fetchTokenMetadata, type TokenNames } from '../lib/token-metadata';
+import { accountsBatchFor, fetchTokenMetadata, type TokenNames } from '../lib/token-metadata';
 import { fetchCollectibles, type Collectible } from './collectibles';
 import { fetchJupiterBalances, fetchJupiterTokenInfo } from './jupiter';
 
@@ -171,7 +172,8 @@ export const TOKENS_UNAVAILABLE = 'unavailable';
  * endpoint failed at the transport layer (fetch rejected, aborted, timed out) or
  * with 401/403: keyless mainnet has one public host, and some home-network filters
  * block publicnode outright. The UI turns this into "add an RPC endpoint" rather
- * than a generic error.
+ * than a generic error. The keyless list is the proxy and then publicnode; when
+ * both fail this way there is still nothing to show.
  */
 export class EndpointsUnreachableError extends Error {
   readonly endpointsUnreachable = true;
@@ -608,21 +610,16 @@ function tokensFrom(parsed: ParsedTokenAccounts, programId: PublicKey): TokenBal
 }
 
 /**
- * Keys per Metaplex `getMultipleAccounts` call for this endpoint list.
- *
- * `METADATA_BATCH` is 100, which is the JSON-RPC limit and what a user's own
- * endpoint is asked for. The keyless Mainnet default is not a user's own endpoint:
- * publicnode caps the method at ten, the same measurement `MINT_INFO_BATCH`
- * records, so a 100-key batch there stalls three seconds and then fails — and
- * `fetchTokenMetadata` treats a failed Metaplex batch as an endpoint failure, which
- * would lose every name it had already collected. Before this the path was
- * unreachable keyless, because a keyless list was always empty; the Jupiter
- * fallback is what put names in front of it.
+ * Keys per Metaplex `getMultipleAccounts` call for the endpoint that will be
+ * tried first. The proxy and a user's own URL take 100. publicnode takes ten:
+ * a 100-key batch there stalls three seconds and then fails, and a failed
+ * Metaplex batch drops the names already collected. A call that falls through
+ * to publicnode is sliced again to ten at the moment it lands, in
+ * `accountsBatchFor`.
  */
 async function metadataBatchFor(urls: string[]): Promise<number> {
-  const cluster = (await runtimeSettings()).cluster;
-  const publicMainnetOnly = cluster === 'mainnet-beta' && urls.length > 0 && urls.every(isPublicUrl);
-  return publicMainnetOnly ? MINT_INFO_BATCH : METADATA_BATCH;
+  const [first] = prioritizeRpcUrls(urls);
+  return accountsBatchFor(first);
 }
 
 /**
@@ -857,8 +854,8 @@ class HeliusService {
    * metadata accounts through the rotated connection.
    *
    * The collectibles tab is what calls this, one page at a time; the home tab
-   * never does. The batch size is the same one `getTokenNames` uses, which on the
-   * keyless Mainnet default is publicnode's measured cap of ten keys per call.
+   * never does. The batch size is the same one `getTokenNames` uses: 100 on the
+   * proxy, ten when the call lands on publicnode.
    * Nothing off-chain is fetched here: the URI comes back for the card to follow
    * if and when it is rendered.
    */
