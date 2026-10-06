@@ -10,7 +10,7 @@ function env(limit: RpcProxyEnv['RPC_RATE_LIMIT']['limit'] = async () => ({ succ
 }
 
 function post(body: unknown, ip = '203.0.113.5'): Request {
-  return new Request('https://cinder-rpc.freyja-934.workers.dev/', {
+  return new Request('https://cinder-rpc.casey-722.workers.dev/', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': ip },
     body: JSON.stringify(body),
@@ -29,7 +29,7 @@ describe('handleRpc', () => {
   it('answers a CORS preflight and does not call upstream', async () => {
     const fetchImpl = upstreamOk('ok');
     const response = await handleRpc(
-      new Request('https://cinder-rpc.freyja-934.workers.dev/', { method: 'OPTIONS' }),
+      new Request('https://cinder-rpc.casey-722.workers.dev/', { method: 'OPTIONS' }),
       env(),
       fetchImpl,
     );
@@ -151,7 +151,7 @@ describe('handleRpc', () => {
 
   it('refuses a body over the cap before calling upstream', async () => {
     const fetchImpl = upstreamOk('ok');
-    const request = new Request('https://cinder-rpc.freyja-934.workers.dev/', {
+    const request = new Request('https://cinder-rpc.casey-722.workers.dev/', {
       method: 'POST',
       body: 'x'.repeat(64 * 1024 + 1),
     });

@@ -64,7 +64,7 @@ describe('rpcUrlsFor', () => {
 
   it('mainnet with no settings: the proxy, then publicnode', () => {
     expect(rpcUrlsFor('mainnet-beta')).toEqual([
-      'https://cinder-rpc.freyja-934.workers.dev',
+      'https://cinder-rpc.casey-722.workers.dev',
       'https://solana-rpc.publicnode.com',
     ]);
     expect(rpcUrlsFor('mainnet-beta', {})).toEqual([...PUBLIC_MAINNET_RPCS]);
@@ -81,7 +81,7 @@ describe('rpcUrlsFor', () => {
     ].flat();
     expect(everywhere.some((url) => url.includes('api.mainnet-beta.solana.com'))).toBe(false);
     expect(PUBLIC_MAINNET_RPCS).toEqual([
-      'https://cinder-rpc.freyja-934.workers.dev',
+      'https://cinder-rpc.casey-722.workers.dev',
       'https://solana-rpc.publicnode.com',
     ]);
   });

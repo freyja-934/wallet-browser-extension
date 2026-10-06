@@ -1,6 +1,8 @@
 {
   "name": "cinder-rpc",
   "main": "src/index.ts",
+  "workers_dev": true,
+  "preview_urls": false,
   "compatibility_date": "2026-10-05",
   "compatibility_flags": ["nodejs_compat"],
   // Status-only logs. Traces are sampled low because a trace of the Helius

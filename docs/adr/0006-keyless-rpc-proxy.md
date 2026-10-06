@@ -75,7 +75,7 @@ and Jupiter is not asked.
 
 ### Deploy
 
-The extension constant is `https://cinder-rpc.freyja-934.workers.dev`. The
+The extension constant is `https://cinder-rpc.casey-722.workers.dev`. The
 Worker name in `workers/rpc/wrangler.jsonc` is `cinder-rpc`. Deploy from that
 directory with Wrangler 4.36 or later (the rate-limit binding's minimum):
 
@@ -85,13 +85,12 @@ npx wrangler deploy
 ```
 
 The key is a Helius key used only by the Worker. It is not `VITE_HELIUS_API_KEY`,
-it is not committed, and `.dev.vars` is gitignored for local runs. If the
-account's `workers.dev` subdomain is not `freyja-934`, change
-`CINDER_MAINNET_RPC` in `src/config/constants.ts` and the matching
-`host_permissions` entry together before `just store`. Set a Helius budget alert
-before the monthly credit cap. The free tier (1,000,000 credits, 10 requests per
-second) covers an unlisted install; the rate limit is what keeps a copied URL
-from spending it.
+it is not committed, and `.dev.vars` is gitignored for local runs. Deployed
+2026-10-06 on the Cloudflare account whose `workers.dev` subdomain is
+`casey-722`. `CINDER_MAINNET_RPC` and the matching `host_permissions` entry are
+that host. Set a Helius budget alert before the monthly credit cap. The free
+tier (1,000,000 credits, 10 requests per second) covers an unlisted install; the
+rate limit is what keeps a copied URL from spending it.
 
 ## Consequences
 

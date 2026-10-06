@@ -1,6 +1,6 @@
 # Cinder Wallet Privacy Policy
 
-Last updated: 5 October 2026
+Last updated: 6 October 2026
 
 Cinder Wallet is a Chrome extension. The seed phrase and private keys are encrypted on the user’s device. Cinder operates one backend, a Solana JSON-RPC proxy. It receives public addresses and signed transactions. It does not receive seeds, passwords, or private keys.
 
@@ -18,7 +18,7 @@ then run `node scripts/sync-legal.mjs`.
 
 ## What leaves the device
 
-- Public addresses and signed transactions to a Solana JSON-RPC endpoint. With nothing configured, Mainnet uses `https://cinder-rpc.freyja-934.workers.dev` first and `https://solana-rpc.publicnode.com` if that proxy does not answer. Devnet uses `https://api.devnet.solana.com`. The proxy is operated by Cinder and forwards the request to Helius. The Helius key stays on the proxy; it is not in the extension
+- Public addresses and signed transactions to a Solana JSON-RPC endpoint. With nothing configured, Mainnet uses `https://cinder-rpc.casey-722.workers.dev` first and `https://solana-rpc.publicnode.com` if that proxy does not answer. Devnet uses `https://api.devnet.solana.com`. The proxy is operated by Cinder and forwards the request to Helius. The Helius key stays on the proxy; it is not in the extension
 - A custom RPC URL or Helius API key entered in Settings receives the same public addresses and signed transactions. Both values are stored only in `chrome.storage.local` on the device; Cinder never receives them
 - The public wallet address to `https://lite-api.jup.ag` on Mainnet, and only when every configured endpoint has refused to list token accounts. That is the fallback for a keyless install whose proxy is refusing the method and whose public endpoint refuses it too. Jupiter is asked which mints the address holds and what those mints are called; the balances, decimals and token programs shown are read from the Solana endpoint, never from Jupiter. A proxy outage by itself does not cause this request. Entering any RPC URL or Helius key in Settings stops it being made at all, and it is never made on Devnet
 - Public mint addresses to CoinGecko for USD prices (mainnet only)

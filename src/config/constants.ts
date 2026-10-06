@@ -17,7 +17,7 @@ export type Cluster = 'mainnet-beta' | 'devnet';
  * See `docs/adr/0006-keyless-rpc-proxy.md`. The host must be the one `wrangler deploy`
  * prints; the manifest grants the same origin.
  */
-export const CINDER_MAINNET_RPC = 'https://cinder-rpc.freyja-934.workers.dev';
+export const CINDER_MAINNET_RPC = 'https://cinder-rpc.casey-722.workers.dev';
 
 /**
  * publicnode, kept as the degraded keyless host. It accepts a browser origin and

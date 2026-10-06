@@ -17,7 +17,7 @@
   <main>
     <p>Cinder Wallet</p>
     <h1>Privacy Policy</h1>
-    <p>Last updated: 5 October 2026</p>
+    <p>Last updated: 6 October 2026</p>
     <p>Cinder Wallet is a browser extension. The seed phrase and private keys are encrypted on this device. We operate one backend, a Solana JSON-RPC proxy. It receives public addresses and signed transactions. It does not receive your seed, password, or private keys.</p>
     <h2>What stays on your device</h2>
     <ul>
@@ -27,7 +27,7 @@
     </ul>
     <h2>What leaves the device</h2>
     <ul>
-      <li>Public addresses and signed transactions sent to a Solana JSON-RPC endpoint. With nothing configured, Mainnet uses <code>https://cinder-rpc.freyja-934.workers.dev</code> first and <code>https://solana-rpc.publicnode.com</code> if that proxy does not answer. Devnet uses <code>https://api.devnet.solana.com</code>. The proxy is operated by Cinder and forwards the request to Helius. The Helius key stays on the proxy; it is not in the extension</li>
+      <li>Public addresses and signed transactions sent to a Solana JSON-RPC endpoint. With nothing configured, Mainnet uses <code>https://cinder-rpc.casey-722.workers.dev</code> first and <code>https://solana-rpc.publicnode.com</code> if that proxy does not answer. Devnet uses <code>https://api.devnet.solana.com</code>. The proxy is operated by Cinder and forwards the request to Helius. The Helius key stays on the proxy; it is not in the extension</li>
       <li>A custom RPC URL or Helius API key you enter in Settings receives the same public addresses and signed transactions. Both values are stored only in <code>chrome.storage.local</code> on this device; we never receive them</li>
       <li>Your public wallet address sent to <code>https://lite-api.jup.ag</code> on Mainnet, and only when every configured endpoint has refused to list token accounts. That is the fallback for a keyless install whose proxy is refusing the method and whose public endpoint refuses it too. Jupiter is asked which mints the address holds and what those mints are called; the balances, decimals and token programs shown are read from the Solana endpoint, never from Jupiter. A proxy outage by itself does not cause this request. Entering any RPC URL or Helius key in Settings stops it being made at all, and it is never made on Devnet</li>
       <li>Public mint addresses sent to CoinGecko for USD prices on mainnet only</li>

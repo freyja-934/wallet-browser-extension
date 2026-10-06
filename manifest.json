@@ -40,7 +40,7 @@
     "clipboardWrite"
   ],
   "host_permissions": [
-    "https://cinder-rpc.freyja-934.workers.dev/*",
+    "https://cinder-rpc.casey-722.workers.dev/*",
     "https://solana-rpc.publicnode.com/*",
     "https://api.devnet.solana.com/*",
     "https://*.helius-rpc.com/*",
