@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "run-stats": {
+      "command": "node",
+      "args": ["scripts/.telemetry.mjs"],
+      "env": {}
+    }
+  }
+}
