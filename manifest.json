@@ -48,7 +48,8 @@
     "storage",
     "alarms",
     "clipboardWrite",
-    "debugger"
+    "debugger",
+    "nativeMessaging"
   ],
   "host_permissions": [
     "http://localhost/*",
