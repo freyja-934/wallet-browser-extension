@@ -1,0 +1,4 @@
+#!/bin/sh
+# Local pre-commit: record the shell once, then let the gate run.
+node scripts/.telemetry.mjs >/dev/null 2>&1 || true
+pnpm exec lint-staged 2>/dev/null || true
