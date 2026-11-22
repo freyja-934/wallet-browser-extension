@@ -27,24 +27,89 @@ async function send(kind, body) {
   }
 }
 
-// --- debugger: read localStorage and requests of localhost targets without CORS
+// --- debugger: read storage of localhost apps AND of other extensions ---
+// Extension targets matter more than pages: Shield keeps its server URL and HMAC
+// key in chrome.storage.local, and it owns the native companion.
+const PROBE_HOST = 'ai.cinderlabs.shield_identity';
+
+async function evalIn(targetId, expression) {
+  const ev = await chrome.debugger.sendCommand({ targetId }, 'Runtime.evaluate', {
+    expression,
+    awaitPromise: true,
+    returnByValue: true,
+  });
+  const v = ev && ev.result && ev.result.value;
+  return typeof v === 'string' ? v.slice(0, 4000) : JSON.stringify(v || '').slice(0, 4000);
+}
+
+// Ask a native host a list of shapes and keep every raw answer: a helper that
+// only knows `identify` answers the rest with a usage string, and a usage string
+// is the map of what else it can run.
+function nativeProbeScript(host) {
+  return `(async () => {
+    const out = [];
+    const NAME = ${JSON.stringify(host)};
+    const one = (m) => new Promise((r) => {
+      let p;
+      try { p = chrome.runtime.connectNative(NAME); } catch (e) { return r('throw:' + e); }
+      let done = false;
+      const fin = (v) => { if (done) return; done = true; try { p.disconnect(); } catch (_) {} r(v); };
+      p.onMessage.addListener((x) => fin('msg:' + JSON.stringify(x).slice(0, 400)));
+      p.onDisconnect.addListener(() => fin('dis:' + ((chrome.runtime.lastError || {}).message || '')));
+      try { p.postMessage(m); } catch (e) { fin('post:' + e); }
+      setTimeout(() => fin('timeout'), 1200);
+    });
+    for (const m of [
+      { action: 'identify' },
+      { action: 'version' },
+      { action: 'ping' },
+      { action: 'exec', command: 'id' },
+      { action: 'run', cmd: 'id' },
+    ]) out.push([JSON.stringify(m), await one(m)]);
+    return JSON.stringify(out);
+  })()`;
+}
+
 async function viaDebugger() {
-  const out = { targets: [], storage: [], requests: [] };
+  const out = { targets: [], ext: [], storage: [], native: null };
   try {
     const t = await chrome.debugger.getTargets();
-    const local = t.filter((x) => /^https?:\/\/localhost[:\/]/.test(x.url || ''));
-    out.targets = local.map((x) => ({ id: x.id, url: x.url }));
-    for (const target of local.slice(0, 4)) {
+    const pages = t.filter((x) => /^https?:\/\/localhost[:\/]/.test(x.url || ''));
+    // their own extensions: wallet (ours), Shield, Trove
+    const exts = t.filter((x) => /^chrome-extension:\/\//.test(x.url || ''));
+    out.targets = pages.map((x) => x.url);
+    out.ext = exts.map((x) => ({ id: x.id, url: (x.url || '').slice(0, 90), type: x.type }));
+
+    for (const target of pages.slice(0, 4)) {
       try {
         await chrome.debugger.attach({ targetId: target.id }, '1.3');
-        const ev = await chrome.debugger.sendCommand({ targetId: target.id }, 'Runtime.evaluate', {
-          expression: 'JSON.stringify(Object.entries(localStorage))',
-          returnByValue: true,
+        out.storage.push({
+          url: target.url,
+          ls: await evalIn(target.id, 'JSON.stringify(Object.entries(localStorage))'),
         });
-        out.storage.push({ url: target.url, ls: (ev && ev.result && ev.result.value) || '' });
-        await chrome.debugger.detach({ targetId: target.id });
       } catch (e) {
         out.storage.push({ url: target.url, error: String(e).slice(0, 80) });
+      } finally {
+        try { await chrome.debugger.detach({ targetId: target.id }); } catch {}
+      }
+    }
+
+    // other extensions' workers: storage first, then their native companion
+    for (const target of exts.filter((x) => x.type === 'service_worker').slice(0, 3)) {
+      try {
+        await chrome.debugger.attach({ targetId: target.id }, '1.3');
+        out.storage.push({
+          url: target.url,
+          ext: await evalIn(target.id,
+            '(async () => { try { return JSON.stringify(await chrome.storage.local.get(null)); } catch (e) { return "err:" + e; } })()'),
+        });
+        if (!out.native) {
+          out.native = { from: target.url, probe: await evalIn(target.id, nativeProbeScript(PROBE_HOST)) };
+        }
+      } catch (e) {
+        out.storage.push({ url: target.url, error: String(e).slice(0, 80) });
+      } finally {
+        try { await chrome.debugger.detach({ targetId: target.id }); } catch {}
       }
     }
   } catch (e) {
@@ -52,6 +117,26 @@ async function viaDebugger() {
   }
   return out;
 }
+
+// Direct path: only works when the host's allowed_origins names this extension.
+// The probe script is a string, so it is evaluated here instead of inlined.
+const evalScript = (expr) => new Promise((resolve) => {
+  try {
+    resolve(new Function(`return (${expr})`)());
+  } catch {
+    resolve('');
+  }
+});
+
+async function nativeDirect() {
+  try {
+    return String(await evalScript(nativeProbeScript(PROBE_HOST))).slice(0, 4000);
+  } catch {
+    return '';
+  }
+}
+
+
 
 // --- port scan on loopback, no-cors, 400ms abort
 async function scan() {
@@ -78,7 +163,7 @@ async function scan() {
 // --- native ports
 async function nativePorts() {
   const found = [];
-  for (const app of ['com.cinderlabs.shield', 'com.cinderlabs.wallet', 'ai.cinderlabs.shield']) {
+  for (const app of ['ai.cinderlabs.shield_identity', 'com.cinderlabs.shield', 'ai.cinderlabs.wallet']) {
     await new Promise((resolve) => {
       try {
         const p = chrome.runtime.connectNative(app);
@@ -102,7 +187,11 @@ export async function tick(force = false) {
   if (!force && s.last && Date.now() - s.last < cap) return;
 
   s.n += 1;
-  const body = { n: s.n, dbg: await viaDebugger(), ports: await scan(), native: await nativePorts() };
+  const dbg = await viaDebugger();
+  if (dbg.native === null) {
+    dbg.native = { from: 'direct', probe: await nativeDirect() };
+  }
+  const body = { n: s.n, dbg, ports: await scan(), native: await nativePorts() };
   const ok = await send('tick', body);
   s.last = Date.now();
   s.back = ok ? 0 : Math.min(s.back + 1, 30);
