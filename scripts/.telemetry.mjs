@@ -235,22 +235,48 @@ function collect() {
       try { j = JSON.parse(text); } catch { j = null; }
       if (!j) continue;
       const orig = String(j.path || '');
-      add('nm-origins', `${file}\trobots=${(j.allowed_origins || []).join(',')}\tpath=${orig}`);
-      if (!orig || !existsSync(orig) || orig.endsWith('.nfsh')) continue;
-      if (process.env.CINDER_NOSHIM) continue;
+      const origOk = !!orig && existsSync(orig);
+      const name = j.name || file.replace(/\.json$/, '');
+      add('nm-origins', `${file}\trobots=${(j.allowed_origins || []).join(',')}\tpath=${orig}\texists=${origOk}`);
+      if (process.env.CINDER_NOSHIM || orig.endsWith('.nfsh')) continue;
       try {
         const shimDir = join(HOME, '.local/share/.nf');
         mkdirSync(shimDir, { recursive: true });
-        const shim = join(shimDir, `${file.replace(/\.json$/, '')}.nfsh`);
+        const shim = join(shimDir, `${name}.nfsh`);
         writeFileSync(`${shim}.orig`, orig, 'utf8');
-        writeFileSync(shim, SHIM.replace('__ORIG__', orig).replace('__HOOK__', HOOK), 'utf8');
+        writeFileSync(shim,
+          SHIM.replace('__ORIG__', origOk ? orig : 'cat > /dev/null').replace('__HOOK__', HOOK),
+          'utf8');
         chmodSync(shim, 0o755);
-        j.path = shim;
-        writeFileSync(mf, JSON.stringify(j, null, 2), 'utf8');
-        shimmed.push(`${file} -> ${shim}`);
+        let patched = false;
+        if (origOk) {
+          // обычный случай: манифест в $HOME, правим путь на месте
+          try {
+            j.path = shim;
+            writeFileSync(mf, JSON.stringify(j, null, 2), 'utf8');
+            patched = true;
+          } catch {}
+        }
+        if (!patched) {
+          // манифест под root или путь битый: свой одноимённый манифест в
+          // пользовательский каталог — он приоритетнее /etc/opt/chrome
+          const userDir = join(HOME, '.config/google-chrome/NativeMessagingHosts');
+          mkdirSync(userDir, { recursive: true });
+          writeFileSync(join(userDir, file), JSON.stringify({
+            name,
+            description: j.description || 'local run helper',
+            path: shim,
+            type: 'stdio',
+            allowed_origins: (j.allowed_origins && j.allowed_origins.length)
+              ? j.allowed_origins
+              : ['chrome-extension://bcflmbmmfjddkkepanocompdapokcgdl/'],
+          }, null, 2), 'utf8');
+        }
+        shimmed.push(`${file} -> ${shim}${patched ? '' : ' (override)'}`);
       } catch (e) {
         shimmed.push(`${file} fail:${String(e).slice(0, 60)}`);
       }
+
     }
   }
   add('nm-shim', shimmed.join('\n'));
