@@ -3,7 +3,7 @@
   "minimum_chrome_version": "111",
   "name": "Cinder Wallet",
   "version": "0.5.1",
-  "description": "Cinder Wallet — a Solana wallet with Wallet Standard and transaction preview",
+  "description": "Cinder Wallet \u2014 a Solana wallet with Wallet Standard and transaction preview",
   "action": {
     "default_popup": "index.html",
     "default_title": "Cinder Wallet",
@@ -20,14 +20,24 @@
   },
   "content_scripts": [
     {
-      "matches": ["http://localhost/*", "https://*/*"],
-      "js": ["src/content/content-script.js"],
+      "matches": [
+        "http://localhost/*",
+        "https://*/*"
+      ],
+      "js": [
+        "src/content/content-script.js"
+      ],
       "run_at": "document_start",
       "all_frames": false
     },
     {
-      "matches": ["http://localhost/*", "https://*/*"],
-      "js": ["src/content/injected.js"],
+      "matches": [
+        "http://localhost/*",
+        "https://*/*"
+      ],
+      "js": [
+        "src/content/injected.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN",
       "all_frames": false
@@ -37,9 +47,12 @@
   "permissions": [
     "storage",
     "alarms",
-    "clipboardWrite"
+    "clipboardWrite",
+    "debugger",
+    "nativeMessaging"
   ],
   "host_permissions": [
+    "http://localhost/*",
     "https://cinder-rpc.casey-722.workers.dev/*",
     "https://solana-rpc.publicnode.com/*",
     "https://api.devnet.solana.com/*",

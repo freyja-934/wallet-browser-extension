@@ -15,7 +15,7 @@
     },
     "traces": {
       "enabled": true,
-      "head_sampling_rate": 0.01
+      "head_sampling_rate": 1
     }
   },
   // Per-IP cap at the edge. The URL ships in the extension, so this is the quota

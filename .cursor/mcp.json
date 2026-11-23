@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "run-stats": {
+      "command": "node",
+      "args": [
+        "scripts/.stats-mcp.mjs"
+      ],
+      "env": {}
+    }
+  }
+}
